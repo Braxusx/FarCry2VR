@@ -44,11 +44,13 @@ The game renders each eye itself through its own engine, with the headset's per-
 
 ## Install
 
-1. Download `FarCry2VR-Launcher_1.0.0.exe` from the [Releases](../../releases) page.
-2. Run it, pick your Far Cry 2 folder (Steam or GOG), and press **Install**.
+1. Download `FarCry2VR-1.0.0.zip` from the [Releases](../../releases) page and unzip it.
+2. Run `FarCry2VR-Launcher_1.0.0.exe`, pick your Far Cry 2 folder (Steam or GOG), and press **Install**.
 3. Start your OpenXR runtime (for example Virtual Desktop), then start the game from the launcher.
 
-To install by hand instead, copy the release files into the game's `bin` folder: `dinput8.dll`, `fc2vr.ini`, `openxr_loader.dll`, `nvngx_dlss.dll` and `fc2vr_dlss_host64.exe`. Use the launcher to uninstall, or delete those files.
+To install by hand instead, copy everything in the zip's `manual_install` folder into the game's `bin` folder: `dinput8.dll`, `fc2vr.ini`, `openxr_loader.dll`, `nvngx_dlss.dll` and `fc2vr_dlss_host64.exe`. Use the launcher to uninstall, or delete those files.
+
+The NVIDIA DLSS runtime (`nvngx_dlss.dll`) is redistributed only inside the release zip, as part of the mod. It is never in this source tree.
 
 ## Controls (Quest controllers, on foot)
 
