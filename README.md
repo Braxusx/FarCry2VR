@@ -38,15 +38,26 @@ The game renders each eye itself through its own engine, with the headset's per-
 
 ## Requirements
 
-- Far Cry 2 (Steam or GOG) on Windows 10 or 11.
+- Far Cry 2 (Steam or GOG) on Windows 10 or 11, **set to DirectX 10** (see below). The mod does not work in DirectX 9 mode.
 - An OpenXR runtime: Virtual Desktop (VDXR), SteamVR, Meta Quest Link and others.
 - For DLSS, an NVIDIA RTX GPU. Without one, the mod runs without DLSS.
+
+## Set Far Cry 2 to DirectX 10 (required)
+
+Far Cry 2 can run in DirectX 9 or DirectX 10. **The VR mod only works in DirectX 10.** If the game starts on the monitor but nothing appears in the headset, the game is most likely in DirectX 9 mode. Use any one of these ways to switch:
+
+- **Steam:** when you press Play and Steam asks which version to launch, choose the **DirectX 10** entry. If you ticked "remember my choice" earlier, use the file method below instead.
+- **In the game:** if your version shows a DirectX setting in the video/graphics options, set it to **DirectX 10** and restart the game.
+- **Edit the profile (always works):** close the game. Open `Documents\My Games\Far Cry 2\GamerProfile.xml` in a text editor (Notepad is fine). Find the `<RenderProfile ...>` line and set `Platform="d3d10a"` (in DirectX 9 mode it reads `Platform="d3d9"`). Save the file and start the game.
+
+**Check:** open `GamerProfile.xml` after playing. If the `<RenderProfile>` line shows `Platform="d3d10a"`, the game is in DirectX 10.
 
 ## Install
 
 1. Download `FarCry2VR-1.0.0.zip` from the [Releases](../../releases) page and unzip it.
 2. Run `FarCry2VR-Launcher_1.0.0.exe`, pick your Far Cry 2 folder (Steam or GOG), and press **Install**.
-3. Start your OpenXR runtime (for example Virtual Desktop), then start the game from the launcher.
+3. Make sure the game is set to **DirectX 10** (see above).
+4. Start your OpenXR runtime (for example Virtual Desktop), then start the game from the launcher.
 
 To install by hand instead, copy everything in the zip's `manual_install` folder into the game's `bin` folder: `dinput8.dll`, `fc2vr.ini`, `openxr_loader.dll`, `nvngx_dlss.dll` and `fc2vr_dlss_host64.exe`. Use the launcher to uninstall, or delete those files.
 

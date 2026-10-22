@@ -12,6 +12,6 @@
 - DLSS/DLAA on NVIDIA RTX GPUs, HUD and menus on floating panels, smooth or snap turning.
 - Steam and GOG supported by the same DLL.
 
-**Requirements:** Windows 10/11, Far Cry 2 (Steam or GOG), an OpenXR runtime (e.g. Virtual Desktop VDXR, SteamVR, Quest Link). DLSS needs an NVIDIA RTX GPU.
+**Requirements:** Windows 10/11, Far Cry 2 (Steam or GOG) **set to DirectX 10** (DirectX 9 mode is not supported; choose the DirectX 10 version when launching from Steam, or set `Platform="d3d10a"` in `Documents\My Games\Far Cry 2\GamerProfile.xml`), an OpenXR runtime (e.g. Virtual Desktop VDXR, SteamVR, Quest Link). DLSS needs an NVIDIA RTX GPU.
 
 Includes the NVIDIA DLSS runtime, redistributed as part of this mod (not in the source tree). This product uses NVIDIA DLSS technology. Unofficial fan mod, not affiliated with Ubisoft.
