@@ -1,0 +1,8 @@
+build/
+mod/build/
+launcher/build/
+launcher/payload_lzma/
+launcher/payload/*.dll
+launcher/payload/*.exe
+*.o
+*.res
