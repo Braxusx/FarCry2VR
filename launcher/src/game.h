@@ -61,6 +61,7 @@ std::wstring IniGet(const Game& g, const wchar_t* key, const wchar_t* def);
 void IniSet(const Game& g, const wchar_t* key, const std::wstring& value);
 
 std::string Narrow(const std::wstring& w);
+std::string SystemReport();   // sysreport.cpp: extended system report for the log zip
 std::wstring Widen(const std::string& s);
 void Log(const char* fmt, ...);
 extern const char* kModVersion;

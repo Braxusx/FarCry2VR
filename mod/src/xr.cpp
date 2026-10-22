@@ -1,7 +1,9 @@
 // xr.cpp - OpenXR session, D3D11 device, keyed-mutex shared eye textures, layer submission.
 #include "xr.h"
 #include "log.h"
+#include "diag.h"
 #include <vector>
+#include <cstdlib>
 #include <cstring>
 #include <cstdio>
 #include <cmath>
@@ -150,6 +152,36 @@ static bool LoadInstanceFuncs() {
 #undef XR_LOAD
     return XR_SUCCEEDED(p_xrGetInstanceProcAddr(g_inst, "xrGetD3D11GraphicsRequirementsKHR",
                         (PFN_xrVoidFunction*)&p_xrGetD3D11GraphicsRequirementsKHR));
+}
+
+// v230: timing wrappers (PACE diagnostics) and XR_FB_display_refresh_rate
+static PFN_xrWaitFrame o_xrWaitFrame; static PFN_xrEndFrame o_xrEndFrame;
+static PFN_xrEnumerateDisplayRefreshRatesFB p_xrEnumerateDisplayRefreshRatesFB;
+static PFN_xrGetDisplayRefreshRateFB p_xrGetDisplayRefreshRateFB;
+static PFN_xrRequestDisplayRefreshRateFB p_xrRequestDisplayRefreshRateFB;
+static bool g_hasRefreshExt;
+static float g_wantRefresh;   // ini DisplayRefreshRate (0 = leave it to the runtime)
+static double QpcMs() { static double k = 0; if (!k) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); k = 1000.0 / (double)f.QuadPart; } LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart * k; }
+static XrResult XRAPI_CALL W_xrWaitFrame(XrSession s, const XrFrameWaitInfo* wi, XrFrameState* fs) {
+    double t0 = QpcMs(); XrResult r = o_xrWaitFrame(s, wi, fs); double t1 = QpcMs();
+    if (XR_SUCCEEDED(r) && fs) diag::OnWaitFrame(t1 - t0, (int64_t)fs->predictedDisplayPeriod, fs->shouldRender != XR_FALSE);
+    return r;
+}
+static XrResult XRAPI_CALL W_xrEndFrame(XrSession s, const XrFrameEndInfo* ei) {
+    diag::GpuFrameEnd();
+    double t0 = QpcMs(); XrResult r = o_xrEndFrame(s, ei); diag::OnEndFrame(QpcMs() - t0);
+    return r;
+}
+static void LogRefreshRates(const char* when) {
+    if (!g_hasRefreshExt || !p_xrGetDisplayRefreshRateFB || !g_sess) return;
+    float cur = 0; p_xrGetDisplayRefreshRateFB(g_sess, &cur);
+    char list[160] = ""; size_t len = 0;
+    uint32_t n = 0;
+    if (p_xrEnumerateDisplayRefreshRatesFB && XR_SUCCEEDED(p_xrEnumerateDisplayRefreshRatesFB(g_sess, 0, &n, nullptr)) && n && n < 32) {
+        float r[32]; p_xrEnumerateDisplayRefreshRatesFB(g_sess, n, &n, r);
+        for (uint32_t i = 0; i < n && len < sizeof(list) - 12; i++) len += snprintf(list + len, sizeof(list) - len, "%s%.0f", i ? " " : "", r[i]);
+    }
+    LOG("XR: display refresh %.1f Hz (%s), headset supports: %s", cur, when, len ? list : "?");
 }
 
 static bool CreateD3D11(const LUID& luid) {
@@ -422,15 +454,42 @@ static void Teardown() {
 static bool InstanceImpl(ID3D10Device* dev10) {
     g_dev10 = dev10;
     if (!LoadLoader()) return false;
-    const char* exts[] = { XR_KHR_D3D11_ENABLE_EXTENSION_NAME };
+    const char* exts[2] = { XR_KHR_D3D11_ENABLE_EXTENSION_NAME, nullptr };
+    uint32_t nExt = 1;
+    {   // v230: log what the runtime offers; enable XR_FB_display_refresh_rate when present (read / request the refresh rate)
+        PFN_xrEnumerateInstanceExtensionProperties enumExt = nullptr;
+        p_xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrEnumerateInstanceExtensionProperties", (PFN_xrVoidFunction*)&enumExt);
+        uint32_t n = 0; g_hasRefreshExt = false;
+        if (enumExt && XR_SUCCEEDED(enumExt(nullptr, 0, &n, nullptr)) && n) {
+            std::vector<XrExtensionProperties> props(n, XrExtensionProperties{ XR_TYPE_EXTENSION_PROPERTIES });
+            enumExt(nullptr, n, &n, props.data());
+            static char all[4096]; size_t len = 0; all[0] = 0;
+            for (auto& e : props) {
+                if (len + strlen(e.extensionName) + 2 < sizeof all) len += snprintf(all + len, sizeof all - len, "%s ", e.extensionName);
+                if (!strcmp(e.extensionName, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME)) g_hasRefreshExt = true;
+            }
+            LOG("XR: %u runtime extensions: %s", n, all);
+        }
+        if (g_hasRefreshExt) exts[nExt++] = XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME;
+        char ip[MAX_PATH]; GetModuleFileNameA(GetModuleHandleA("dinput8.dll"), ip, MAX_PATH);
+        char* sl = strrchr(ip, '\\'); if (sl) strcpy(sl + 1, "fc2vr.ini");
+        char buf[32] = ""; GetPrivateProfileStringA("VR", "DisplayRefreshRate", "0", buf, sizeof buf, ip); g_wantRefresh = (float)atof(buf);
+    }
     XrInstanceCreateInfo ici{ XR_TYPE_INSTANCE_CREATE_INFO };
     strcpy(ici.applicationInfo.applicationName, "FarCry2VR");
     strcpy(ici.applicationInfo.engineName, "Dunia");
     ici.applicationInfo.applicationVersion = 1;
     ici.applicationInfo.apiVersion = XR_API_VERSION_1_0;
-    ici.enabledExtensionCount = 1; ici.enabledExtensionNames = exts;
+    ici.enabledExtensionCount = nExt; ici.enabledExtensionNames = exts;
     if (!Check(p_xrCreateInstance(&ici, &g_inst), "xrCreateInstance")) return false;
     if (!LoadInstanceFuncs()) { snprintf(g_err, sizeof(g_err), "function load failed"); return false; }
+    o_xrWaitFrame = p_xrWaitFrame; p_xrWaitFrame = W_xrWaitFrame;
+    o_xrEndFrame = p_xrEndFrame; p_xrEndFrame = W_xrEndFrame;
+    if (g_hasRefreshExt) {
+        p_xrGetInstanceProcAddr(g_inst, "xrEnumerateDisplayRefreshRatesFB", (PFN_xrVoidFunction*)&p_xrEnumerateDisplayRefreshRatesFB);
+        p_xrGetInstanceProcAddr(g_inst, "xrGetDisplayRefreshRateFB", (PFN_xrVoidFunction*)&p_xrGetDisplayRefreshRateFB);
+        p_xrGetInstanceProcAddr(g_inst, "xrRequestDisplayRefreshRateFB", (PFN_xrVoidFunction*)&p_xrRequestDisplayRefreshRateFB);
+    }
     XrInstanceProperties ip{ XR_TYPE_INSTANCE_PROPERTIES };
     p_xrGetInstanceProperties(g_inst, &ip);
     LOG("XR: runtime %s %u.%u.%u", ip.runtimeName, XR_VERSION_MAJOR(ip.runtimeVersion),
@@ -451,6 +510,11 @@ static bool InstanceImpl(ID3D10Device* dev10) {
     XrGraphicsBindingD3D11KHR gb{ XR_TYPE_GRAPHICS_BINDING_D3D11_KHR }; gb.device = g_dev11;
     XrSessionCreateInfo sci{ XR_TYPE_SESSION_CREATE_INFO }; sci.next = &gb; sci.systemId = g_sys;
     if (!Check(p_xrCreateSession(g_inst, &sci, &g_sess), "xrCreateSession")) return false;
+    LogRefreshRates("at session start");
+    if (g_wantRefresh > 0 && p_xrRequestDisplayRefreshRateFB) {
+        XrResult rr = p_xrRequestDisplayRefreshRateFB(g_sess, g_wantRefresh);
+        LOG("XR: DisplayRefreshRate=%.0f requested -> %d", g_wantRefresh, (int)rr);
+    }
     XrReferenceSpaceCreateInfo rs{ XR_TYPE_REFERENCE_SPACE_CREATE_INFO };
     rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL; rs.poseInReferenceSpace.orientation.w = 1.0f;
     if (!Check(p_xrCreateReferenceSpace(g_sess, &rs, &g_local), "xrCreateReferenceSpace")) return false;
@@ -602,6 +666,10 @@ void PollEvents() {
     if (!g_inst) return;
     XrEventDataBuffer ev{ XR_TYPE_EVENT_DATA_BUFFER };
     while (p_xrPollEvent(g_inst, &ev) == XR_SUCCESS) {
+        if (ev.type == XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB) {
+            auto* d = (XrEventDataDisplayRefreshRateChangedFB*)&ev;
+            LOG("XR: display refresh changed %.1f -> %.1f Hz", d->fromDisplayRefreshRate, d->toDisplayRefreshRate);
+        }
         if (ev.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
             auto* s = (XrEventDataSessionStateChanged*)&ev;
             g_state = s->state;
@@ -628,6 +696,7 @@ static bool WaitBegin(XrFrameState& fs) {
     XrResult r = p_xrBeginFrame(g_sess, &bi);
     if (!Check(r, "xrBeginFrame")) return false;
     g_frameBegun = true;
+    diag::GpuFrameStart(g_dev10);
     SyncInput(fs.predictedDisplayTime);
     return true;
 }

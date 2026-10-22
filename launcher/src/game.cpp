@@ -469,6 +469,7 @@ std::wstring CollectLogs(const Game& g, std::string& err) {
     info += "Game: " + Narrow(g.root) + " (" + (g.store == StoreSteam ? "Steam" : g.store == StoreGog ? "GOG" : "other") + ", Dunia " + (g.build == BuildSteam ? "Steam" : g.build == BuildGog ? "GOG" : "unknown") + ")\r\n";
     State s = Check(g);
     info += "Mod installed: " + std::string(s.installed ? "yes " + s.installedVersion : "no") + ", FarCry2VR.exe: " + (s.vrExe ? "yes" : "no") + ", other dinput8: " + (s.foreignDinput ? "yes" : "no") + "\r\n";
+    info += SystemReport();
     z.Add("system-info.txt", info.data(), info.size());
     int n = 0;
     auto addFile = [&](const std::wstring& path, const std::string& name) { std::string d; if (ReadFileAll(path, d)) { z.Add(name, d.data(), d.size()); ++n; } };

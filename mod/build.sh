@@ -7,7 +7,7 @@ CXX=$TC/i686-w64-mingw32-clang++
 mkdir -p build
 $CXX -std=c++17 -O2 -Wall -Wno-unused-function -Wno-missing-braces \
   -I third_party/openxr_include \
-  -shared -o build/dinput8.dll src/main.cpp src/xr.cpp src/perf.cpp src/hang.cpp src/controls.cpp src/arms.cpp src/dlss_fc2.cpp src/dlss_client.cpp src/afw_fc2.cpp src/gameaddr.cpp \
+  -shared -o build/dinput8.dll src/main.cpp src/xr.cpp src/perf.cpp src/hang.cpp src/controls.cpp src/arms.cpp src/dlss_fc2.cpp src/dlss_client.cpp src/afw_fc2.cpp src/gameaddr.cpp src/diag.cpp \
   -static -static-libgcc -static-libstdc++ \
   -Wl,--kill-at -Wl,--enable-stdcall-fixup \
   -ld3d11 -ldxgi -lwinmm -luuid -lgdi32

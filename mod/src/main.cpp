@@ -20,6 +20,7 @@
 #include "controls.h"
 #include "arms.h"
 #include "log.h"
+#include "diag.h"
 #include "gameaddr.h"
 #include "perf.h"
 #include "hang.h"
@@ -3418,6 +3419,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
             }
         }
         { LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_qpcToMs = 1000.0 / (double)f.QuadPart; }
+        { char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); diag::Startup(ip); }   // v230
         LoadConfig(); g_cullMode = g_cfg.cullMode; g_fovMode = g_cfg.symmetricFov ? ((g_cfg.overscanH > 0 || g_cfg.overscanV > 0) ? 2 : 1) : 0;
         // Windows display scaling makes this DPI-unaware game see a small virtual desktop. Its 1920x1080 window
         // then cannot fit, the size check fails every frame and fires the window-resized event each frame, which

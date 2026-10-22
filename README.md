@@ -4,7 +4,7 @@ A native stereo VR mod for **Far Cry 2** (Dunia engine) with full motion control
 
 The game renders each eye itself through its own engine, with the headset's per-eye projection, so the image has correct depth and scale. It is not a 3D re-projection. Output goes through **OpenXR**. Development and testing used a Meta Quest 3 through Virtual Desktop (VDXR), but any OpenXR runtime should work.
 
-**Version 1.0.0**, mod build v229. Supports the **Steam** and **GOG** versions with the same DLL.
+**Version 1.0.1**, mod build v230. Supports the **Steam** and **GOG** versions with the same DLL.
 
 ## Features
 
@@ -52,10 +52,20 @@ Far Cry 2 can run in DirectX 9 or DirectX 10. **The VR mod only works in DirectX
 
 **Check:** open `GamerProfile.xml` after playing. If the `<RenderProfile>` line shows `Platform="d3d10a"`, the game is in DirectX 10.
 
+## Frame rate capped at about 64-65 fps?
+
+Version 1.0.1 fixes the most common cause: Windows 11 slows the game's timer while its window is in the background, which caps it at 64 fps. If the cap remains, check:
+
+- **Anti-aliasing must be None** in the game's video options (`MultiSampleMode="0"` in `GamerProfile.xml`). MSAA turns DLSS off and costs a lot in VR; DLSS / DLAA already does the anti-aliasing.
+- **No frame-rate limiter:** "Max Frame Rate" in the NVIDIA Control Panel / NVIDIA app (global or for FarCry2VR.exe), RivaTuner / MSI Afterburner, Lossless Scaling and similar tools.
+- **Virtual Desktop:** frame rate set to 90 Hz (or the rate you want), and its performance overlay to see whether network or decoding is the limit.
+
+Then send the launcher's **Collect logs** zip: it now includes the frame pacing, the headset refresh rate, NVIDIA driver settings and running overlay / limiter tools.
+
 ## Install
 
-1. Download `FarCry2VR-1.0.0.zip` from the [Releases](../../releases) page and unzip it.
-2. Run `FarCry2VR-Launcher_1.0.0.exe`, pick your Far Cry 2 folder (Steam or GOG), and press **Install**.
+1. Download `FarCry2VR-1.0.1.zip` from the [Releases](../../releases) page and unzip it.
+2. Run `FarCry2VR-Launcher_1.0.1.exe`, pick your Far Cry 2 folder (Steam or GOG), and press **Install**.
 3. Make sure the game is set to **DirectX 10** (see above).
 4. Start your OpenXR runtime (for example Virtual Desktop), then start the game from the launcher.
 
