@@ -8,13 +8,16 @@
 #define XR_USE_PLATFORM_WIN32
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
+#include "common/pose_authority.h"
 
 namespace xr {
 
 struct FrameViews {
     bool    valid = false;        // views located with valid orientation
+    bool    positionValid = false; // finite valid eye positions; required before recenter/height/6DoF use
     bool    shouldRender = false;
     XrTime  displayTime = 0;
+    uint64_t spaceGeneration = 0;
     XrView  views[2]{};           // LOCAL space, per eye
 };
 
@@ -80,16 +83,28 @@ void SetMonoViewScale(float k);   // v216: the monocular view is cropped this mu
 
 // Motion controllers (synced in BeginFrame; poses in LOCAL space at the predicted display time). side 0 = left, 1 = right.
 struct HandState {
+    // gripValid/aimValid describe the visual pose (including HoldLostTracking).
+    // Only poseAuthority plus raw tracked evidence can authorize physical use.
     bool active = false, gripValid = false, aimValid = false;
+    fc2vr::authority::PoseEvidence gripEvidence{}, aimEvidence{};
+    bool gripHeld = false, aimHeld = false, poseAuthority = false;
     XrPosef grip{ { 0, 0, 0, 1 }, { 0, 0, 0 } }, aim{ { 0, 0, 0, 1 }, { 0, 0, 0 } };
     float trigger = 0, squeeze = 0;
     XrVector2f stick{ 0, 0 };
     bool stickClick = false, btn1 = false /* A or X */, btn2 = false /* B or Y */, menu = false /* left only */;
 };
-const HandState& Hand(int side);
+const HandState& Hand(int side);   // render thread only; visual fallback, never gameplay authority
 void Haptic(int side, float amplitude, float seconds, float frequency = 0);   // amplitude 0 stops
-// Thread-safe copy of the latest controller state and head pose (LOCAL), for the game thread.
-bool InputSnapshot(HandState out[2], XrPosef& head, bool& headValid);
+// Thread-safe physical snapshot: checks focus/sync/receipt age, masks pose flags
+// to tracked/rearmed authority, and clears failed head validity. Buttons are independent.
+using InputStamp = fc2vr::authority::Stamp;
+bool InputSnapshot(HandState out[2], XrPosef& head, bool& headValid, InputStamp* stamp = nullptr);
+InputStamp CurrentInputStamp();
+bool InputCurrent(const InputStamp& source, int hand = -1);
+bool InputCurrent();
+bool HeadCurrent(const InputStamp& source);
+bool AcceptedInputCurrent(const InputStamp& source, int hand);   // accepted snapshot, not permission to refresh a raw pose
+void InvalidateForRecenter();   // render thread; invalidates leases and requires neutral controls again
 void SetRumble(float left, float right);
 void SetHoldLostPose(bool on);   // HoldLostTracking: keep the last pose of a controller that loses tracking   // 0..1 per hand, applied every frame
 

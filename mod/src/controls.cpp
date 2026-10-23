@@ -190,20 +190,42 @@ float TurnExtra() { return g_turnExtra; }
 void SetWatchActive() { g_watchTick = GetTickCount(); }
 bool WatchActive() { return GetTickCount() - g_watchTick < 250; }
 void SetMenuMode(bool on) { g_menuMode = on; }
+struct MappingHistory {
+    ULONGLONG recenterAt = 0, gadgetAt = 0, mapPress = 0, notMapSince = 0;
+    bool recenterFired = false, driverMap = false, gadgetHeld = false, gadgetDelayed = false, mapPrev = false;
+    int lastMap = -1, turnDir = 0, snapDir = 0;
+    bool aPrev = false, aCombo = false, rThrow = false, lThrow = false, trigFlash = false, bCombo = false;
+};
+static MappingHistory g_history;
+static fc2vr::authority::SampleCursor g_inputCursor;
+static uint64_t g_mappingGeneration = 0;
+void CancelPendingInput() {
+    g_history = {}; g_inputCursor.Clear(); g_mappingGeneration = 0;
+    g_crouchDown = g_sightOn = g_lGripDown = g_lGripNoUse = g_rGripDown = g_rGripAim = false;
+    g_lTrigDown = g_lTrigGrenade = g_bDown = g_bHoldFired = false;
+    g_lGripTime = g_bTime = 0; g_rtValue = g_turnExtra = 0; g_snapStick = 0;
+    g_aimHand = -1; g_monoFace = g_zoneNow = g_leftClaimed = false; g_usePulse = 0;
+    for (auto& p : g_pulse) p = {};
+    InterlockedExchange(&g_throwRelease,0); InterlockedExchange(&g_throwFire,0);
+    InterlockedExchange(&g_snapReq,0); InterlockedExchange(&g_reloadPress,0);
+    InterlockedExchange(&g_holsterReq,0); InterlockedExchange(&g_selectReq,0);
+    InterlockedExchange(&g_recapReq,0); InterlockedExchange(&g_mapLiftReq,0); InterlockedExchange(&g_recenterReq,0);
+}
 static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head, bool headValid) {
     memset(&g, 0, sizeof g);
     xr::HandState hm[2];
     if (g_menuMode) { hm[0] = h[0]; hm[1] = h[1]; for (auto& x : hm) { x.stick.x = x.stick.y = 0; x.stickClick = false; } h = hm; }   // the sticks drive the mod's menu
     ULONGLONG now = GetTickCount64();
     const xr::HandState& L = h[0]; const xr::HandState& R = h[1];
-    g_rtValue = R.trigger;
     // v222 recenter: the left stick held in for RecenterHoldMs (the click still sprints as usual)
-    { static ULONGLONG downAt = 0; static bool fired = false;
+    { auto& downAt = g_history.recenterAt; auto& fired = g_history.recenterFired;
       if (L.stickClick) { if (!downAt) { downAt = now; fired = false; }
           else if (!fired && g_c.recenterHoldMs > 0 && now - downAt >= (ULONGLONG)g_c.recenterHoldMs) { fired = true; InterlockedExchange(&g_recenterReq, 1); xr::Haptic(0, 0.5f, 0.08f); LOG("controls: left stick held - recenter"); } }
       else downAt = 0; }
     WORD b = 0;
     UpdateVehicleMode();
+    const bool poseFire = g_vehMode != 0 || g_mounted || g_menuMap || (R.gripValid && R.aimValid);
+    g_rtValue = poseFire ? R.trigger : 0;
     if (g_vehMode == 1 && !g_menuMode) {   // driver seat (VEHICLE_CONTROLS): the game's pad driving map, Config\InputActionMap.xml
         // steering = right stick left/right (or the left stick), RT gas, LT brake/reverse, left grip handbrake (pad B),
         // right grip change seat (pad A), X exit (pad Y), right stick click heal (pad LB), left Y map, menu = pause
@@ -217,7 +239,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         if (L.btn1) b |= XINPUT_GAMEPAD_Y;                         // exit / bail out
         if (R.stickClick) b |= XINPUT_GAMEPAD_LEFT_SHOULDER;       // heal
         if (L.btn2) b |= XINPUT_GAMEPAD_BACK;                      // map
-        { static bool prev = false; if (L.btn2 && !prev) g_mapOpen = !g_mapOpen; prev = L.btn2; }
+        { auto& prev = g_history.driverMap; if (L.btn2 && !prev) g_mapOpen = !g_mapOpen; prev = L.btn2; }
         if (L.menu) b |= XINPUT_GAMEPAD_START;
         if (R.btn2) b |= XINPUT_GAMEPAD_RIGHT_SHOULDER;            // B: headlights
         g_sightOn = false; g_zoneNow = false; g_rGripDown = R.squeeze > 0.6f; g_lGripDown = L.squeeze > 0.5f;
@@ -229,7 +251,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     g.sThumbLX = Axis(L.stick.x); g.sThumbLY = Axis(L.stick.y);
     if (L.stickClick) b |= XINPUT_GAMEPAD_LEFT_THUMB;      // sprint
     if (L.btn1 && !g_menuMode) b |= XINPUT_GAMEPAD_Y;     // X: interact / use (E) - doors, turrets, weapons on the ground
-    { static bool held = false, delayed = false; static ULONGLONG at = 0;   // map / gadget
+    { auto& held = g_history.gadgetHeld; auto& delayed = g_history.gadgetDelayed; auto& at = g_history.gadgetAt;   // map / gadget
       if (L.btn2 && !held) { delayed = g_handsAway; if (delayed) { InterlockedExchange(&g_mapLiftReq, 1); at = now + 150; LOG("controls: map button with the weapon away - lifting the holster lock first"); } }
       held = L.btn2;
       if (!L.btn2) delayed = false;
@@ -241,7 +263,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     // The phone: answering a call (same button) shows the game's map controls for ~1.5 s, then the game closes
     // them itself; the map stays up until the button is pressed again. So map controls ending without a press
     // = the phone is out (until the weapon comes back - arms clears it - or the button is pressed again).
-    { static bool prev = false; static ULONGLONG pressT = 0; static int lastMc = -1;
+    { auto& prev = g_history.mapPrev; auto& pressT = g_history.mapPress; auto& lastMc = g_history.lastMap;
       if (L.btn2 && !prev && g_mono) { g_mono = false; LOG("controls: monocular away (map button)"); }
       if (L.btn2 && !prev) { g_mapOpen = !g_mapOpen; pressT = now; if (g_phoneOut) { g_phoneOut = false; LOG("controls: phone away (button)"); } LOG("controls: map button (%s)", g_mapOpen ? "out" : "away"); }
       prev = L.btn2;
@@ -270,7 +292,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     g_crouchDown = down;
     // turning: any clear left/right push turns at full speed, even on a diagonal (a diagonal only gives ~70% of x)
     {
-        static int turnDir = 0;
+        auto& turnDir = g_history.turnDir;
         float x = R.stick.x;
         if (turnDir == 0) { if (x > 0.35f) turnDir = 1; else if (x < -0.35f) turnDir = -1; }
         else if (turnDir * x < 0.25f) turnDir = 0;
@@ -284,7 +306,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         bool watch = GetTickCount() - g_watchTick < 250;   // the watch is up (safehouse sleep): the stick sets the time instead
         if (watch) g.sThumbRX = 0;
         if (g_c.snapTurn > 0.5f && g_vehMode == 0) {   // snap turning: one push = one turn of SnapTurn degrees (done by the mod, see arms)
-            static int snapDir = 0;
+            auto& snapDir = g_history.snapDir;
             if (snapDir == 0) { if (x > 0.6f) snapDir = 1; else if (x < -0.6f) snapDir = -1; if (snapDir && !down && !watch) InterlockedExchangeAdd(&g_snapReq, snapDir); }
             else if (snapDir * x < 0.3f) snapDir = 0;
             float sb = g_snapStick;   // a turn the game has to do itself (fallback): the mod steers the stick
@@ -302,13 +324,13 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     }
     if (down) b |= XINPUT_GAMEPAD_B;                       // crouch
     // left grip + A: take the weapon's hold again (no jump)
-    { static bool aPrev = false, aCombo = false;
+    { auto& aPrev = g_history.aPrev; auto& aCombo = g_history.aCombo;
       if (R.btn1 && !aPrev && L.squeeze > 0.6f) { aCombo = true; InterlockedExchange(&g_recapReq, 1); LOG("controls: left grip + A - take the hold again"); }
       if (!R.btn1) aCombo = false;
       aPrev = R.btn1;
       if (R.btn1 && !aCombo) b |= XINPUT_GAMEPAD_A; }      // jump / change seat
     if (R.stickClick) b |= XINPUT_GAMEPAD_LEFT_SHOULDER;   // right stick click: syrette (heal yourself)
-    g.bRightTrigger = (BYTE)lroundf(fminf(1.0f, R.trigger) * 255.0f);   // fire / accelerate
+    g.bRightTrigger = poseFire ? (BYTE)lroundf(fminf(1.0f, R.trigger) * 255.0f) : 0;   // pose-guided fire needs tracked input; native vehicle/turret controls do not
     if (!g_c.macheteTrigger && MacheteSelected()) g.bRightTrigger = 0;   // machete: hits come from swinging it; the game's attack animation sways the camera
     // right grip: holster grab (weapon select) in a body zone, iron sight / reverse elsewhere
     Zone z = headValid && g_vehMode == 0 ? RightHandZone(R, head) : Z_NONE;   // no holster grabs in a vehicle seat
@@ -349,7 +371,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         g.bLeftTrigger = 255;                                    // the game keeps the monocular raised
         g.bRightTrigger = g_monoFace ? g.bRightTrigger : 0;     // tagging only while looking through it
         // the game left the map / monocular (a cut scene, a vehicle, the map closed by the game): monocular off
-        static ULONGLONG notMapSince = 0;
+        auto& notMapSince = g_history.notMapSince;
         if (g_mapCompass == 1) notMapSince = 0; else if (!notMapSince) notMapSince = now;
         if (notMapSince && now - notMapSince > 4000 && (g_itemMap || g_vehMode != 0)) { g_mono = false; g_monoFace = false; notMapSince = 0; LOG("controls: monocular off (the game left the map controls)"); }
         // v217: any other controls taking over (a game message box after tagging, a cut scene): monocular off at once so the
@@ -359,14 +381,15 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     // throwing arc: hold a hand's grip, then pull its trigger (left hand: not while it holds the weapon); the mod draws
     // the arc and lands the throw where it ends; letting go of either throws (see arms)
     {
-        static bool rPrev = false, lPrev = false;
+        auto& rPrev = g_history.rThrow; auto& lPrev = g_history.lThrow;
         bool rT = R.trigger > 0.6f, lT = L.trigger > 0.6f;
         bool allowed = g_c.throwArc && g_vehMode == 0 && g_normalMap && !g_mapOpen;
-        if (!allowed) g_aimHand = -1;
+        bool lostPose = g_aimHand >= 0 && !(h[g_aimHand].gripValid && h[g_aimHand].aimValid);
+        if (!allowed || lostPose) { g_aimHand = -1; InterlockedExchange(&g_throwRelease,0); InterlockedExchange(&g_throwFire,0); }
         else if (g_aimHand < 0) {
             // only a free hand aims a throw: the right one with no weapon in it, the left one when it isn't on the weapon
-            if (g_c.throwArcRight && g_rightFree && rT && !rPrev && g_rGripAim) g_aimHand = 1;
-            else if (lT && !lPrev && g_lGripDown && !g_leftClaimed) g_aimHand = 0;
+            if (g_c.throwArcRight && g_rightFree && rT && !rPrev && g_rGripAim && R.gripValid && R.aimValid) g_aimHand = 1;
+            else if (lT && !lPrev && g_lGripDown && !g_leftClaimed && L.gripValid && L.aimValid) g_aimHand = 0;
             if (g_aimHand >= 0) { xr::Haptic(g_aimHand, 0.35f, 0.05f); LOG("controls: %s grip + trigger - aiming a throw", g_aimHand ? "right" : "left"); }
         } else {
             const xr::HandState& H = g_aimHand ? R : L;
@@ -379,7 +402,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     // left trigger: reload / unjam, or grenade throw while the right grip (aim) is held
     bool lt = L.trigger > (g_lTrigDown ? 0.35f : 0.6f) && g_aimHand != 0 && !(g_lGripDown && !g_leftClaimed && g_c.throwArc);
     // v220 flashlight: the left hand raised to the left temple + the left trigger switches it (no reload / throw then)
-    static bool g_lTrigFlash = false;
+    auto& g_lTrigFlash = g_history.trigFlash;
     if (lt && !g_lTrigDown && g_c.flashlight && headValid && L.gripValid) {
         const XrQuaternionf& q = head.orientation;   // the head's right axis (+X rotated)
         float rx = 1 - 2 * (q.y * q.y + q.z * q.z), ry = 2 * (q.x * q.y + q.w * q.z), rz = 2 * (q.x * q.z - q.w * q.y);
@@ -394,7 +417,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     if (lt && !g_lTrigFlash) b |= g_lTrigGrenade ? XINPUT_GAMEPAD_RIGHT_SHOULDER : XINPUT_GAMEPAD_X;
     // B: tap = next weapon slot, hold = next throwable type (grenade / molotov)
     // left grip + B: put the weapon away (or bring it back) - a combo, so a single press in a fight can't do it
-    static bool g_bCombo = false;
+    auto& g_bCombo = g_history.bCombo;
     if (R.btn2 && !g_bDown && L.squeeze > 0.6f) { g_bCombo = true; InterlockedExchange(&g_holsterReq, 1); xr::Haptic(1, 0.5f, 0.05f); LOG("controls: left grip + B - weapon away / back"); }
     if (g_bCombo) { if (!R.btn2) g_bCombo = false; g_bDown = R.btn2; g_bHoldFired = true; }
     if (R.btn2 && !g_bDown) { g_bTime = now; g_bHoldFired = false; }
@@ -409,18 +432,26 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
 }
 
 static DWORD WINAPI Hook_GetState(DWORD idx, XINPUT_STATE* st) {
+    if (!st) return ERROR_BAD_ARGUMENTS;
+    if (idx != 0) return g_active ? ERROR_DEVICE_NOT_CONNECTED : o_GetState ? o_GetState(idx,st) : ERROR_DEVICE_NOT_CONNECTED;
     xr::HandState h[2]; XrPosef head; bool headValid = false;
-    bool have = g_c.enable && xr::InputSnapshot(h, head, headValid) && (h[0].active || h[1].active);
+    xr::InputStamp stamp;
+    bool have = g_c.enable && xr::InputSnapshot(h, head, headValid, &stamp) && (h[0].active || h[1].active);
     if (!have) {
-        if (InterlockedExchange(&g_active, 0)) LOG("controls: VR controllers inactive, real gamepad passes through");
-        return o_GetState ? o_GetState(idx, st) : ERROR_DEVICE_NOT_CONNECTED;
+        const bool wasActive = InterlockedExchange(&g_active,0) != 0;
+        if (wasActive || g_mappingGeneration) CancelPendingInput();
+        if (wasActive) LOG("controls: VR input revoked; neutral release then real gamepad fallback");
+        const DWORD native = o_GetState ? o_GetState(idx,st) : ERROR_DEVICE_NOT_CONNECTED;
+        if (native == ERROR_SUCCESS || !wasActive) return native;
+        g_last = {}; st->Gamepad = {}; st->dwPacketNumber = ++g_packet; return ERROR_SUCCESS;
     }
     if (!InterlockedExchange(&g_active, 1)) LOG("controls: VR controllers drive gamepad 0");
-    if (idx != 0) return ERROR_DEVICE_NOT_CONNECTED;
-    if (!st) return ERROR_BAD_ARGUMENTS;
-    XINPUT_GAMEPAD g; Build(g, h, head, headValid);
-    if (memcmp(&g, &g_last, sizeof g) != 0) { g_last = g; ++g_packet; }
-    st->dwPacketNumber = g_packet; st->Gamepad = g;
+    if (g_mappingGeneration != stamp.generation) { CancelPendingInput(); g_mappingGeneration = stamp.generation; }
+    if (g_inputCursor.Take(stamp)) {
+        XINPUT_GAMEPAD g; Build(g,h,head,headValid);
+        if (memcmp(&g,&g_last,sizeof g) != 0) { g_last = g; ++g_packet; }
+    }
+    st->dwPacketNumber = g_packet; st->Gamepad = g_last;
     return ERROR_SUCCESS;
 }
 static DWORD WINAPI Hook_SetState(DWORD idx, XINPUT_VIBRATION* v) {

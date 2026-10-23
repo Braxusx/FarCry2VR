@@ -3,7 +3,28 @@
 Date: 2026-10-23. Branch: `codex/tracking-arms-physical-steering`.
 Base: `92a29c5b1e28a652d067262aacc59b421ed044c1` (upstream 1.0.1).
 
-## Latest checkpoint: shared-camera-1
+## Latest checkpoint: input-authority-1
+
+First R4 safety slice is implemented and built offline. Original receipt timestamps,
+focus/sync and lifecycle/hand epochs now bound input, physical hand contacts and
+weapon/scope rays. Cached visual poses cannot authorize physical actions. Input
+loss cancels transient gestures without synthetic releases; recovery requires
+neutral rearming and repeated XInput polls do not advance gesture history.
+Ordinary fresh buttons/native vehicle controls remain separate from pose-guided
+fire and interactions. Accepted throw intents retain a distinct native-animation
+deadline without renewing raw pose timestamps.
+
+All 19 MSVC x86 CTest groups pass: 31,225 numeric checks plus two source-wiring
+guards. The 477 new authority checks also pass GCC x86; rebuilt expiry and rearm
+mutants fail as expected. Full x86 GCC DLL builds with no added warnings.
+Details, artifact identity, remaining ownership limits and rollback:
+[input authority checkpoint](INPUT_AUTHORITY_2026-10-23.md).
+
+This does not complete R4/PR 2: full native owner/model/palette lifetime handling
+and R9 exact-image refusal remain open. R1 scheduling and all runtime/headset
+acceptance remain unverified. No game launch, deployment, packaging, push or PR.
+
+## Prior checkpoint: shared-camera-1 (`371c2aa`)
 
 R1's shared-frame implementation is built and verified offline. One immutable
 effective camera basis/origin, recenter snapshot and scale now feed eyes/culling,
@@ -24,8 +45,8 @@ game run checks frame consumption and walking/head-only motion. Details, artifac
 identity, acceptance and rollback: [shared camera checkpoint](SHARED_CAMERA_FRAME_2026-10-23.md).
 
 No game launch, deployment, packaging, remote push or PR. PR 0/1 are still not
-complete; R2 twist, R3 support gripping, R4/R9 authority/image gates and steering
-remain separate work. The documented llvm-mingw route remains unverified.
+complete; R2 twist, R3 support gripping, remaining R4/R9 authority/image gates and
+steering remain separate work. The documented llvm-mingw route remains unverified.
 
 ## Prior checkpoint: height-direction-1 (`a41b3b9`)
 
@@ -97,8 +118,9 @@ pitch/roll, asymmetric eye views, scope, flashlight and monocular. Preserve and
 restore the user's settings, verify the module stamp, and close the owned game
 instance after testing. Passing offline math does not establish visual acceptance.
 
-R1 followed this checkpoint; see the current status above. R2 wrist/arm twist,
-pose authority, support gripping, vehicle steering and optional DQS remain open.
+R1 and the first R4 slice followed this checkpoint; see current status above.
+R2 wrist/arm twist, remaining pose ownership, support gripping, vehicle steering
+and optional DQS remain open.
 
 R5 is one focused fix commit after the plan checkpoint. Roll back that commit
 as a whole if needed; no migration, runtime settings or deployed files need undoing.

@@ -360,12 +360,14 @@ static double g_refYTime = 0;
 struct Recenter { bool valid = false; V3 pos{}; V3 fwdH{ 0, 0, -1 }; V3 rightH{ 1, 0, 0 }; } g_ref;
 
 static void DoRecenter(const XrPosef& head) {
+    if (!fc2vr::authority::FinitePosition(head) || !fc2vr::authority::FiniteOrientation(head)) return;
     V3 f = QRot(head.orientation, { 0, 0, -1 });
     V3 fh = Norm({ f.x, 0, f.z });
     g_ref.pos = ToV3(head.position);
     g_ref.fwdH = fh;
     g_ref.rightH = { -fh.z, 0, fh.x };
     g_ref.valid = true;
+    xr::InvalidateForRecenter();
     g_refYTime = 0;   // set by caller via NowMs when available
     LOG("recentered (head y=%.3f)", head.position.y);
 }
@@ -2276,6 +2278,12 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
     MacheteMenu(fv);
     {   // controller pose for the arms/weapon and shots (game thread reads it)
         arms::Frame af; const xr::HandState& rh = xr::Hand(1);
+        xr::HandState physical[2]; XrPosef inputHead; bool inputHeadValid = false;
+        const bool inputCurrent = xr::InputSnapshot(physical,inputHead,inputHeadValid,&af.source);
+        af.handAuthority = inputCurrent && physical[1].gripValid && physical[1].aimValid;
+        af.leftAuthority = inputCurrent && physical[0].gripValid && physical[0].aimValid;
+        af.headAuthority = inputCurrent && inputHeadValid;
+        af.weapon = arms::CurrentWeapon();
         af.valid = true; af.handValid = rh.aimValid && rh.gripValid;
         auto put = [](float* d, V3 v) { d[0] = v.x; d[1] = v.y; d[2] = v.z; };
         af.game = frame.game; af.frameSequence = frame.sequence;
@@ -2290,7 +2298,8 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
         }
         const xr::HandState& lh = xr::Hand(0);
         af.leftValid = lh.aimValid && lh.gripValid;
-        af.lSqueeze = lh.squeeze; af.rSqueeze = rh.squeeze; af.machete = controls::MacheteSelected(); af.map = controls::MapOpen();
+        af.lSqueeze = af.leftAuthority ? lh.squeeze : 0; af.rSqueeze = af.handAuthority ? rh.squeeze : 0;
+        af.machete = controls::MacheteSelected(); af.map = controls::MapOpen();
         if (af.leftValid) {
             put(af.laimO, frame.ReferencePosition(ToV3(lh.aim.position)));
             put(af.laimR, frame.ReferenceDirection(QRot(lh.aim.orientation, { 1, 0, 0 })));
@@ -2311,7 +2320,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
         }
         if (g_macheteCalAt > 0 && NowMs() >= g_macheteCalAt) {
             g_macheteCalAt = 0;
-            if (af.machete && af.handValid) {
+            if (af.machete && af.handAuthority) {
                 V3 d = frame.ReferenceDirection(QRot(rh.aim.orientation, { 0, 0, -1 })), h = frame.ReferenceDirection(QRot(fv.views[0].pose.orientation, { 0, 0, -1 }));
                 float pitch = asinf(fmaxf(-1.0f, fminf(1.0f, d.y / fmaxf(1e-4f, sqrtf(d.x * d.x + d.y * d.y + d.z * d.z))))) * 57.29578f;
                 float yaw = atan2f(h.z * d.x - h.x * d.z, h.x * d.x + h.z * d.z) * 57.29578f;   // + = turned left (inward for the right hand)
@@ -2328,9 +2337,15 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
         // two-handed grip: left grip pressed with the left hand near the weapon's foregrip (or the pistol grip)
         {
             static bool gripDown = false, grabbing = false;
+            static void* gripWeapon = nullptr; static xr::InputStamp gripSource;
             bool g = lh.squeeze > (gripDown ? 0.35f : 0.6f);
+            if (gripWeapon != af.weapon || gripSource.generation != af.source.generation
+                || gripSource.handGeneration[0] != af.source.handGeneration[0] || gripSource.handGeneration[1] != af.source.handGeneration[1]) {
+                grabbing = false; gripDown = g; gripWeapon = af.weapon; gripSource = af.source;
+            }
+            if (!af.handAuthority || !af.leftAuthority) grabbing = false;
             float fg[3]; bool oneH = true;
-            if (g && !gripDown && af.leftValid && arms::Foregrip(fg, oneH)) {
+            if (g && !gripDown && af.handAuthority && af.leftAuthority && arms::Foregrip(fg, oneH)) {
                 V3 d = V3{ af.lgripO[0] - fg[0], af.lgripO[1] - fg[1], af.lgripO[2] - fg[2] };
                 float dist = sqrtf(Dot(d, d));
                 if (dist < g_cfg.grabDistance * s) { grabbing = true; xr::Haptic(0, 0.5f, 0.05f); LOG("arms: two-handed grip (%s, %.2f m, hand span %.2f)", oneH ? "pistol" : "rifle", dist / s, arms::LastHandSpan()); }
@@ -2398,7 +2413,14 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     perf::SetPhase(perf::P_HOOKMISC);
     perf::GpuMark(perf::G_HOOK);
     bool eyes = false; g_reflWide = false;
-    if (begun && fv.valid) {
+    if (begun) {
+        static uint64_t lastSpaceGeneration = 0;
+        if (lastSpaceGeneration != fv.spaceGeneration) {
+            lastSpaceGeneration = fv.spaceGeneration; g_ref.valid = false; g_scopeOn = false;
+            LOG("tracking: LOCAL generation %llu; auto-recenter before using new space", (unsigned long long)fv.spaceGeneration);
+        }
+    }
+    if (begun && fv.valid && fv.positionValid) {
         // Head pose = midpoint of the eyes, orientation of the left eye (identical on HMDs).
         XrPosef head = fv.views[0].pose;
         head.position.x = 0.5f * (fv.views[0].pose.position.x + fv.views[1].pose.position.x);
@@ -2424,7 +2446,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     if (bb && !sizeOk) { static UINT warned = 0; if (warned++ % 900 == 0) LOG("backbuffer %ux%u != XR %ux%u: eye copies skipped", bbd.Width, bbd.Height, g_xrW, g_xrH); }
     if (bb) { bb->Release(); }  // the texture object stays valid for this frame; no reference is held past it
     // Zoom detection from the game camera's horizontal FOV (radians).
-    if (begun && fv.valid && g_cfg.scopeMode && sizeOk) {
+    if (begun && fv.valid && fv.positionValid && g_cfg.scopeMode && sizeOk) {
         float fov = F<float>((uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam, cam::Fov);
         if (fov > 0.05f && fov < 3.0f) {
             const bool mono = controls::MonocularOut();   // v212: the game zooms all the time the monocular is out
@@ -2473,7 +2495,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             }
         }
     } else if (!g_cfg.scopeMode) g_scopeOn = false;
-    if (begun && fv.valid && g_scopeOn && g_cfg.scopeFollowHead) {
+    if (begun && fv.valid && fv.positionValid && g_scopeOn && g_cfg.scopeFollowHead) {
         const XrPosef& h0 = fv.views[0].pose;
         V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
         V3 fwd = QRot(h0.orientation, { 0, 0, -1 });
@@ -2483,11 +2505,13 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     }
     // Snapshot the unposed native camera and recenter state BEFORE publishing arms
     // or posing scope/cull/eye cameras. Stateful smoothing advances once per frame.
-    const bool poseReady = begun && fv.valid && g_ref.valid;
+    const bool poseReady = begun && fv.valid && fv.positionValid && g_ref.valid;
     float scopeO[3]{}, scopeD[3]{};
+    arms::RayContext scopeContext;
     const bool monoScope = poseReady && g_scopeOn && controls::MonocularAtFace();
     const bool weaponScope = poseReady && g_scopeOn && !monoScope && g_cfg.scopeFromWeapon
-        && controls::Active() && arms::SightRay(scopeO, scopeD);
+        && controls::Active() && arms::SightRay(scopeO, scopeD, &scopeContext);
+    if (monoScope) scopeContext = {xr::CurrentInputStamp(),arms::CurrentWeapon()};
     const bool renderScope = monoScope || weaponScope;
     const bool renderStereo = poseReady && !g_scopeOn && fv.shouldRender && g_stereoOn && sizeOk;
     // A native flat fallback still uses its native camera: keep its hands raw too.
@@ -2526,8 +2550,13 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         if (renderScope) {
             V3 pos = frame.game.Position({ ro[0], ro[1], ro[2] }), dir = Norm(frame.game.Direction({ rd[0], rd[1], rd[2] }));
             static V3 sm{ 0, 0, 0 }; static double tPrev = 0;
+            static arms::RayContext previousScope;
+            const bool scopeReset = previousScope.weapon != scopeContext.weapon
+                || !fc2vr::authority::SameContext(previousScope.source,scopeContext.source,0)
+                || !fc2vr::authority::SameContext(previousScope.source,scopeContext.source,1);
+            previousScope = scopeContext;
             double tNow = NowMs(); float dt = tPrev > 0 ? (float)((tNow - tPrev) * 0.001) : 1.0f; tPrev = tNow;
-            float k = (sm.x == 0 && sm.y == 0 && sm.z == 0) || dt > 0.5f ? 1.0f : 1.0f - expf(-dt / fmaxf(0.001f, g_cfg.scopeSmoothing));
+            float k = scopeReset || (sm.x == 0 && sm.y == 0 && sm.z == 0) || dt > 0.5f ? 1.0f : 1.0f - expf(-dt / fmaxf(0.001f, g_cfg.scopeSmoothing));
             sm = Norm(sm * (1 - k) + dir * k);
             // the crossbow's bolt reload zooms the game's camera out and back in (to ~73 deg): the scope keeps its zoom
             static float heldFov = 0; static bool holding = false; static double holdT = 0;
@@ -2539,7 +2568,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             float gameW[16]; memcpy(gameW, &F<float>(rc, cam::World), 64);
             PoseCamera(rc, pos, sm, { 0, 0, 1 }, -th, th, -tv, tv, false);
             if (monoRay) arms::SetMonoCams(gameW, &F<float>(rc, cam::World));   // v217: the model is hidden at the eye (the mod draws the ring)
-            { float o3[3] = { pos.x, pos.y, pos.z }, d3[3] = { sm.x, sm.y, sm.z }; arms::SetScopeRay(o3, d3); }
+            { float o3[3] = { pos.x, pos.y, pos.z }, d3[3] = { sm.x, sm.y, sm.z }; arms::SetScopeRay(o3, d3, scopeContext); }
             PoseCamera(cc, pos, sm, { 0, 0, 1 }, -th * 1.2f, th * 1.2f, -tv * 1.2f, tv * 1.2f, false);
             posed = true;
         }
@@ -3388,7 +3417,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (contribution shared-camera-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (contribution input-authority-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

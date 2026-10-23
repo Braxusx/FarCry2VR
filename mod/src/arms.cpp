@@ -68,6 +68,7 @@ static bool g_dumped = false;
 static uint8_t g_armMask[512]; static int g_maskCount = -1; static uint8_t* g_maskSkel = nullptr;
 static volatile LONG g_applied = 0, g_shots = 0;
 static float g_scopeO[3], g_scopeD[3]; static DWORD g_scopeTick = 0;
+static fc2vr::authority::Stamp g_scopeSource; static void* g_scopeWeapon = nullptr;
 // Reloads: the weapon reload state (0x10166xxx) starts the "reload" animation at 0x10166501 (edi = state object,
 // [state+0xC] = owner, owner -> pawn via 0x100EA6C0, [state+5] set to 1 by the "reload_done" animation event,
 // 0x10165800). A detour there notes the player's reloads; while one runs, the arms keep the pose they had before it.
@@ -79,6 +80,7 @@ static void* volatile g_reloadState = nullptr; static volatile DWORD g_reloadT =
 static float g_lastSpan = 0; static float g_rayRefO[3], g_rayRefD[3]; static DWORD g_rayTick = 0;
 static float g_foregripRef[3]; static bool g_foregripValid = false, g_oneHanded = true;
 static float g_shotO[3], g_shotF[3], g_camFwdNow[3], g_camRefO[3], g_camRefD[3]; static bool g_shotValid = false;
+static fc2vr::authority::Stamp g_shotSource; static void* g_shotWeapon = nullptr;
 
 struct Bone { uint32_t hash; uint8_t pad0[12]; float local[16]; float model[16]; int parent; uint8_t locked; uint8_t pad1[11]; };
 static_assert(sizeof(Bone) == 0xA0, "bone stride");
@@ -94,6 +96,7 @@ bool ReadFrameUsage(FrameUsage& out) {
 void SubmitFrame(const Frame& f) {
     if (!g_csInit) return;
     Lock(); g_frame = f; Unlock();
+    if (!f.valid || !f.handAuthority) { Lock(); g_shotValid = false; g_rayTick = 0; g_scopeTick = 0; Unlock(); }
     // Learn how the Camera bone's axes map onto the game camera's rows (right, forward, up) once both are known.
     if (!g_permOk && f.valid && g_camBoneSeq > 30) {
         float B[3][3]; Lock(); memcpy(B, g_camBoneRot, sizeof B); Unlock();
@@ -247,6 +250,20 @@ static void SaveHold(uint32_t key, const M4& r, const M4& l, int axis, float sig
     if (axis >= 0) { char av[8]; snprintf(k, sizeof k, "A%08X", key); snprintf(av, sizeof av, "%c%c", sign > 0 ? '+' : '-', "XYZ"[axis]); WritePrivateProfileStringA("Holds", k, av, g_ini); }
 }
  static void* volatile g_curWeapon = nullptr;
+static bool ShotCurrent(const fc2vr::authority::Stamp& source, void* weapon) {
+    return fc2vr::authority::SameOwner(weapon,g_curWeapon) && xr::InputCurrent(source,1);
+}
+static bool ReadAim(float o[3], float d[3], float* cameraForward = nullptr) {
+    fc2vr::authority::Stamp shotSource,scopeSource; void* shotWeapon; void* scopeWeapon;
+    float scopeO[3],scopeD[3]; bool valid,scope;
+    Lock(); valid = g_shotValid; shotSource = g_shotSource; shotWeapon = g_shotWeapon;
+    memcpy(o,g_shotO,12); memcpy(d,g_shotF,12); if (cameraForward) memcpy(cameraForward,g_camFwdNow,12);
+    scope = g_scopeTick && GetTickCount()-g_scopeTick < 200;
+    scopeSource = g_scopeSource; scopeWeapon = g_scopeWeapon; memcpy(scopeO,g_scopeO,12); memcpy(scopeD,g_scopeD,12); Unlock();
+    if (!valid || !ShotCurrent(shotSource,shotWeapon)) return false;
+    if (scope && scopeWeapon == shotWeapon && ShotCurrent(scopeSource,scopeWeapon)) { memcpy(o,scopeO,12); memcpy(d,scopeD,12); }
+    return true;
+}
 // ---- diagnostic (phone calls and other special controls): which skeletons are animated, does the arm code run
 // small extra skeletons (phone, map, watch models...): log when one appears or goes away, always (a few lines)
 struct SmallSkel { void* p; int n; ULONGLONG seen; bool live; };
@@ -977,7 +994,10 @@ static void Apply(uint8_t* skel) {
       Normalize(sf);
       float sr[3], sfr[3]; Put3(sfr, f.game.ReferenceDirection(Read3(sf))); toRef(so, sr);
       float cro[3], crd[3]; Put3(crd, f.game.ReferenceDirection(Read3(cf))); toRef(co, cro);   // raw native camera line: turrets still aim along it
-      Lock(); memcpy(g_shotO, so, 12); memcpy(g_shotF, sf, 12); memcpy(g_camFwdNow, cf, 12); g_shotValid = true; memcpy(g_rayRefO, sr, 12); memcpy(g_rayRefD, sfr, 12);
+      const bool authority = f.handAuthority && f.weapon && f.weapon == g_curWeapon && xr::InputCurrent(f.source,1);
+      Lock(); if (g_shotWeapon != f.weapon) g_scopeTick = 0;
+      g_shotSource = f.source; g_shotWeapon = f.weapon;
+      memcpy(g_shotO, so, 12); memcpy(g_shotF, sf, 12); memcpy(g_camFwdNow, cf, 12); g_shotValid = authority; memcpy(g_rayRefO, sr, 12); memcpy(g_rayRefD, sfr, 12);
       memcpy(g_camRefO, cro, 12); memcpy(g_camRefD, crd, 12); g_rayTick = GetTickCount(); Unlock(); }
     // rigid re-pose of both arm chains
     for (int i = 0; i < n && i < 512; ++i) if (g_armMask[i]) Bw[i] = Mul(Bw[i], Map);
@@ -1402,11 +1422,7 @@ static bool GroundRay(const float* from, const float* dir, float len, float* hit
 // as the game's bullets in 0x10113230), from 0.5 m out (clear of the player's own body). No hit: 300 m out.
 static float g_aimDist = 0; static DWORD g_aimTick = 0;   // distance along the sight ray to what it points at (game thread)
 static bool AimPoint(float o[3], float d[3], float p[3], float* dist) {
-    bool ok;
-    Lock(); ok = g_shotValid; memcpy(o, g_shotO, 12); memcpy(d, g_shotF, 12);
-    if (g_scopeTick && GetTickCount() - g_scopeTick < 200) { memcpy(o, g_scopeO, 12); memcpy(d, g_scopeD, 12); }
-    Unlock();
-    if (!ok) return false;
+    if (!ReadAim(o,d)) return false;
     const float start = 0.5f, len = 300.0f;
     float from[3] = { o[0] + d[0] * start, o[1] + d[1] * start, o[2] + d[2] * start }, hit[3];
     float t = len;
@@ -1615,18 +1631,21 @@ static void SoftenGains(int hnd, uint8_t* comp, bool on) {
 // gets the hand's pull back, so the hand wins on that one part while the rest keeps the full animated pose.
 // The NPC's walking body follows a pull through its movement input (0x10493920 thiscall(proxy entity, MoveInput*),
 // desired velocity at +0), which the AI keeps steering on top of.
-struct NpcDrive { uint8_t* impl = nullptr; uint8_t* rb = nullptr; float v[3] = {}; uint8_t* proxy = nullptr; float lead[3] = {}; DWORD tick = 0; };
+struct NpcDrive { uint8_t* impl = nullptr; uint8_t* rb = nullptr; float v[3] = {}; uint8_t* proxy = nullptr; float lead[3] = {}; DWORD tick = 0;
+    fc2vr::authority::Stamp source{}; int hand = -1; };
 static NpcDrive g_npcDrive[2];
 typedef void (__fastcall *RagUpd_t)(void* impl, void* edx, float dt);
 static RagUpd_t o_RagUpd = nullptr;
 static void __fastcall Hook_RagUpd(void* impl, void* edx, float dt) {
     o_RagUpd(impl, edx, dt);
-    for (auto& d : g_npcDrive) if (d.impl == impl && d.rb && GetTickCount() - d.tick < 200) RbSetVel(d.rb, d.v, false);
+    NpcDrive snapshot[2]; Lock(); memcpy(snapshot,g_npcDrive,sizeof snapshot); Unlock();
+    for (auto& d : snapshot) if (d.impl == impl && d.rb && GetTickCount()-d.tick < 200 && d.hand >= 0 && xr::InputCurrent(d.source,d.hand)) RbSetVel(d.rb,d.v,false);
 }
 typedef void (__fastcall *ProxyMove_t)(void* proxy, void* edx, float* in);
 static ProxyMove_t o_ProxyMove = nullptr;
 static void __fastcall Hook_ProxyMove(void* proxy, void* edx, float* in) {
-    if (in) for (auto& d : g_npcDrive) if (d.proxy == proxy && GetTickCount() - d.tick < 200 && !IsBadWritePtr(in, 12)) {
+    NpcDrive snapshot[2]; Lock(); memcpy(snapshot,g_npcDrive,sizeof snapshot); Unlock();
+    if (in) for (auto& d : snapshot) if (d.proxy == proxy && GetTickCount()-d.tick < 200 && d.hand >= 0 && xr::InputCurrent(d.source,d.hand) && !IsBadWritePtr(in,12)) {
         in[0] += d.lead[0]; in[1] += d.lead[1];
         static int lg = 0; if (lg < 3 && (d.lead[0] != 0 || d.lead[1] != 0)) { ++lg; LOG("npc: led by the hand (%.2f %.2f m/s)", d.lead[0], d.lead[1]); }
     }
@@ -1797,7 +1816,7 @@ static void CharEnable(uint8_t* c, bool on) { typedef void (__fastcall *F)(void*
 static void ClimbUpdate(uint8_t* playerEnt, const Frame& f, float dt) {
     if (g_climbMode < 0) g_climbMode = g_c.climbMode;
     HolsterKeepAway();
-    g_climbGrace = g_c.climbGrace;
+    g_climbGrace = (f.handValid || f.leftValid) ? g_c.climbGrace : 0;
     auto refDirToWorld = [&](const float* r, float* o) { Put3(o, f.game.Direction(Read3(r))); };
     int act = -1;
     for (int i = 0; i < 2; ++i) if (g_climb[i].on && (act < 0 || g_climb[i].gen > g_climb[act].gen)) act = i;
@@ -1813,7 +1832,8 @@ static void ClimbUpdate(uint8_t* playerEnt, const Frame& f, float dt) {
         if (modeUsed != 2) return;
         float q[4]; CharGetRot(c, q);
         float yaw = 2.0f * atan2f(q[2], q[3]);
-        float sx = xr::Hand(1).stick.x;
+        xr::HandState hands[2]; XrPosef head; bool headValid = false;
+        float sx = xr::InputSnapshot(hands,head,headValid) ? hands[1].stick.x : 0;
         bool push = fabsf(sx) > 0.35f && controls::SnapDegrees() < 0.5f;   // snap turning turns the body itself (SnapUpdate)
         if (push && !ownTurn) {
             float d = fabsf(yaw - yawPrev); if (d > 3.14159f) d = 6.28318f - d;
@@ -2050,7 +2070,9 @@ static void __fastcall Hook_WatchUpd(void* self, void* edx, float dt) {
 static const float kThrowG = 9.82f;
 static float g_arcRef[64][3], g_arcNrmRef[3]; static int g_arcN = 0; static bool g_arcLand = false, g_arcOk = false;
 static float g_arcPos[3], g_arcVel[3]; static bool g_arcValid = false;
+static fc2vr::authority::Stamp g_arcSource; static int g_arcHand = -1;
 static bool g_throwPend = false; static float g_pendPos[3], g_pendVel[3]; static DWORD g_pendT = 0;
+static fc2vr::authority::Stamp g_pendingSource; static int g_pendingHand = -1; static uint8_t* g_pendingPd = nullptr;
 static float g_throwStrength = 0;   // learned from the game at the first throw
 static uint8_t* g_throwPd = nullptr;
 typedef void (__fastcall *ThrowCalc_t)(void* strat, void* edx, void* ctx);
@@ -2062,13 +2084,15 @@ static void __fastcall Hook_ThrowCalc(void* strat, void* edx, void* ctx) {
     if (!st || !pd || pd != g_throwPd) return;
     float str = *(float*)(st + 0x64);
     if (str > 0.5f && str < 200.0f && fabsf(str - g_throwStrength) > 0.01f) { g_throwStrength = str; LOG("throw: the game's throw strength is %.1f m/s", str); }
-    if (g_throwPend && GetTickCount() - g_pendT < 3000) {
+    float pos[3],vel[3]; fc2vr::authority::Stamp source; int hand;
+    Lock(); const bool pending = g_throwPend && pd == g_pendingPd && GetTickCount()-g_pendT < 3000;
+    source = g_pendingSource; hand = g_pendingHand; memcpy(pos,g_pendPos,12); memcpy(vel,g_pendVel,12); g_throwPend = false; Unlock();
+    if (pending && xr::AcceptedInputCurrent(source,hand)) {
         float* gp = (float*)(st + 0xA4); float* gv = (float*)(st + 0xB0);
         LOG("throw: arc launch from %.2f %.2f %.2f vel %.2f %.2f %.2f (game: from %.2f %.2f %.2f vel %.2f %.2f %.2f)",
-            g_pendPos[0], g_pendPos[1], g_pendPos[2], g_pendVel[0], g_pendVel[1], g_pendVel[2], gp[0], gp[1], gp[2], gv[0], gv[1], gv[2]);
-        memcpy(gp, g_pendPos, 12); memcpy(gv, g_pendVel, 12);
+            pos[0],pos[1],pos[2],vel[0],vel[1],vel[2],gp[0],gp[1],gp[2],gv[0],gv[1],gv[2]);
+        memcpy(gp,pos,12); memcpy(gv,vel,12);
     }
-    g_throwPend = false;
 }
 
 // ---- test helper: grenades / molotovs to the maximum. Throwables are CGadget items in the inventory pack
@@ -2143,8 +2167,10 @@ static void ThrowArcUpdate(const Frame& f, uint8_t* pd, TW toWorld, TR toRef) {
     typedef void* (__fastcall *Q_t)(void* inv);
     void* throwable = pd ? ((Q_t)A(0x10129EC0))(pd + 0x4F0) : nullptr;
     if (release) {
-        if (g_arcValid && throwable) {
-            memcpy(g_pendPos, g_arcPos, 12); memcpy(g_pendVel, g_arcVel, 12); g_pendT = GetTickCount(); g_throwPend = true;
+        const bool tracked = g_arcHand == 1 ? f.handValid : g_arcHand == 0 ? f.leftValid : false;
+        if (g_arcValid && throwable && tracked && xr::InputCurrent(g_arcSource,g_arcHand)) {
+            Lock(); memcpy(g_pendPos,g_arcPos,12); memcpy(g_pendVel,g_arcVel,12); g_pendT = GetTickCount(); g_throwPend = true;
+            g_pendingSource = g_arcSource; g_pendingHand = g_arcHand; g_pendingPd = pd; Unlock();
             controls::FireThrow();
             xr::Haptic(lastHand, 0.6f, 0.08f);
             LOG("throw: released - throwing along the arc");
@@ -2160,7 +2186,7 @@ static void ThrowArcUpdate(const Frame& f, uint8_t* pd, TW toWorld, TR toRef) {
         Normalize(d);
         const float speed = (g_c.throwSpeed > 0.5f ? g_c.throwSpeed : g_throwStrength > 0.5f ? g_throwStrength : 15.0f) * sqrtf(fmaxf(0.1f, g_c.throwRange));
         float v[3] = { d[0] * speed, d[1] * speed, d[2] * speed };
-        memcpy(g_arcPos, o, 12); memcpy(g_arcVel, v, 12); g_arcValid = true;
+        memcpy(g_arcPos,o,12); memcpy(g_arcVel,v,12); g_arcValid = true; g_arcSource = f.source; g_arcHand = hand;
         float p[3]; memcpy(p, o, 12); float pv[3]; memcpy(pv, v, 12);
         float pts[64][3]; memcpy(pts[n++], p, 12);
         const float dt = 1.0f / 20.0f;
@@ -2338,6 +2364,23 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
     if (!g_c.handGrab) return;
     Frame f; Lock(); f = g_frame; Unlock();
     if (!f.valid || g_camBoneSeq == 0) return;
+    if (!xr::InputCurrent()) controls::CancelPendingInput();
+    // Keep presentation fallback out of gameplay, including when render publication stops.
+    f.handValid = f.handValid && f.handAuthority && xr::InputCurrent(f.source,1);
+    f.leftValid = f.leftValid && f.leftAuthority && xr::InputCurrent(f.source,0);
+    f.headValid = f.headValid && f.headAuthority && xr::HeadCurrent(f.source);
+    static fc2vr::authority::Stamp previousInput;
+    for (int hnd = 0; hnd < 2; ++hnd) {
+        if (previousInput.generation != f.source.generation || previousInput.handGeneration[hnd] != f.source.handGeneration[hnd]) {
+            // A short dropout can occur entirely between game ticks. Cancel old
+            // holds/history once even if the newest sample is tracked again.
+            if (hnd) f.handValid = false; else f.leftValid = false;
+            g_hist[hnd].n = 0; g_gripPrev[hnd] = true;
+            Lock(); g_npcDrive[hnd] = NpcDrive{}; Unlock();
+        }
+    }
+    previousInput = f.source;
+    f.twoHand = f.twoHand && f.handValid && f.leftValid;
     Lock(); g_frameUsage.haveInteraction = true; g_frameUsage.interactionSequence = f.frameSequence;
     ++g_frameUsage.interactionCalls; g_frameUsage.interactionThread = GetCurrentThreadId(); Unlock();
     auto toWorld = [&](const float* ref, float* o, bool point) { Put3(o, point ? f.game.Position(Read3(ref)) : f.game.Direction(Read3(ref))); };
@@ -2456,7 +2499,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
         bool free = hnd ? (weapon == nullptr) : !f.twoHand;
         Held& H = g_held[hnd];
         // hand frame in world (rows right, up, back, grip position)
-        float hr[3], hu[3], hb[3], hp[3];
+        float hr[3]{}, hu[3]{}, hb[3]{}, hp[3]{};
         if (valid) {
             toWorld(hnd ? f.aimR : f.laimR, hr, false); toWorld(hnd ? f.aimU : f.laimU, hu, false); toWorld(hnd ? f.aimB : f.laimB, hb, false);
             toWorld(hnd ? f.gripO : f.lgripO, hp, true);
@@ -2489,11 +2532,12 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
                             N.body, bp[0], bp[1], bp[2], hp[0] + N.off[0], hp[1] + N.off[1], hp[2] + N.off[2], sqrtf(Dot3(gap, gap)), p0[0], p0[1], p0[2], ep[0], ep[1], ep[2], NpcDriver(N.comp)); }
                 }
                 SoftenGains(hnd, N.comp, F && F->drv == 3 && g_c.npcStiffness < 0.999f);
+                NpcDrive drive; Lock(); drive = g_npcDrive[hnd]; Unlock();
                 if (F && F->drv == 3) {
                     // held standing: the NPC's feet (its character proxy) follow a sideways pull - he is led by the
                     // arm / collar; a pull down to the ground, or one he can't follow, knocks him down
                     float gh = sqrtf(gap[0] * gap[0] + gap[1] * gap[1]);
-                    NpcDrive& D = g_npcDrive[hnd];
+                    NpcDrive& D = drive;
                     D.lead[0] = D.lead[1] = D.lead[2] = 0;
                     {   // the hand's own sideways speed (so he keeps pace) plus a correction that closes the gap
                         float hv[3] = { 0, 0, 0 }; HistVel(g_hist[hnd], 0.1, hv);
@@ -2511,11 +2555,12 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
                 float sp = sqrtf(Dot3(v, v)); if (sp > g_c.npcMaxSpeed) for (float& x : v) x *= g_c.npcMaxSpeed / sp;
                 RbSetVel(rb, v, false);
                 {   // the same pull again right after the ragdoll's own frame update (Hook_RagUpd), and the lead for the feet
-                    NpcDrive& D = g_npcDrive[hnd];
+                    NpcDrive& D = drive;
                     uint8_t* rag = *(uint8_t**)(N.comp + 0x164);
                     D.impl = rag ? *(uint8_t**)(rag + 0x2C) : nullptr; D.rb = rb; memcpy(D.v, v, 12);
                     D.proxy = *(uint8_t**)(N.comp + 0x160); D.tick = GetTickCount();
                     if (!(F && F->drv == 3)) { D.lead[0] = D.lead[1] = D.lead[2] = 0; }
+                    D.source = f.source; D.hand = hnd; Lock(); g_npcDrive[hnd] = D; Unlock();
                 }
                 continue;
             }
@@ -2531,7 +2576,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
                 RbSetVel(b[N.body], tv, false);
             }
             SoftenGains(hnd, N.comp, false);
-            g_npcDrive[hnd] = NpcDrive{};
+            Lock(); g_npcDrive[hnd] = NpcDrive{}; Unlock();
             const char* why = !grip ? "grip released" : !valid ? "hand lost tracking" : !ent ? "entity gone" : "ragdoll off";
             if (N.living) {
                 bool other = g_npc[1 - hnd].on && g_npc[1 - hnd].comp == N.comp;   // still held by the other hand
@@ -2761,11 +2806,8 @@ static void __fastcall Hook_PlayerShot(void* self, void* edx, void* pawn, float*
     if (!g_c.aimFromController || !origin || !dir) return;
     if (controls::MountedWeapon()) {   // v221: a mounted gun fires along the game's camera line (where its dot is), not the hand's
         static int nl = 0; if (nl++ < 3) LOG("arms: mounted gun shot left as the game aims it (dir %.3f %.3f %.3f)", dir[0], dir[1], dir[2]); return; }
-    float ao[3], af[3], cfw[3]; bool ok;
-    Lock(); ok = g_shotValid; memcpy(ao, g_shotO, 12); memcpy(af, g_shotF, 12); memcpy(cfw, g_camFwdNow, 12);
-    if (g_scopeTick && GetTickCount() - g_scopeTick < 200) { memcpy(ao, g_scopeO, 12); memcpy(af, g_scopeD, 12); }   // scoped: exactly the scope's line of sight
-    Unlock();
-    if (!ok) return;
+    float ao[3], af[3], cfw[3];
+    if (!ReadAim(ao,af,cfw)) return;
     // keep the game's spread: the deviation of its direction from the camera's forward
     float nd[3]; for (int k = 0; k < 3; ++k) nd[k] = af[k] + (dir[k] - cfw[k]);
     Normalize(nd);
@@ -3019,10 +3061,14 @@ void Install(uintptr_t base, const Config& c, PatchFn patch) {
     LOG("arms: watch hook %d", w);
     LOG("arms: hooks camera %d hierarchy %d hierarchy-job %d shots %d (weapon in hand %d, aim from controller %d)", a, b, d, e, c.weaponInHand, c.aimFromController);
 }
-bool CameraRay(float o[3], float d[3]) { if (!g_csInit) return false; Lock(); bool ok = g_rayTick && GetTickCount() - g_rayTick < 200; memcpy(o, g_camRefO, 12); memcpy(d, g_camRefD, 12); Unlock(); return ok; }
+bool CameraRay(float o[3], float d[3]) { if (!g_csInit) return false; fc2vr::authority::Stamp source; void* weapon;
+    Lock(); bool ok = g_shotValid && g_rayTick && GetTickCount()-g_rayTick < 200; source = g_shotSource; weapon = g_shotWeapon;
+    memcpy(o,g_camRefO,12); memcpy(d,g_camRefD,12); Unlock(); return ok && ShotCurrent(source,weapon); }
 bool ProjectileReloadActive() { return GetTickCount64() < g_diagUntil; }
 float AimDistance() { return g_aimTick && GetTickCount() - g_aimTick < 300 ? g_aimDist : 0.0f; }
-bool SightRay(float o[3], float d[3]) { if (!g_csInit) return false; Lock(); bool ok = g_rayTick && GetTickCount() - g_rayTick < 200; memcpy(o, g_rayRefO, 12); memcpy(d, g_rayRefD, 12); Unlock(); return ok; }
+bool SightRay(float o[3], float d[3], RayContext* context) { if (!g_csInit) return false; fc2vr::authority::Stamp source; void* weapon;
+    Lock(); bool ok = g_shotValid && g_rayTick && GetTickCount()-g_rayTick < 200; source = g_shotSource; weapon = g_shotWeapon;
+    memcpy(o,g_rayRefO,12); memcpy(d,g_rayRefD,12); if (context) *context = {source,weapon}; Unlock(); return ok && ShotCurrent(source,weapon); }
 static bool MonoAimRay(float o[3], float d[3]) {
     if (!g_inMonoUpd || !controls::MonocularAtFace() || !g_csInit) return false;
     Lock(); bool ok = g_scopeTick && GetTickCount() - g_scopeTick < 250; memcpy(o, g_scopeO, 12); memcpy(d, g_scopeD, 12); Unlock();
@@ -3046,7 +3092,8 @@ void MonoRenderFix(const float game[16], const float posed[16]) {
 }
 bool MonoEquipped() { return g_monoAt != nullptr; }
 bool MonoTarget() { return g_monoTarget && GetTickCount() - g_monoTargetTick < 300; }
-void SetScopeRay(const float o[3], const float d[3]) { if (!g_csInit) return; Lock(); memcpy(g_scopeO, o, 12); memcpy(g_scopeD, d, 12); g_scopeTick = GetTickCount(); Unlock(); }
+void SetScopeRay(const float o[3], const float d[3], const RayContext& context) { if (!g_csInit) return;
+    Lock(); memcpy(g_scopeO,o,12); memcpy(g_scopeD,d,12); g_scopeSource = context.source; g_scopeWeapon = context.weapon; g_scopeTick = GetTickCount(); Unlock(); }
 void* CurrentWeapon() { return g_curWeapon; }
 void SetMachete(float angle, float yaw, float roll) { g_c.macheteAngle = angle; g_c.macheteYaw = yaw; g_c.macheteRoll = roll; }
 void GetMachete(float& angle, float& yaw, float& roll) { angle = g_c.macheteAngle; yaw = g_c.macheteYaw; roll = g_c.macheteRoll; }

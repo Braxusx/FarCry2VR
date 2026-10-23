@@ -5,7 +5,8 @@ Date: 2026-10-23. Proposed contributor work against
 Local source and GitHub main matched when this plan was written. Rebase the plan's
 source locations against newer work before implementation. The plan is checkpointed
 on `codex/tracking-arms-physical-steering`. R5's position/direction boundary and
-R1's shared effective camera-frame implementation are now built and desk-tested.
+R1's shared effective camera frame and the first R4 input-authority safety slice
+are now built and desk-tested.
 Runtime acceptance has not started. See [contribution status](CONTRIBUTION_STATUS.md).
 
 ## Current checkpoint
@@ -19,14 +20,22 @@ Runtime acceptance has not started. See [contribution status](CONTRIBUTION_STATU
   The arm/interaction adapters use its absolute origin, not a later Camera-bone
   origin plus offset. Raw camera rows stay separate for calibration/native aim;
   native flat fallback uses a raw frame consistently. Frame-use diagnostics were added.
-- Twelve CTest groups pass: 30,748 numeric checks plus source-wiring guards. Numeric
-  groups pass with both MSVC x86 and MinGW GCC x86. A frozen original SteadyCam
-  oracle verifies extraction; bob/yaw/bone negative controls exercise the old split.
+- First R4 slice separates held visual poses from physical authority, expires raw
+  samples after 100 ms, stamps focus/lifecycle/hand epochs, requires neutral
+  recovery and cancels transient gestures without synthetic releases. Aim/scope,
+  contacts and cached NPC drive retain source evidence. Accepted throw intents
+  keep a separate bounded native-animation deadline. See the
+  [authority checkpoint](INPUT_AUTHORITY_2026-10-23.md) for boundaries and limits.
+- Nineteen CTest groups pass with MSVC x86: 31,225 numeric checks plus two
+  source-wiring guards. Numeric groups have passed MinGW GCC x86 as well. A frozen
+  original SteadyCam oracle verifies extraction; bob/yaw/bone negative controls
+  exercise the old split. Rebuilt expiry/rearm mutants fail the new safety tests.
 - Both unmodified baseline and changed x86 DLL build with installed MinGW GCC;
   exports checked, no added warnings. The documented llvm-mingw toolchain is not
   installed, so that build route remains unverified. Nothing deployed or packaged.
-- This is a partial PR 0 / PR 1 foundation, not completion of either PR. R1 runtime
-  scheduling/latency and HMD acceptance, image gating and lifecycle remain open.
+- This is a partial PR 0 / PR 1 foundation and first PR 2 slice, not completion of
+  any of those PRs. R1 runtime scheduling/latency and HMD acceptance, unknown-image
+  refusal and full native session/pawn/model/palette/cache ownership remain open.
   If hierarchy hooks apply the previous sample before viewport publication, resolve
   the clock with a proved presentation seam; do not mask it with bone-origin drift.
   No arm-twist, support-grip, manual-reload, physical-steering or DQS fix is claimed.

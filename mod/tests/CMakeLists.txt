@@ -28,3 +28,17 @@ foreach(group bob yaw policy once inverse bone)
 endforeach()
 add_test(NAME pose_source_wiring COMMAND ${CMAKE_COMMAND}
     -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../src -P ${CMAKE_CURRENT_SOURCE_DIR}/check_pose_wiring.cmake)
+
+add_executable(authority_tests test_pose_authority.cpp)
+target_compile_features(authority_tests PRIVATE cxx_std_17)
+target_include_directories(authority_tests PRIVATE ../src)
+if(MSVC)
+    target_compile_options(authority_tests PRIVATE /W4 /WX)
+else()
+    target_compile_options(authority_tests PRIVATE -Wall -Wextra -Werror)
+endif()
+foreach(group freshness cache rearm cursor safety finite)
+    add_test(NAME authority_${group} COMMAND authority_tests ${group})
+endforeach()
+add_test(NAME authority_source_wiring COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../src -P ${CMAKE_CURRENT_SOURCE_DIR}/check_authority_wiring.cmake)

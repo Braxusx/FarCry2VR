@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstddef>
 #include "common/pose_frame.h"
+#include "common/pose_authority.h"
 
 namespace arms {
 struct Config {
@@ -93,6 +94,9 @@ struct Config {
 // scaled to game units; game is the exact effective frame also used by the eyes.
 struct Frame {
     bool valid = false, handValid = false;
+    bool handAuthority = false, leftAuthority = false, headAuthority = false;
+    fc2vr::authority::Stamp source{};
+    void* weapon = nullptr;   // instance identity, not a model/cache generation lease
     fc2vr::tracking::GameBasis game{};
     uint64_t frameSequence = 0;   // diagnostic application-frame stamp, not a freshness lease
     float camRows[3][3];          // RAW native camera rows (incl. pitch): bone-axis calibration only
@@ -129,7 +133,8 @@ int GetThrowArc(float (*pts)[3], int maxPts, bool& land, float normal[3], bool& 
 // where the left hand grips the weapon (ref frame); oneHanded = pistol-style weapon
 bool Foregrip(float out[3], bool& oneHanded);
 float LastHandSpan();
-void SetScopeRay(const float o[3], const float d[3]);   // world; shots follow it while the scope view is up
+struct RayContext { fc2vr::authority::Stamp source{}; void* weapon = nullptr; };
+void SetScopeRay(const float o[3], const float d[3], const RayContext& context);   // world; retains original source age/owner
 void SetUseCallback(void (*cb)());
 void SetMachete(float angle, float yaw, float roll);
 void GetMachete(float& angle, float& yaw, float& roll);
@@ -141,7 +146,7 @@ void SetPhoneHands(float angle, float yaw, float roll);
 void GetPhoneHands(float& angle, float& yaw, float& roll);
 void* CurrentWeapon();   // the player's current weapon object (identity only)                     // called (game thread) when a hand uses the interaction target
 // the weapon's sight line (ref frame: origin, unit direction); false if not updated recently
-bool SightRay(float o[3], float d[3]);
+bool SightRay(float o[3], float d[3], RayContext* context = nullptr);
 float AimDistance();
 bool ProjectileReloadActive();     // within the 3.5 s after a projectile weapon shot (its reload)
 void NotifyClip(int clip, int pouch);         // the HUD clip count changed (player's weapon)               // game units along the sight ray to what the weapon points at (0 = unknown)

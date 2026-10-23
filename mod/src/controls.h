@@ -3,6 +3,7 @@
 #include <windows.h>
 
 namespace controls {
+void CancelPendingInput();   // game thread: cancel pending edges/pulses without synthesizing release actions
 struct Config {
     int   enable = 1;          // MotionControls
     float rumble = 1.0f;       // ControllerRumble: scale of the game's rumble on the controllers (0 = off)
