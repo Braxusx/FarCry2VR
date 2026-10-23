@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.16)
+project(fc2vr_tracking_tests LANGUAGES CXX)
+
+enable_testing()
+add_executable(tracking_frame_tests test_tracking_frame.cpp)
+target_compile_features(tracking_frame_tests PRIVATE cxx_std_17)
+target_include_directories(tracking_frame_tests PRIVATE ../src)
+if(MSVC)
+    target_compile_options(tracking_frame_tests PRIVATE /W4 /WX)
+else()
+    target_compile_options(tracking_frame_tests PRIVATE -Wall -Wextra -Werror)
+endif()
+
+foreach(group position direction rotation stereo affine)
+    add_test(NAME tracking_${group} COMMAND tracking_frame_tests ${group})
+endforeach()

@@ -27,6 +27,7 @@
 #include "dlss_fc2.h"
 namespace sounddiag { void Tick(); }
 #include "afw_fc2.h"
+#include "common/tracking_frame.h"
 
 // ============================================================ logging
 static CRITICAL_SECTION g_logCs;
@@ -262,7 +263,7 @@ static bool PatchJmp(uintptr_t target, const uint8_t* expect, void* hook, void**
 }
 
 // ============================================================ math (row-vector convention, as the engine)
-struct V3 { float x, y, z; };
+using V3 = fc2vr::tracking::Vec3;
 static inline V3 operator+(V3 a, V3 b) { return { a.x + b.x, a.y + b.y, a.z + b.z }; }
 static inline V3 operator-(V3 a, V3 b) { return { a.x - b.x, a.y - b.y, a.z - b.z }; }
 static inline V3 operator*(V3 a, float s) { return { a.x * s, a.y * s, a.z * s }; }
@@ -382,8 +383,11 @@ static void UpdateHeightRef(float headY, double nowMs) {
         g_ref.pos.y += (headY - g_ref.pos.y) * k;
     }
 }
-// XR LOCAL vector -> recentered frame (x right, y up, -z forward); HeightOffset raises/lowers the view.
-static inline V3 ToRef(V3 v) { return { Dot(v, g_ref.rightH), v.y + g_cfg.heightOffset, -Dot(v, g_ref.fwdH) }; }
+static inline fc2vr::tracking::ReferenceFrame TrackingReference() {
+    return { g_ref.pos, g_ref.rightH, g_ref.fwdH, g_cfg.heightOffset };
+}
+static inline V3 ToRefPosition(V3 p) { return TrackingReference().Position(p); }
+static inline V3 ToRefDirection(V3 v) { return TrackingReference().Direction(v); }
 
 struct GameBasis { V3 R, U, F, P; };
 // Yaw-only basis from the game's camera: the mouse still turns the body; the headset adds look.
@@ -449,11 +453,11 @@ static void GripsGame(const GameBasis& gb, float s, float out[2][6]) {   // the 
         const xr::HandState& h = xr::Hand(i);
         for (int k = 0; k < 6; ++k) out[i][k] = NAN;
         if (!h.gripValid) continue;
-        V3 p = gb.P + ToGame(gb, ToRef(ToV3(h.grip.position) - g_ref.pos)) * s;
+        V3 p = gb.P + ToGame(gb, ToRefPosition(ToV3(h.grip.position))) * s;
         out[i][0] = p.x; out[i][1] = p.y; out[i][2] = p.z;
         if (!h.aimValid) continue;
         V3 tp = ToV3(h.grip.position) + QRot(h.aim.orientation, { 0, 0, -1 }) * 0.4f;
-        V3 t = gb.P + ToGame(gb, ToRef(tp - g_ref.pos)) * s;
+        V3 t = gb.P + ToGame(gb, ToRefPosition(tp)) * s;
         out[i][3] = t.x; out[i][4] = t.y; out[i][5] = t.z;
     }
 }
@@ -2307,28 +2311,27 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const GameBas
         const float* Wr = &F<float>(rc, cam::World);
         put(af.camRows[0], Norm({ Wr[0], Wr[1], Wr[2] })); put(af.camRows[1], Norm({ Wr[4], Wr[5], Wr[6] })); put(af.camRows[2], Norm({ Wr[8], Wr[9], Wr[10] }));
         float cb[3]; if (arms::CamBonePos(cb)) put(af.originOfs, gb.P - V3{ cb[0], cb[1], cb[2] }); else put(af.originOfs, { 0, 0, 0 });
-        auto refDir = [](V3 v) { return V3{ Dot(v, g_ref.rightH), v.y, -Dot(v, g_ref.fwdH) }; };
         if (af.handValid) {
-            put(af.aimO, ToRef(ToV3(rh.aim.position) - g_ref.pos) * s);
-            put(af.aimR, refDir(QRot(rh.aim.orientation, { 1, 0, 0 })));
-            put(af.aimU, refDir(QRot(rh.aim.orientation, { 0, 1, 0 })));
-            put(af.aimB, refDir(QRot(rh.aim.orientation, { 0, 0, 1 })));
-            put(af.gripO, ToRef(ToV3(rh.grip.position) - g_ref.pos) * s);
+            put(af.aimO, ToRefPosition(ToV3(rh.aim.position)) * s);
+            put(af.aimR, ToRefDirection(QRot(rh.aim.orientation, { 1, 0, 0 })));
+            put(af.aimU, ToRefDirection(QRot(rh.aim.orientation, { 0, 1, 0 })));
+            put(af.aimB, ToRefDirection(QRot(rh.aim.orientation, { 0, 0, 1 })));
+            put(af.gripO, ToRefPosition(ToV3(rh.grip.position)) * s);
         }
         const xr::HandState& lh = xr::Hand(0);
         af.leftValid = lh.aimValid && lh.gripValid;
         af.lSqueeze = lh.squeeze; af.rSqueeze = rh.squeeze; af.machete = controls::MacheteSelected(); af.map = controls::MapOpen();
         if (af.leftValid) {
-            put(af.laimO, ToRef(ToV3(lh.aim.position) - g_ref.pos) * s);
-            put(af.laimR, refDir(QRot(lh.aim.orientation, { 1, 0, 0 })));
-            put(af.laimU, refDir(QRot(lh.aim.orientation, { 0, 1, 0 })));
-            put(af.laimB, refDir(QRot(lh.aim.orientation, { 0, 0, 1 })));
-            put(af.lgripO, ToRef(ToV3(lh.grip.position) - g_ref.pos) * s);
+            put(af.laimO, ToRefPosition(ToV3(lh.aim.position)) * s);
+            put(af.laimR, ToRefDirection(QRot(lh.aim.orientation, { 1, 0, 0 })));
+            put(af.laimU, ToRefDirection(QRot(lh.aim.orientation, { 0, 1, 0 })));
+            put(af.laimB, ToRefDirection(QRot(lh.aim.orientation, { 0, 0, 1 })));
+            put(af.lgripO, ToRefPosition(ToV3(lh.grip.position)) * s);
         }
         {   // head (midpoint of the eyes)
             const XrPosef& hv = fv.views[0].pose;
             V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
-            put(af.headO, ToRef(mid - g_ref.pos) * s); put(af.headF, refDir(QRot(hv.orientation, { 0, 0, -1 }))); af.headValid = true;
+            put(af.headO, ToRefPosition(mid) * s); put(af.headF, ToRefDirection(QRot(hv.orientation, { 0, 0, -1 }))); af.headValid = true;
         }
         // F2 (then 3 s) with the machete in hand: the right controller's tilt (up from level) and turn (inward from where the head
         // faces) at this moment is added to MacheteAngle / MacheteYaw and saved, so the pose you hold becomes the default
@@ -2339,7 +2342,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const GameBas
         if (g_macheteCalAt > 0 && NowMs() >= g_macheteCalAt) {
             g_macheteCalAt = 0;
             if (af.machete && af.handValid) {
-                V3 d = refDir(QRot(rh.aim.orientation, { 0, 0, -1 })), h = refDir(QRot(fv.views[0].pose.orientation, { 0, 0, -1 }));
+                V3 d = ToRefDirection(QRot(rh.aim.orientation, { 0, 0, -1 })), h = ToRefDirection(QRot(fv.views[0].pose.orientation, { 0, 0, -1 }));
                 float pitch = asinf(fmaxf(-1.0f, fminf(1.0f, d.y / fmaxf(1e-4f, sqrtf(d.x * d.x + d.y * d.y + d.z * d.z))))) * 57.29578f;
                 float yaw = atan2f(h.z * d.x - h.x * d.z, h.x * d.x + h.z * d.z) * 57.29578f;   // + = turned left (inward for the right hand)
                 float a0, y0, r0; arms::GetMachete(a0, y0, r0);
@@ -2516,10 +2519,10 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             const XrPosef& h0 = fv.views[0].pose;
             V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
             V3 f = QRot(h0.orientation, { 0, 0, -1 }), u = QRot(h0.orientation, { 0, 1, 0 });
-            V3 o = ToRef(mid + f * g_cfg.flashForward - g_ref.pos) * g_cfg.worldScale;
+            V3 o = ToRefPosition(mid + f * g_cfg.flashForward) * g_cfg.worldScale;
             V3 p = gb.P + ToGame(gb, o);
-            V3 d = Norm(ToGame(gb, V3{ Dot(f, g_ref.rightH), f.y, -Dot(f, g_ref.fwdH) }));
-            V3 up = Norm(ToGame(gb, V3{ Dot(u, g_ref.rightH), u.y, -Dot(u, g_ref.fwdH) }));
+            V3 d = Norm(ToGame(gb, ToRefDirection(f)));
+            V3 up = Norm(ToGame(gb, ToRefDirection(u)));
             float p3[3] = { p.x, p.y, p.z }, d3[3] = { d.x, d.y, d.z }, u3[3] = { up.x, up.y, up.z };
             arms::SetHeadWorld(p3, d3, u3);
         }
@@ -2536,8 +2539,8 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             const XrPosef& h0 = fv.views[0].pose;
             V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
             V3 f = QRot(h0.orientation, { 0, 0, -1 });
-            V3 o = ToRef(mid + f * g_cfg.monoForward - g_ref.pos) * g_cfg.worldScale;   // v215: from in front of the hand holding it
-            V3 d{ Dot(f, g_ref.rightH), f.y, -Dot(f, g_ref.fwdH) };
+            V3 o = ToRefPosition(mid + f * g_cfg.monoForward) * g_cfg.worldScale;   // v215: from in front of the hand holding it
+            V3 d = ToRefDirection(f);
             ro[0] = o.x; ro[1] = o.y; ro[2] = o.z; rd[0] = d.x; rd[1] = d.y; rd[2] = d.z; monoRay = true;
         }
         if (monoRay || (g_cfg.scopeFromWeapon && controls::Active() && arms::SightRay(ro, rd))) {
@@ -2590,9 +2593,9 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         {
             const XrPosef& h = fv.views[0].pose;
             V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
-            V3 pos = gb.P + ToGame(gb, ToRef(mid - g_ref.pos)) * s;
-            V3 dir = ToGame(gb, ToRef(QRot(h.orientation, { 0, 0, -1 })));
-            V3 up  = ToGame(gb, ToRef(QRot(h.orientation, { 0, 1, 0 })));
+            V3 pos = gb.P + ToGame(gb, ToRefPosition(mid)) * s;
+            V3 dir = ToGame(gb, ToRefDirection(QRot(h.orientation, { 0, 0, -1 })));
+            V3 up  = ToGame(gb, ToRefDirection(QRot(h.orientation, { 0, 1, 0 })));
             g_reflWide = false;
             if (g_cullMode != 2) {
                 g_reflFov = 2.0f * atanf(th); g_reflAsp = th / tv; g_reflWide = (g_cullMode == 1 || g_cullMode == 3);
@@ -2684,9 +2687,9 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         for (int e = 0; e < 2; ++e) {
             double tE0 = NowMs();
             const XrView& v = fv.views[e];
-            V3 pos = gb.P + ToGame(gb, ToRef(ToV3(v.pose.position) - g_ref.pos)) * s;
-            V3 dir = ToGame(gb, ToRef(QRot(v.pose.orientation, { 0, 0, -1 })));
-            V3 up  = ToGame(gb, ToRef(QRot(v.pose.orientation, { 0, 1, 0 })));
+            V3 pos = gb.P + ToGame(gb, ToRefPosition(ToV3(v.pose.position))) * s;
+            V3 dir = ToGame(gb, ToRefDirection(QRot(v.pose.orientation, { 0, 0, -1 })));
+            V3 up  = ToGame(gb, ToRefDirection(QRot(v.pose.orientation, { 0, 1, 0 })));
             PoseCamera(rc, pos, dir, up, rtan[e][0], rtan[e][1], rtan[e][2], rtan[e][3], true);
             double vpCur[16]; bool havePrev = false;
             { const float* VP = &F<float>(rc, cam::ViewProj); for (int i = 0; i < 16; ++i) vpCur[i] = VP[i]; }
@@ -3399,12 +3402,13 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(inst);
         GetModuleFileNameA(inst, g_dir, MAX_PATH);
+        char modulePath[MAX_PATH]; memcpy(modulePath, g_dir, sizeof(modulePath)); modulePath[MAX_PATH - 1] = 0;
         char* s = strrchr(g_dir, '\\'); if (s) s[1] = 0;
         InitializeCriticalSection(&g_logCs);
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (build " __DATE__ " " __TIME__ ")");
+        LOG("FC2VR loaded (contribution height-direction-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
@@ -3421,6 +3425,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         { LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_qpcToMs = 1000.0 / (double)f.QuadPart; }
         { char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); diag::Startup(ip); }   // v230
         LoadConfig(); g_cullMode = g_cfg.cullMode; g_fovMode = g_cfg.symmetricFov ? ((g_cfg.overscanH > 0 || g_cfg.overscanV > 0) ? 2 : 1) : 0;
+        LOG("tracking frame height-direction-1: HeightOffset=%.4f (positions only; directions untranslated)", g_cfg.heightOffset);
         // Windows display scaling makes this DPI-unaware game see a small virtual desktop. Its 1920x1080 window
         // then cannot fit, the size check fails every frame and fires the window-resized event each frame, which
         // (among other things) rebuilds all tree render data (~6 ms/frame). Declaring DPI awareness fixes the cause.
