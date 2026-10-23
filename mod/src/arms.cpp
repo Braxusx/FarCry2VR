@@ -49,10 +49,14 @@ static void XformPt(const M4& m, const float* p, float* o) { for (int k = 0; k <
 static void XformDir(const M4& m, const float* p, float* o) { for (int k = 0; k < 3; ++k) o[k] = p[0] * m.m[0][k] + p[1] * m.m[1][k] + p[2] * m.m[2][k]; }
 static void Normalize(float* v) { float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (l > 1e-8f) { v[0] /= l; v[1] /= l; v[2] /= l; } }
 static float Dot3(const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+static float Dot3(const float* a, fc2vr::tracking::Vec3 b) { return a[0]*b.x + a[1]*b.y + a[2]*b.z; }
+static fc2vr::tracking::Vec3 Read3(const float* a) { return {a[0],a[1],a[2]}; }
+static void Put3(float* out, fc2vr::tracking::Vec3 v) { out[0] = v.x; out[1] = v.y; out[2] = v.z; }
 
 // ---------------------------------------------------------------- shared state
 static CRITICAL_SECTION g_cs; static bool g_csInit = false;
 static Frame g_frame;                               // latest from the render thread
+static FrameUsage g_frameUsage;
 static volatile uint8_t* g_playerSkel = nullptr;    // player's skeleton object (bone array +0x20, count +0x2C)
 static volatile uint8_t* g_playerGfx = nullptr;     // its graphic component (world matrix at +0x170)
 static int g_slot[21];                              // bone-helper slot -> bone index (Camera 0, R Hand 12, R Clavicle 15, L Clavicle 19)
@@ -81,6 +85,11 @@ static_assert(sizeof(Bone) == 0xA0, "bone stride");
 
 static void Lock() { EnterCriticalSection(&g_cs); }
 static void Unlock() { LeaveCriticalSection(&g_cs); }
+
+bool ReadFrameUsage(FrameUsage& out) {
+    if (!g_csInit) return false;
+    Lock(); out = g_frameUsage; Unlock(); return true;
+}
 
 void SubmitFrame(const Frame& f) {
     if (!g_csInit) return;
@@ -704,14 +713,13 @@ static void Apply(uint8_t* skel) {
         cb[k] = -cf[k]; co[k] = camW.m[3][k];
     }
     Normalize(cr); Normalize(cu); Normalize(cb); Normalize(cf);
-    // controller frames in world: the reference (tracking) frame sits at the game camera, yaw-only
-    float org[3]; for (int k = 0; k < 3; ++k) org[k] = co[k] + f.originOfs[k];
+    // Published effective origin/basis, not the current animated Camera bone.
+    // camW still owns animation mapping/calibration, never the tracking origin.
     auto toWorld = [&](const float* ref, float* out, bool point) {
-        for (int k = 0; k < 3; ++k) out[k] = f.gbR[k] * ref[0] + f.gbU[k] * ref[1] - f.gbF[k] * ref[2] + (point ? org[k] : 0.0f);
+        Put3(out, point ? f.game.Position(Read3(ref)) : f.game.Direction(Read3(ref)));
     };
     auto toRef = [&](const float* w, float* out) {
-        float d[3] = { w[0] - org[0], w[1] - org[1], w[2] - org[2] };
-        out[0] = Dot3(d, f.gbR); out[1] = Dot3(d, f.gbU); out[2] = -Dot3(d, f.gbF);
+        Put3(out, f.game.ReferencePosition(Read3(w)));
     };
     float ar[3], au[3], ab[3], ao[3], grip[3];
     toWorld(f.aimR, ar, false); toWorld(f.aimU, au, false); toWorld(f.aimB, ab, false); toWorld(f.aimO, ao, true); toWorld(f.gripO, grip, true);
@@ -967,19 +975,19 @@ static void Apply(uint8_t* skel) {
           }
       }
       Normalize(sf);
-      float sr[3], sfr[3] = { Dot3(sf, f.gbR), Dot3(sf, f.gbU), -Dot3(sf, f.gbF) }; toRef(so, sr);
-      float cro[3], crd[3] = { Dot3(cf, f.gbR), Dot3(cf, f.gbU), -Dot3(cf, f.gbF) }; toRef(co, cro);   // the game camera's own line (turrets aim along it)
+      float sr[3], sfr[3]; Put3(sfr, f.game.ReferenceDirection(Read3(sf))); toRef(so, sr);
+      float cro[3], crd[3]; Put3(crd, f.game.ReferenceDirection(Read3(cf))); toRef(co, cro);   // raw native camera line: turrets still aim along it
       Lock(); memcpy(g_shotO, so, 12); memcpy(g_shotF, sf, 12); memcpy(g_camFwdNow, cf, 12); g_shotValid = true; memcpy(g_rayRefO, sr, 12); memcpy(g_rayRefD, sfr, 12);
       memcpy(g_camRefO, cro, 12); memcpy(g_camRefD, crd, 12); g_rayTick = GetTickCount(); Unlock(); }
     // rigid re-pose of both arm chains
     for (int i = 0; i < n && i < 512; ++i) if (g_armMask[i]) Bw[i] = Mul(Bw[i], Map);
     // ---- IK: shoulders from the head, elbows solved, hands on their targets
     if (g_c.ik && f.headValid) {
-        float hp[3], hf[3], hr[3], up[3] = { f.gbU[0], f.gbU[1], f.gbU[2] };
+        float hp[3], hf[3], hr[3], up[3] = { f.game.U.x, f.game.U.y, f.game.U.z };
         toWorld(f.headO, hp, true); toWorld(f.headF, hf, false);
         float d = Dot3(hf, up); for (int k = 0; k < 3; ++k) hf[k] -= up[k] * d; Normalize(hf);
         hr[0] = hf[1] * up[2] - hf[2] * up[1]; hr[1] = hf[2] * up[0] - hf[0] * up[2]; hr[2] = hf[0] * up[1] - hf[1] * up[0]; Normalize(hr);
-        if (Dot3(hr, f.gbR) < 0) for (int k = 0; k < 3; ++k) hr[k] = -hr[k];
+        if (Dot3(hr, f.game.R) < 0) for (int k = 0; k < 3; ++k) hr[k] = -hr[k];
         for (int side = 0; side < 2; ++side) {
             int clav = g_slot[side ? 15 : 19], upa = g_slot[side ? 14 : 18], fore = g_slot[side ? 13 : 17], hand = g_slot[side ? 12 : 20];
             if (clav < 0 || upa < 0 || fore < 0 || hand < 0 || clav >= n || upa >= n || fore >= n || hand >= n) continue;
@@ -1244,6 +1252,8 @@ static void Apply(uint8_t* skel) {
         dst[3] = w3[0]; dst[7] = w3[1]; dst[11] = w3[2]; dst[15] = w3[3];
     }
     InterlockedIncrement(&g_applied);
+    Lock(); g_frameUsage.haveApplied = true; g_frameUsage.appliedSequence = f.frameSequence;
+    ++g_frameUsage.appliedCalls; g_frameUsage.appliedThread = GetCurrentThreadId(); Unlock();
 }
 
 // ---------------------------------------------------------------- hand interactions (game thread)
@@ -1788,7 +1798,7 @@ static void ClimbUpdate(uint8_t* playerEnt, const Frame& f, float dt) {
     if (g_climbMode < 0) g_climbMode = g_c.climbMode;
     HolsterKeepAway();
     g_climbGrace = g_c.climbGrace;
-    auto refDirToWorld = [&](const float* r, float* o) { for (int k = 0; k < 3; ++k) o[k] = f.gbR[k] * r[0] + f.gbU[k] * r[1] - f.gbF[k] * r[2]; };
+    auto refDirToWorld = [&](const float* r, float* o) { Put3(o, f.game.Direction(Read3(r))); };
     int act = -1;
     for (int i = 0; i < 2; ++i) if (g_climb[i].on && (act < 0 || g_climb[i].gen > g_climb[act].gen)) act = i;
     uint8_t* c = PlayerCharComp(playerEnt);
@@ -2166,7 +2176,7 @@ static void ThrowArcUpdate(const Frame& f, uint8_t* pd, TW toWorld, TR toRef) {
             if (i % 2 == 0 || i == 100) memcpy(pts[n++], p, 12);
         }
         float ref[64][3]; for (int i = 0; i < n; ++i) toRef(pts[i], ref[i]);
-        float nr[3] = { Dot3(nrm, f.gbR), Dot3(nrm, f.gbU), -Dot3(nrm, f.gbF) };
+        float nr[3]; Put3(nr, f.game.ReferenceDirection(Read3(nrm)));
         Lock(); memcpy(g_arcRef, ref, sizeof(float) * 3 * n); g_arcN = n; g_arcLand = land; memcpy(g_arcNrmRef, nr, 12); g_arcOk = throwable != nullptr; Unlock();
         static int lg = 0; if (lg < 3 && land) { ++lg; LOG("throw: arc lands %.1f m away (%d points, speed %.1f)", Dist(pts[n - 1], o), n, speed); }
     } else { Lock(); g_arcN = 0; Unlock(); }
@@ -2327,10 +2337,10 @@ static void MacheteSwing(const Frame& f, uint8_t* playerEnt, TW toWorld, void* w
 static void HandInteract(uint8_t* pawn, uint8_t* pd) {
     if (!g_c.handGrab) return;
     Frame f; Lock(); f = g_frame; Unlock();
-    float co[3]; Lock(); memcpy(co, g_camBonePos, 12); Unlock();
     if (!f.valid || g_camBoneSeq == 0) return;
-    float org[3]; for (int k = 0; k < 3; ++k) org[k] = co[k] + f.originOfs[k];
-    auto toWorld = [&](const float* ref, float* o, bool point) { for (int k = 0; k < 3; ++k) o[k] = f.gbR[k] * ref[0] + f.gbU[k] * ref[1] - f.gbF[k] * ref[2] + (point ? org[k] : 0.0f); };
+    Lock(); g_frameUsage.haveInteraction = true; g_frameUsage.interactionSequence = f.frameSequence;
+    ++g_frameUsage.interactionCalls; g_frameUsage.interactionThread = GetCurrentThreadId(); Unlock();
+    auto toWorld = [&](const float* ref, float* o, bool point) { Put3(o, point ? f.game.Position(Read3(ref)) : f.game.Direction(Read3(ref))); };
     Handle* player = *(Handle**)(pawn + 8);
     g_pawn = pawn;
     uint8_t* playerEnt = player ? player->ent : nullptr;
@@ -2429,7 +2439,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
         }
         controls::SetHandsAway((g_userHolster && !g_climbWas) || (foreignLock && controls::NormalControls()));
     }
-    { auto toRef = [&](const float* w, float* out) { float d[3] = { w[0] - org[0], w[1] - org[1], w[2] - org[2] }; out[0] = Dot3(d, f.gbR); out[1] = Dot3(d, f.gbU); out[2] = -Dot3(d, f.gbF); };
+    { auto toRef = [&](const float* w, float* out) { Put3(out, f.game.ReferencePosition(Read3(w))); };
       ThrowArcUpdate(f, pd, toWorld, toRef); }
     { float o[3], d[3], p[3], t; if (AimPoint(o, d, p, &t)) { g_aimDist = t; g_aimTick = GetTickCount(); } }   // the aiming dot sits on what the weapon points at
     if (controls::VehicleMode() != 0) {   // in a vehicle: no grabbing, climbing or snap turns (the grips are vehicle controls)
@@ -2572,7 +2582,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
                         float half = fminf(0.5f, H.rg.radius * 0.7f), keep = g_c.bodyRadius + half;
                         float dx = m.m[3][0] - hw[0], dy = m.m[3][1] - hw[1], hd = sqrtf(dx * dx + dy * dy);
                         if (m.m[3][2] < hw[2] + 0.2f && hd < keep) {
-                            if (hd < 1e-3f) { dx = f.gbF[0]; dy = f.gbF[1]; hd = sqrtf(dx * dx + dy * dy); if (hd < 1e-3f) { dx = 1; dy = 0; hd = 1; } }
+                            if (hd < 1e-3f) { dx = f.game.F.x; dy = f.game.F.y; hd = sqrtf(dx * dx + dy * dy); if (hd < 1e-3f) { dx = 1; dy = 0; hd = 1; } }
                             m.m[3][0] = hw[0] + dx / hd * keep; m.m[3][1] = hw[1] + dy / hd * keep;
                         }
                         float cx = cur.m[3][0] - hw[0], cy = cur.m[3][1] - hw[1]; bodyGap = sqrtf(cx * cx + cy * cy) - keep;

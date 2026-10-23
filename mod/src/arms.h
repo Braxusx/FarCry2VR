@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <cstdint>
 #include <cstddef>
+#include "common/pose_frame.h"
 
 namespace arms {
 struct Config {
@@ -89,12 +90,12 @@ struct Config {
     float twoHandMaxSpan = 0.65f; // the animation's hands further apart than this = one-handed weapon (pistol)
 };
 // Per-frame data from the render thread. "ref" = the recentred tracking frame (x right, y up, -z forward),
-// scaled to game units; it sits at the game camera, turned by the game's yaw (gbR/gbU/gbF).
+// scaled to game units; game is the exact effective frame also used by the eyes.
 struct Frame {
     bool valid = false, handValid = false;
-    float gbR[3], gbU[3], gbF[3];
-    float camRows[3][3];          // game camera rows: right, forward, up (incl. pitch)
-    float originOfs[3];           // game camera position minus the Camera bone position
+    fc2vr::tracking::GameBasis game{};
+    uint64_t frameSequence = 0;   // diagnostic application-frame stamp, not a freshness lease
+    float camRows[3][3];          // RAW native camera rows (incl. pitch): bone-axis calibration only
     float aimO[3], aimR[3], aimU[3], aimB[3];   // right controller aim pose (ref)
     float gripO[3];               // right controller grip position (ref)
     bool leftValid = false, twoHand = false, headValid = false;
@@ -108,6 +109,13 @@ void Install(uintptr_t base, const Config& c, PatchFn patch);
 void SetWeaponKey(uint32_t k);     // current weapon type id (HUD reticle element name), 0 = unknown
 void SetIniPath(const char* p);    // fc2vr.ini: saved weapon holds [Holds]
 void SubmitFrame(const Frame& f);
+// Observation only: these stamps do not grant freshness or pose authority.
+struct FrameUsage {
+    bool haveApplied = false, haveInteraction = false;
+    uint64_t appliedSequence = 0, interactionSequence = 0;
+    uint32_t appliedCalls = 0, interactionCalls = 0, appliedThread = 0, interactionThread = 0;
+};
+bool ReadFrameUsage(FrameUsage& out);
 bool CamBonePos(float out[3]);
 void SetMonoCams(const float game[16], const float posed[16]);
 bool MonoTarget();

@@ -1,9 +1,33 @@
-# Contributor checkpoint — height/direction separation
+# Contributor status — tracking frame fixes
 
 Date: 2026-10-23. Branch: `codex/tracking-arms-physical-steering`.
 Base: `92a29c5b1e28a652d067262aacc59b421ed044c1` (upstream 1.0.1).
 
-## Implemented
+## Latest checkpoint: shared-camera-1
+
+R1's shared-frame implementation is built and verified offline. One immutable
+effective camera basis/origin, recenter snapshot and scale now feed eyes/culling,
+arm/weapon targets, interactions, flashlight, scope and layer conversions. Raw
+camera rows remain separate for animation-axis calibration and native aiming.
+Later animated Camera-bone movement no longer reconstructs the published origin.
+Native flat fallback retains a raw frame for both its view and hands.
+
+Twelve CTest groups pass with MSVC x86: 30,748 numeric checks plus source-wiring
+guards. All eleven numeric groups also pass with GCC x86. The unchanged original
+SteadyCam function is retained as a test-only oracle and matches the extracted
+policy over 1,000 samples. The x86 GCC DLL builds with no added warnings.
+
+**Not runtime accepted:** skeleton-hook scheduling may consume an older published
+sample. New `pose use` sequence/thread/call counters expose that boundary; they do
+not fix or certify freshness. Do not accept this absolute-origin change until a
+game run checks frame consumption and walking/head-only motion. Details, artifact
+identity, acceptance and rollback: [shared camera checkpoint](SHARED_CAMERA_FRAME_2026-10-23.md).
+
+No game launch, deployment, packaging, remote push or PR. PR 0/1 are still not
+complete; R2 twist, R3 support gripping, R4/R9 authority/image gates and steering
+remain separate work. The documented llvm-mingw route remains unverified.
+
+## Prior checkpoint: height-direction-1 (`a41b3b9`)
 
 R5: the former `ToRef` helper added `HeightOffset` to eye and culling direction
 vectors. At an offset of 0.2, even a level forward vector became `{0,0.2,-1}`:
@@ -73,11 +97,9 @@ pitch/roll, asymmetric eye views, scope, flashlight and monocular. Preserve and
 restore the user's settings, verify the module stamp, and close the owned game
 instance after testing. Passing offline math does not establish visual acceptance.
 
-The next implementation slice is R1's shared effective camera frame, so steadied
-eyes and tracked hands use the same camera basis/origin. R2 wrist/arm twist,
+R1 followed this checkpoint; see the current status above. R2 wrist/arm twist,
 pose authority, support gripping, vehicle steering and optional DQS remain open.
-The full PR 0 and PR 1 gates in the implementation plan are not yet complete.
 
-This is one focused fix commit after the plan checkpoint. Roll back that commit
+R5 is one focused fix commit after the plan checkpoint. Roll back that commit
 as a whole if needed; no migration, runtime settings or deployed files need undoing.
 No GitHub push, PR, packaging or release has been performed.

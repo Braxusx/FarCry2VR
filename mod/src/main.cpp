@@ -27,7 +27,7 @@
 #include "dlss_fc2.h"
 namespace sounddiag { void Tick(); }
 #include "afw_fc2.h"
-#include "common/tracking_frame.h"
+#include "common/pose_frame.h"
 
 // ============================================================ logging
 static CRITICAL_SECTION g_logCs;
@@ -386,10 +386,8 @@ static void UpdateHeightRef(float headY, double nowMs) {
 static inline fc2vr::tracking::ReferenceFrame TrackingReference() {
     return { g_ref.pos, g_ref.rightH, g_ref.fwdH, g_cfg.heightOffset };
 }
-static inline V3 ToRefPosition(V3 p) { return TrackingReference().Position(p); }
-static inline V3 ToRefDirection(V3 v) { return TrackingReference().Direction(v); }
-
-struct GameBasis { V3 R, U, F, P; };
+using GameBasis = fc2vr::tracking::GameBasis;
+using PoseFrame = fc2vr::tracking::PoseFrame;
 // Yaw-only basis from the game's camera: the mouse still turns the body; the headset adds look.
 static GameBasis BasisFromGameCam(uint8_t* c) {
     const float* W = &F<float>(c, cam::World);         // rows: right, forward, up, position
@@ -401,63 +399,35 @@ static GameBasis BasisFromGameCam(uint8_t* c) {
     b.P = GetV3(c, cam::Pos);
     return b;
 }
-// v209 SteadyCamera: the game bobs and sways its camera while running / sprinting. In VR the view is built on that camera,
-// so the world swung around the player. The heading is taken from the player's own (stick- and snap-turned) heading,
-// and the camera's sideways / vertical offset from the player is smoothed; forward motion and turning pass straight
-// through. Not in vehicles, on mounted guns or under the game's special controls (cut scenes, ladders...).
+// Existing SteadyCamera policy: smooth native lateral/vertical camera bob and
+// sprint yaw sway at stick rest; follow forward motion and deliberate turns.
+// Bypass in vehicles, mounted guns and special controls. Prepare once, then share.
 static inline double NowMs();
-static void SteadyCam(GameBasis& b) {
-    static bool have = false;
-    static V3 smLat{}, lastOff{}; static float smZ = 0; static double last = 0;
-    double now = NowMs(); float dt = last > 0 ? (float)((now - last) * 0.001) : 0.0f; last = now;
-    float pos[3], hd;
-    bool ok = g_cfg.steadyCam && controls::NormalControls() && controls::VehicleMode() == 0 && !controls::MountedWeapon() && arms::PlayerState(pos, &hd) && dt > 0 && dt < 0.25f;
-    if (!ok) { have = false; return; }
-    V3 off = b.P - V3{ pos[0], pos[1], pos[2] };
-    bool reset = !have || Dot(off - lastOff, off - lastOff) > 0.25f;
-    lastOff = off;
-    {   // v211: the sideways sway while running - the game swings its camera's yaw left and right. While moving at running
-        // speed with the turning stick at rest, that yaw is smoothed; any stick turn, snap turn, slow walk or a change of
-        // more than 10 deg is followed exactly (no lag in turning).
-        static float fy = 0; static V3 lastPos{}; static float spd = 0;
-        V3 p{ pos[0], pos[1], pos[2] };
-        V3 dp = p - lastPos; dp.z = 0; lastPos = p;
-        float v = sqrtf(Dot(dp, dp)) / dt; if (reset || v > 30.0f) v = 0;
-        spd += (v - spd) * (1.0f - expf(-dt / 0.3f));
-        auto wrap = [](float a) { while (a > 3.14159265f) a -= 6.2831853f; while (a < -3.14159265f) a += 6.2831853f; return a; };
-        float camYaw = atan2f(b.F.y, b.F.x);
-        float d = wrap(camYaw - fy);
-        bool turning = fabsf(xr::Hand(1).stick.x) > 0.15f;
-        if (reset || turning || spd < 2.0f || fabsf(d) > 0.17f) fy = camYaw;
-        else {
-            fy = wrap(fy + d * (1.0f - expf(-dt / 0.35f)));
-            b.F = { cosf(fy), sinf(fy), 0 }; b.R = { b.F.y, -b.F.x, 0 };
-        }
-    }
-    // (v210: the heading part is gone - the game's heading sign was learned wrongly from a jump after loading, and the
-    //  view turned on its own while walking. The view's direction is the game camera's again; only the bob is smoothed.)
-    // the position: forward part as is, sideways and vertical smoothed (bob ~2 Hz); big height changes (crouch) followed faster
-    V3 fwd = b.F * Dot(off, b.F);
-    V3 lat = off - fwd; lat.z = 0;
-    if (reset) { smLat = lat; smZ = off.z; have = true; }
-    float kl = 1.0f - expf(-dt / 0.30f);
-    smLat = smLat + (lat - smLat) * kl; smLat.z = 0;
-    float dz = off.z - smZ, kz = 1.0f - expf(-dt / (fabsf(dz) > 0.12f ? 0.08f : 0.30f));
-    smZ += dz * kz;
-    V3 fh = fwd; fh.z = 0;
-    b.P = V3{ pos[0], pos[1], pos[2] } + fh + smLat + V3{ 0, 0, smZ };
+static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize) {
+    static fc2vr::tracking::PoseFrameBuilder builder;
+    fc2vr::tracking::SteadyInput input;
+    input.nowMs = NowMs();
+    float pos[3]{}, heading = 0;
+    input.eligible = stabilize && g_cfg.steadyCam && controls::NormalControls() && controls::VehicleMode() == 0
+        && !controls::MountedWeapon() && arms::PlayerState(pos, &heading);
+    input.playerPosition = {pos[0],pos[1],pos[2]};
+    input.turning = fabsf(xr::Hand(1).stick.x) > 0.15f;
+    const PoseFrame frame = builder.Build(sequence, BasisFromGameCam(rc), TrackingReference(), g_cfg.worldScale, input);
+    if (sequence % 900 == 0) LOG("pose frame shared-camera-1 seq=%llu steadyEligible=%d rawP=%.3f,%.3f,%.3f effectiveP=%.3f,%.3f,%.3f rawF=%.4f,%.4f effectiveF=%.4f,%.4f",
+        (unsigned long long)frame.sequence, input.eligible, frame.raw.P.x, frame.raw.P.y, frame.raw.P.z,
+        frame.game.P.x, frame.game.P.y, frame.game.P.z, frame.raw.F.x, frame.raw.F.y, frame.game.F.x, frame.game.F.y);
+    return frame;
 }
-static inline V3 ToGame(const GameBasis& b, V3 r) { return b.R * r.x + b.U * r.y + b.F * (-r.z); }
-static void GripsGame(const GameBasis& gb, float s, float out[2][6]) {   // the controllers' grips and a point 0.4 m ahead of each, game space (AFW hands)
+static void GripsGame(const PoseFrame& frame, float out[2][6]) {   // the controllers' grips and a point 0.4 m ahead of each, game space (AFW hands)
     for (int i = 0; i < 2; ++i) {
         const xr::HandState& h = xr::Hand(i);
         for (int k = 0; k < 6; ++k) out[i][k] = NAN;
         if (!h.gripValid) continue;
-        V3 p = gb.P + ToGame(gb, ToRefPosition(ToV3(h.grip.position))) * s;
+        V3 p = frame.WorldPosition(ToV3(h.grip.position));
         out[i][0] = p.x; out[i][1] = p.y; out[i][2] = p.z;
         if (!h.aimValid) continue;
         V3 tp = ToV3(h.grip.position) + QRot(h.aim.orientation, { 0, 0, -1 }) * 0.4f;
-        V3 t = gb.P + ToGame(gb, ToRefPosition(tp)) * s;
+        V3 t = frame.WorldPosition(tp);
         out[i][3] = t.x; out[i][4] = t.y; out[i][5] = t.z;
     }
 }
@@ -2300,38 +2270,38 @@ static void TurnMenu() {
     }
     prevH = h; prevL = kl; prevR = kr;
 }
-static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const GameBasis& gb, float s) {
+static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFrame& frame) {
+    const float s = frame.worldScale;
     TurnMenu();
     MacheteMenu(fv);
     {   // controller pose for the arms/weapon and shots (game thread reads it)
         arms::Frame af; const xr::HandState& rh = xr::Hand(1);
         af.valid = true; af.handValid = rh.aimValid && rh.gripValid;
         auto put = [](float* d, V3 v) { d[0] = v.x; d[1] = v.y; d[2] = v.z; };
-        put(af.gbR, gb.R); put(af.gbU, gb.U); put(af.gbF, gb.F);
+        af.game = frame.game; af.frameSequence = frame.sequence;
         const float* Wr = &F<float>(rc, cam::World);
         put(af.camRows[0], Norm({ Wr[0], Wr[1], Wr[2] })); put(af.camRows[1], Norm({ Wr[4], Wr[5], Wr[6] })); put(af.camRows[2], Norm({ Wr[8], Wr[9], Wr[10] }));
-        float cb[3]; if (arms::CamBonePos(cb)) put(af.originOfs, gb.P - V3{ cb[0], cb[1], cb[2] }); else put(af.originOfs, { 0, 0, 0 });
         if (af.handValid) {
-            put(af.aimO, ToRefPosition(ToV3(rh.aim.position)) * s);
-            put(af.aimR, ToRefDirection(QRot(rh.aim.orientation, { 1, 0, 0 })));
-            put(af.aimU, ToRefDirection(QRot(rh.aim.orientation, { 0, 1, 0 })));
-            put(af.aimB, ToRefDirection(QRot(rh.aim.orientation, { 0, 0, 1 })));
-            put(af.gripO, ToRefPosition(ToV3(rh.grip.position)) * s);
+            put(af.aimO, frame.ReferencePosition(ToV3(rh.aim.position)));
+            put(af.aimR, frame.ReferenceDirection(QRot(rh.aim.orientation, { 1, 0, 0 })));
+            put(af.aimU, frame.ReferenceDirection(QRot(rh.aim.orientation, { 0, 1, 0 })));
+            put(af.aimB, frame.ReferenceDirection(QRot(rh.aim.orientation, { 0, 0, 1 })));
+            put(af.gripO, frame.ReferencePosition(ToV3(rh.grip.position)));
         }
         const xr::HandState& lh = xr::Hand(0);
         af.leftValid = lh.aimValid && lh.gripValid;
         af.lSqueeze = lh.squeeze; af.rSqueeze = rh.squeeze; af.machete = controls::MacheteSelected(); af.map = controls::MapOpen();
         if (af.leftValid) {
-            put(af.laimO, ToRefPosition(ToV3(lh.aim.position)) * s);
-            put(af.laimR, ToRefDirection(QRot(lh.aim.orientation, { 1, 0, 0 })));
-            put(af.laimU, ToRefDirection(QRot(lh.aim.orientation, { 0, 1, 0 })));
-            put(af.laimB, ToRefDirection(QRot(lh.aim.orientation, { 0, 0, 1 })));
-            put(af.lgripO, ToRefPosition(ToV3(lh.grip.position)) * s);
+            put(af.laimO, frame.ReferencePosition(ToV3(lh.aim.position)));
+            put(af.laimR, frame.ReferenceDirection(QRot(lh.aim.orientation, { 1, 0, 0 })));
+            put(af.laimU, frame.ReferenceDirection(QRot(lh.aim.orientation, { 0, 1, 0 })));
+            put(af.laimB, frame.ReferenceDirection(QRot(lh.aim.orientation, { 0, 0, 1 })));
+            put(af.lgripO, frame.ReferencePosition(ToV3(lh.grip.position)));
         }
         {   // head (midpoint of the eyes)
             const XrPosef& hv = fv.views[0].pose;
             V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
-            put(af.headO, ToRefPosition(mid) * s); put(af.headF, ToRefDirection(QRot(hv.orientation, { 0, 0, -1 }))); af.headValid = true;
+            put(af.headO, frame.ReferencePosition(mid)); put(af.headF, frame.ReferenceDirection(QRot(hv.orientation, { 0, 0, -1 }))); af.headValid = true;
         }
         // F2 (then 3 s) with the machete in hand: the right controller's tilt (up from level) and turn (inward from where the head
         // faces) at this moment is added to MacheteAngle / MacheteYaw and saved, so the pose you hold becomes the default
@@ -2342,7 +2312,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const GameBas
         if (g_macheteCalAt > 0 && NowMs() >= g_macheteCalAt) {
             g_macheteCalAt = 0;
             if (af.machete && af.handValid) {
-                V3 d = ToRefDirection(QRot(rh.aim.orientation, { 0, 0, -1 })), h = ToRefDirection(QRot(fv.views[0].pose.orientation, { 0, 0, -1 }));
+                V3 d = frame.ReferenceDirection(QRot(rh.aim.orientation, { 0, 0, -1 })), h = frame.ReferenceDirection(QRot(fv.views[0].pose.orientation, { 0, 0, -1 }));
                 float pitch = asinf(fmaxf(-1.0f, fminf(1.0f, d.y / fmaxf(1e-4f, sqrtf(d.x * d.x + d.y * d.y + d.z * d.z))))) * 57.29578f;
                 float yaw = atan2f(h.z * d.x - h.x * d.z, h.x * d.x + h.z * d.z) * 57.29578f;   // + = turned left (inward for the right hand)
                 float a0, y0, r0; arms::GetMachete(a0, y0, r0);
@@ -2511,41 +2481,50 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         g_scopePose.orientation = QuatFromBasis(xq, yq, zq);
         V3 p = mid + fwd * g_cfg.scopeDistance; g_scopePose.position = { p.x, p.y, p.z };
     }
-    if (begun && fv.valid && g_ref.valid) {   // arms/weapon/shots follow the controllers on every frame, scoped or not
+    // Snapshot the unposed native camera and recenter state BEFORE publishing arms
+    // or posing scope/cull/eye cameras. Stateful smoothing advances once per frame.
+    const bool poseReady = begun && fv.valid && g_ref.valid;
+    float scopeO[3]{}, scopeD[3]{};
+    const bool monoScope = poseReady && g_scopeOn && controls::MonocularAtFace();
+    const bool weaponScope = poseReady && g_scopeOn && !monoScope && g_cfg.scopeFromWeapon
+        && controls::Active() && arms::SightRay(scopeO, scopeD);
+    const bool renderScope = monoScope || weaponScope;
+    const bool renderStereo = poseReady && !g_scopeOn && fv.shouldRender && g_stereoOn && sizeOk;
+    // A native flat fallback still uses its native camera: keep its hands raw too.
+    const PoseFrame frame = poseReady
+        ? PreparePoseFrame(g_frame, (uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam, renderScope || renderStereo) : PoseFrame{};
+    if (poseReady) {   // arms/weapon/shots follow the controllers on every frame, scoped or not
         uint8_t* rc0 = (uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam;
-        SubmitArmsFrame(fv, rc0, BasisFromGameCam(rc0), g_cfg.worldScale);
+        SubmitArmsFrame(fv, rc0, frame);
         if (controls::FlashlightOn()) {   // v220: the head in game space for the flashlight (placed by the game thread)
-            GameBasis gb = BasisFromGameCam(rc0);
             const XrPosef& h0 = fv.views[0].pose;
             V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
             V3 f = QRot(h0.orientation, { 0, 0, -1 }), u = QRot(h0.orientation, { 0, 1, 0 });
-            V3 o = ToRefPosition(mid + f * g_cfg.flashForward) * g_cfg.worldScale;
-            V3 p = gb.P + ToGame(gb, o);
-            V3 d = Norm(ToGame(gb, ToRefDirection(f)));
-            V3 up = Norm(ToGame(gb, ToRefDirection(u)));
+            V3 p = frame.WorldPosition(mid + f * g_cfg.flashForward);
+            V3 d = Norm(frame.WorldDirection(f));
+            V3 up = Norm(frame.WorldDirection(u));
             float p3[3] = { p.x, p.y, p.z }, d3[3] = { d.x, d.y, d.z }, u3[3] = { up.x, up.y, up.z };
             arms::SetHeadWorld(p3, d3, u3);
         }
     }
-    if (begun && fv.valid && g_scopeOn) {
+    if (poseReady && g_scopeOn) {
         hang::Mark("scope view render");
         // the scope looks along the weapon's sight line (smoothed, like CrysisVR's zoomed weapon)
         uint8_t* view = (uint8_t*)(uintptr_t)(a4 - 4);
         uint8_t* rc = view + vp::RenderCam; uint8_t* cc = view + vp::CullCam;
         CamSave rsave = SaveCam(rc), csave = SaveCam(cc);
-        float ro[3], rd[3]; bool posed = false;
-        bool monoRay = false;
-        if (controls::MonocularAtFace()) {   // v213: through the monocular the view goes where the head looks
+        float* ro = scopeO; float* rd = scopeD; bool posed = false;
+        const bool monoRay = monoScope;
+        if (monoRay) {   // v213: through the monocular the view goes where the head looks
             const XrPosef& h0 = fv.views[0].pose;
             V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
             V3 f = QRot(h0.orientation, { 0, 0, -1 });
-            V3 o = ToRefPosition(mid + f * g_cfg.monoForward) * g_cfg.worldScale;   // v215: from in front of the hand holding it
-            V3 d = ToRefDirection(f);
-            ro[0] = o.x; ro[1] = o.y; ro[2] = o.z; rd[0] = d.x; rd[1] = d.y; rd[2] = d.z; monoRay = true;
+            V3 o = frame.ReferencePosition(mid + f * g_cfg.monoForward);   // v215: from in front of the hand holding it
+            V3 d = frame.ReferenceDirection(f);
+            ro[0] = o.x; ro[1] = o.y; ro[2] = o.z; rd[0] = d.x; rd[1] = d.y; rd[2] = d.z;
         }
-        if (monoRay || (g_cfg.scopeFromWeapon && controls::Active() && arms::SightRay(ro, rd))) {
-            GameBasis gb = BasisFromGameCam(rc);
-            V3 pos = gb.P + ToGame(gb, V3{ ro[0], ro[1], ro[2] }), dir = Norm(ToGame(gb, V3{ rd[0], rd[1], rd[2] }));
+        if (renderScope) {
+            V3 pos = frame.game.Position({ ro[0], ro[1], ro[2] }), dir = Norm(frame.game.Direction({ rd[0], rd[1], rd[2] }));
             static V3 sm{ 0, 0, 0 }; static double tPrev = 0;
             double tNow = NowMs(); float dt = tPrev > 0 ? (float)((tNow - tPrev) * 0.001) : 1.0f; tPrev = tNow;
             float k = (sm.x == 0 && sm.y == 0 && sm.z == 0) || dt > 0.5f ? 1.0f : 1.0f - expf(-dt / fmaxf(0.001f, g_cfg.scopeSmoothing));
@@ -2571,15 +2550,15 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         if (g_capState == 2 && xr::HudTexture()) { SaveTexBmp(xr::HudTexture(), "cap_scopehud.bmp", 4); SaveTexBmp(xr::HudTexture(), "cap_scopehudalpha.bmp", 4); }
         if (posed) { RestoreCam(rc, rsave); RestoreCam(cc, csave); }
         g_scopeFrame = true; g_scopeFv = fv;
-    } else if (begun && fv.valid && fv.shouldRender && g_stereoOn && sizeOk) {
+    } else if (renderStereo) {
         uint8_t* view = (uint8_t*)(uintptr_t)(a4 - 4);           // arg4 = &viewport.x
         uint8_t* rc = view + vp::RenderCam;
         uint8_t* cc = view + vp::CullCam;
-        GameBasis gb = BasisFromGameCam(rc);
-        SteadyCam(gb);
+        const GameBasis& gb = frame.game;
+        const auto& ref = frame.reference;
         V3 aimGame{ F<float>(rc, cam::World + 16), F<float>(rc, cam::World + 20), F<float>(rc, cam::World + 24) };   // forward row, incl. pitch
         CamSave rsave = SaveCam(rc), csave = SaveCam(cc);
-        const float s = g_cfg.worldScale;
+        const float s = frame.worldScale;
         { V3 ag = Norm(aimGame); g_uiAim = gb.P + ag * (g_cfg.uiDepth * s); g_uiAimValid = true; }
         // Culling camera: head pose, symmetric frustum enclosing both eyes plus margin.
         float th = 0, tv = 0;
@@ -2593,9 +2572,9 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         {
             const XrPosef& h = fv.views[0].pose;
             V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
-            V3 pos = gb.P + ToGame(gb, ToRefPosition(mid)) * s;
-            V3 dir = ToGame(gb, ToRefDirection(QRot(h.orientation, { 0, 0, -1 })));
-            V3 up  = ToGame(gb, ToRefDirection(QRot(h.orientation, { 0, 1, 0 })));
+            V3 pos = frame.WorldPosition(mid);
+            V3 dir = frame.WorldDirection(QRot(h.orientation, { 0, 0, -1 }));
+            V3 up  = frame.WorldDirection(QRot(h.orientation, { 0, 1, 0 }));
             g_reflWide = false;
             if (g_cullMode != 2) {
                 g_reflFov = 2.0f * atanf(th); g_reflAsp = th / tv; g_reflWide = (g_cullMode == 1 || g_cullMode == 3);
@@ -2687,9 +2666,9 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         for (int e = 0; e < 2; ++e) {
             double tE0 = NowMs();
             const XrView& v = fv.views[e];
-            V3 pos = gb.P + ToGame(gb, ToRefPosition(ToV3(v.pose.position))) * s;
-            V3 dir = ToGame(gb, ToRefDirection(QRot(v.pose.orientation, { 0, 0, -1 })));
-            V3 up  = ToGame(gb, ToRefDirection(QRot(v.pose.orientation, { 0, 1, 0 })));
+            V3 pos = frame.WorldPosition(ToV3(v.pose.position));
+            V3 dir = frame.WorldDirection(QRot(v.pose.orientation, { 0, 0, -1 }));
+            V3 up  = frame.WorldDirection(QRot(v.pose.orientation, { 0, 1, 0 }));
             PoseCamera(rc, pos, dir, up, rtan[e][0], rtan[e][1], rtan[e][2], rtan[e][3], true);
             double vpCur[16]; bool havePrev = false;
             { const float* VP = &F<float>(rc, cam::ViewProj); for (int i = 0; i < 16; ++i) vpCur[i] = VP[i]; }
@@ -2736,7 +2715,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                     for (int i = 0; i < g_nEyeBinds; ++i) g_eyeBinds[i].t->Release();
                     g_nEyeBinds = 0;
                 }
-                if (afwOn) { float gr[2][6]; GripsGame(gb, s, gr); afw::Store(g_dev10, e, g_eyeTex, g_eyeLinTex, vpCur, F<float>(rc, cam::Near), F<float>(rc, cam::Far), g_frame, gr); }
+                if (afwOn) { float gr[2][6]; GripsGame(frame, gr); afw::Store(g_dev10, e, g_eyeTex, g_eyeLinTex, vpCur, F<float>(rc, cam::Near), F<float>(rc, cam::Far), g_frame, gr); }
                 if (dlssOn) {
                     dlssfc2::PrepareEye10(g_dev10, e, g_eyeDepthTex, vpCur, havePrev ? s_vpPrev[e] : nullptr, g_nearMaxDepth, jx, jy, F<float>(rc, cam::Near), F<float>(rc, cam::Far), rtan[e]);
                     memcpy(s_vpPrev[e], vpCur, sizeof vpCur); s_posPrev[e] = pos; s_prevFrame[e] = g_frame;
@@ -2765,7 +2744,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             double tA = NowMs();
             ID3D10Texture2D* heldColor = nullptr;
             if (dlssOn && dlssfc2::Active()) { xr::WaitEyeCopies(); heldColor = xr::EyeTexture10(e); }   // its last DLSS result
-            float gr[2][6]; GripsGame(gb, s, gr);
+            float gr[2][6]; GripsGame(frame, gr);
             ID3D10Texture2D* t = afw::Rebuild(g_dev10, e, 1 - e, afwTarget[e], heldColor, gr);
             if (t) xr::CopyEye(e, t);   // else the eye keeps its last image
             (e ? g_prof.eye1 : g_prof.eye0) += NowMs() - tA;
@@ -2812,12 +2791,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 float ad = controls::MountedWeapon() ? 0.0f : arms::AimDistance();   // on what the weapon points at (no parallax), else ReticleDistance
                 const float D = ad > 0.0f ? ad : g_cfg.reticleDistance * s;
                 V3 pr{ ro[0] + rd[0] * D, ro[1] + rd[1] * D, ro[2] + rd[2] * D };   // ref frame, game units
-                auto refToLocal = [&](V3 r, bool point) {
-                    V3 v = g_ref.rightH * r.x + V3{ 0, 1, 0 } * (r.y - (point ? g_cfg.heightOffset * s : 0.0f)) + g_ref.fwdH * (-r.z);
-                    v = v * (1.0f / s);
-                    return point ? v + g_ref.pos : v;
-                };
-                V3 p = refToLocal(pr, true);
+                V3 p = frame.LocalPosition(pr);
                 V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
                 V3 zq = Norm(mid - p);                                 // face the viewer
                 V3 xq = Norm(Cross(V3{ 0, 1, 0 }, zq)), yq = Cross(zq, xq);
@@ -2832,11 +2806,10 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             if (n >= 2) {
                 XrVector3f lp[64];
                 for (int i = 0; i < n; ++i) {
-                    V3 v = g_ref.rightH * ap[i][0] + V3{ 0, 1, 0 } * (ap[i][1] - g_cfg.heightOffset * s) + g_ref.fwdH * (-ap[i][2]);
-                    v = v * (1.0f / s); v = v + g_ref.pos;
+                    V3 v = frame.LocalPosition({ ap[i][0], ap[i][1], ap[i][2] });
                     lp[i] = { v.x, v.y, v.z };
                 }
-                V3 nn = g_ref.rightH * an[0] + V3{ 0, 1, 0 } * an[1] + g_ref.fwdH * (-an[2]);
+                V3 nn = frame.LocalDirection({ an[0], an[1], an[2] });
                 xr::SetArc(lp, n, land, XrVector3f{ nn.x, nn.y, nn.z }, aok);
             }
         }
@@ -2845,12 +2818,12 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             const XrFovf& f0 = realFov0;
             V3 ag = Norm(aimGame);
             V3 r{ Dot(ag, gb.R), Dot(ag, gb.U), -Dot(ag, gb.F) };
-            V3 aim = Norm(g_ref.rightH * r.x + V3{ 0, 1, 0 } * r.y + g_ref.fwdH * (-r.z));
+            V3 aim = Norm(frame.LocalDirection(r));
             V3 zq = aim * -1.0f;
             V3 xq = Norm(Cross(V3{ 0, 1, 0 }, zq)), yq = Cross(zq, xq);
             XrPosef rp; rp.orientation = QuatFromBasis(xq, yq, zq);
             float D = g_cfg.uiDepth;
-            rp.position = { g_ref.pos.x + aim.x * D, g_ref.pos.y - g_cfg.heightOffset + aim.y * D, g_ref.pos.z + aim.z * D };
+            rp.position = { ref.origin.x + aim.x * D, ref.origin.y - ref.heightOffset + aim.y * D, ref.origin.z + aim.z * D };
             float frac = 0.3f;
             xr::SetReticleLayer(rp, D * (tanf(f0.angleRight) - tanf(f0.angleLeft)) * g_cfg.uiScale * frac, frac);
         }
@@ -2859,12 +2832,12 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             g_hudFresh = false;
             V3 ag = Norm(aimGame);
             V3 r{ Dot(ag, gb.R), Dot(ag, gb.U), -Dot(ag, gb.F) };                     // game -> reference frame
-            V3 aim = Norm(g_ref.rightH * r.x + V3{ 0, 1, 0 } * r.y + g_ref.fwdH * (-r.z)); // reference -> LOCAL
+            V3 aim = Norm(frame.LocalDirection(r)); // reference -> LOCAL
             V3 zq = aim * -1.0f;                                                           // quad normal faces the viewer
             V3 xq = Norm(Cross(V3{ 0, 1, 0 }, zq)), yq = Cross(zq, xq);
             XrPosef hp; hp.orientation = QuatFromBasis(xq, yq, zq);
             float D = g_cfg.hudDistance;
-            hp.position = { g_ref.pos.x + aim.x * D, g_ref.pos.y + aim.y * D, g_ref.pos.z + aim.z * D };
+            hp.position = { ref.origin.x + aim.x * D, ref.origin.y + aim.y * D, ref.origin.z + aim.z * D };
             if (!(controls::MonocularOut() && !controls::MonocularAtFace())) xr::SetHudLayer(hp, 2.0f * D * tanf(g_cfg.hudFov * 0.5f * 3.14159265f / 180.0f));
         }
         RestoreCam(rc, rsave);
@@ -2882,6 +2855,13 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         eyes = true;
     } else {
         o_RenderViewport(self, edx, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13);
+    }
+    if (poseReady && g_frame % 90 == 0) {
+        arms::FrameUsage use;
+        if (arms::ReadFrameUsage(use)) LOG("pose use shared-camera-1 published=%llu eyes=%d scope=%d renderThread=%lu appliedValid=%d applied=%llu appliedCalls=%u applyThread=%u interactionValid=%d interaction=%llu interactionCalls=%u interactionThread=%u",
+            (unsigned long long)frame.sequence, eyes, g_scopeFrame, GetCurrentThreadId(), use.haveApplied,
+            (unsigned long long)use.appliedSequence, use.appliedCalls, use.appliedThread, use.haveInteraction,
+            (unsigned long long)use.interactionSequence, use.interactionCalls, use.interactionThread);
     }
     double tEnd0 = NowMs();
     // A VP frame without eyes (loading, save thumbnails, ...) would otherwise be an empty (black) frame: show the flat
@@ -3408,7 +3388,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (contribution height-direction-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (contribution shared-camera-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

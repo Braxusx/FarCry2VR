@@ -4,9 +4,9 @@ Date: 2026-10-23. Proposed contributor work against
 `92a29c5b1e28a652d067262aacc59b421ed044c1` (1.0.1 / v230).
 Local source and GitHub main matched when this plan was written. Rebase the plan's
 source locations against newer work before implementation. The plan is checkpointed
-on `codex/tracking-arms-physical-steering`. The first implementation slice fixes
-R5's position/direction boundary and adds portable tests and a diagnostic build
-stamp. Runtime acceptance has not started. See [contribution status](CONTRIBUTION_STATUS.md).
+on `codex/tracking-arms-physical-steering`. R5's position/direction boundary and
+R1's shared effective camera-frame implementation are now built and desk-tested.
+Runtime acceptance has not started. See [contribution status](CONTRIBUTION_STATUS.md).
 
 ## Current checkpoint
 
@@ -14,13 +14,21 @@ stamp. Runtime acceptance has not started. See [contribution status](CONTRIBUTIO
   culling directions. Existing arm/calibration, flashlight and monocular directions
   now use the same pure helper. Position origin subtraction and world scale retain
   their previous behavior.
-- Five regression groups / 736 checks pass with both MSVC x86 and MinGW GCC x86.
-  A rebuilt legacy-formula mutant fails the direction group as expected.
+- R1 implementation now prepares a single immutable frame before arm publication
+  and any scope/cull/eye posing. Smoothing advances once per application sequence.
+  The arm/interaction adapters use its absolute origin, not a later Camera-bone
+  origin plus offset. Raw camera rows stay separate for calibration/native aim;
+  native flat fallback uses a raw frame consistently. Frame-use diagnostics were added.
+- Twelve CTest groups pass: 30,748 numeric checks plus source-wiring guards. Numeric
+  groups pass with both MSVC x86 and MinGW GCC x86. A frozen original SteadyCam
+  oracle verifies extraction; bob/yaw/bone negative controls exercise the old split.
 - Both unmodified baseline and changed x86 DLL build with installed MinGW GCC;
   exports checked, no added warnings. The documented llvm-mingw toolchain is not
   installed, so that build route remains unverified. Nothing deployed or packaged.
-- This is a partial PR 0 / PR 1 foundation, not completion of either PR: shared
-  effective camera frame (R1), image gating and lifecycle/identity work remain open.
+- This is a partial PR 0 / PR 1 foundation, not completion of either PR. R1 runtime
+  scheduling/latency and HMD acceptance, image gating and lifecycle remain open.
+  If hierarchy hooks apply the previous sample before viewport publication, resolve
+  the clock with a proved presentation seam; do not mask it with bone-origin drift.
   No arm-twist, support-grip, manual-reload, physical-steering or DQS fix is claimed.
 
 ## Contribution branch and upstream review

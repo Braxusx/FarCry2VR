@@ -23,5 +23,16 @@ struct ReferenceFrame {
         v.y += heightOffset;
         return v;
     }
+
+    Vec3 LocalDirection(Vec3 r) const {
+        return {right.x*r.x-forward.x*r.z,
+                r.y,
+                right.z*r.x-forward.z*r.z};
+    }
+
+    Vec3 LocalPosition(Vec3 p) const {
+        Vec3 v = LocalDirection({p.x,p.y-heightOffset,p.z});
+        return {v.x+origin.x,v.y+origin.y,v.z+origin.z};
+    }
 };
 } // namespace fc2vr::tracking
