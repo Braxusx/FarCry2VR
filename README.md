@@ -127,6 +127,16 @@ TC=/path/to/llvm-mingw/bin sh launcher/build.sh
 
 `NGX` is a folder containing the NVIDIA DLSS SDK (`sdk/include`, `sdk/lib`) from https://github.com/NVIDIA/DLSS, plus an empty `dummy` folder. It is not included here. Without `NGX`, only the mod DLL is built.
 
+Contributor tracking fixes and offline verification are recorded in
+[contribution status](docs/CONTRIBUTION_STATUS.md). This branch is not a new release.
+The isolated math tests need CMake and a C++17 compiler, but no game or OpenXR runtime:
+
+```sh
+cmake -S mod/tests -B build/tracking-tests
+cmake --build build/tracking-tests --config Release
+ctest --test-dir build/tracking-tests -C Release --output-on-failure
+```
+
 **Source layout:**
 
 | Path | Contents |

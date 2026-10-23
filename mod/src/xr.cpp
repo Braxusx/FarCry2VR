@@ -271,7 +271,7 @@ static HandState g_hs[2];
 struct CsInit { CRITICAL_SECTION cs; CsInit() { InitializeCriticalSection(&cs); } };
 static CsInit g_inCsHolder; static CRITICAL_SECTION& g_inCs = g_inCsHolder.cs;
 static HandState g_snap[2]; static XrPosef g_snapHead{ { 0, 0, 0, 1 }, { 0, 0, 0 } }; static bool g_snapHeadValid = false;
-static unsigned g_snapSeq = 0; static float g_rumble[2] = { 0, 0 };
+static uint64_t g_snapSeq = 0; static float g_rumble[2] = { 0, 0 };
 
 static XrPath P(const char* s) { XrPath p = XR_NULL_PATH; p_xrStringToPath(g_inst, s, &p); return p; }
 static XrAction MakeAction(const char* name, const char* loc, XrActionType t, bool perHand) {
@@ -331,36 +331,152 @@ static bool InputImpl() {
     return true;
 }
 
-static float GetF(XrAction a, int h) { XrActionStateGetInfo gi{ XR_TYPE_ACTION_STATE_GET_INFO }; gi.action = a; gi.subactionPath = g_hand[h];
-    XrActionStateFloat st{ XR_TYPE_ACTION_STATE_FLOAT }; return XR_SUCCEEDED(p_xrGetActionStateFloat(g_sess, &gi, &st)) && st.isActive ? st.currentState : 0.0f; }
-static bool GetB(XrAction a, int h) { XrActionStateGetInfo gi{ XR_TYPE_ACTION_STATE_GET_INFO }; gi.action = a; gi.subactionPath = h >= 0 ? g_hand[h] : XR_NULL_PATH;
-    XrActionStateBoolean st{ XR_TYPE_ACTION_STATE_BOOLEAN }; return XR_SUCCEEDED(p_xrGetActionStateBoolean(g_sess, &gi, &st)) && st.isActive && st.currentState; }
-static XrVector2f GetV(XrAction a, int h) { XrActionStateGetInfo gi{ XR_TYPE_ACTION_STATE_GET_INFO }; gi.action = a; gi.subactionPath = g_hand[h];
-    XrActionStateVector2f st{ XR_TYPE_ACTION_STATE_VECTOR2F }; if (XR_SUCCEEDED(p_xrGetActionStateVector2f(g_sess, &gi, &st)) && st.isActive) return st.currentState; return { 0, 0 }; }
+static float GetF(XrAction a, int h, bool* anyActive) { XrActionStateGetInfo gi{ XR_TYPE_ACTION_STATE_GET_INFO }; gi.action = a; gi.subactionPath = g_hand[h];
+    XrActionStateFloat st{ XR_TYPE_ACTION_STATE_FLOAT }; const bool active = p_xrGetActionStateFloat(g_sess,&gi,&st) == XR_SUCCESS && st.isActive;
+    *anyActive |= active; return active ? fc2vr::authority::FiniteAxis(st.currentState,0,1) : 0; }
+static bool GetB(XrAction a, int h, bool* anyActive) { XrActionStateGetInfo gi{ XR_TYPE_ACTION_STATE_GET_INFO }; gi.action = a; gi.subactionPath = h >= 0 ? g_hand[h] : XR_NULL_PATH;
+    XrActionStateBoolean st{ XR_TYPE_ACTION_STATE_BOOLEAN }; const bool active = p_xrGetActionStateBoolean(g_sess,&gi,&st) == XR_SUCCESS && st.isActive;
+    *anyActive |= active; return active && st.currentState; }
+static XrVector2f GetV(XrAction a, int h, bool* anyActive) { XrActionStateGetInfo gi{ XR_TYPE_ACTION_STATE_GET_INFO }; gi.action = a; gi.subactionPath = g_hand[h];
+    XrActionStateVector2f st{ XR_TYPE_ACTION_STATE_VECTOR2F }; const bool active = p_xrGetActionStateVector2f(g_sess,&gi,&st) == XR_SUCCESS && st.isActive;
+    *anyActive |= active; return active ? XrVector2f{fc2vr::authority::FiniteAxis(st.currentState.x),fc2vr::authority::FiniteAxis(st.currentState.y)} : XrVector2f{0,0}; }
 
 static bool g_holdLost = true;
+static fc2vr::authority::PoseCache<XrPosef> g_poseCache[2][2];
+static fc2vr::authority::RearmGate g_buttonGate[2], g_poseGate[2];
+static bool g_wasTracked[2]{};
+static InputStamp g_stamp;
+static uint64_t g_generation = 1, g_handGeneration[2] = {1,1}, g_spaceGeneration = 1;
+static std::vector<XrTime> g_referenceChanges;
 void SetHoldLostPose(bool on) { g_holdLost = on; }
+static void ClearButtons(HandState& s) {
+    s.trigger = s.squeeze = 0; s.stick = {0,0};
+    s.stickClick = s.btn1 = s.btn2 = s.menu = false;
+}
+static bool Neutral(const HandState& s) {
+    return s.trigger <= 0.15f && s.squeeze <= 0.2f && fabsf(s.stick.x) <= 0.2f && fabsf(s.stick.y) <= 0.2f
+        && !s.stickClick && !s.btn1 && !s.btn2 && !s.menu;
+}
+static bool FinitePosition(const XrPosef& p) {
+    return fc2vr::authority::FinitePosition(p);
+}
+static bool FiniteOrientation(const XrPosef& p) {
+    return fc2vr::authority::FiniteOrientation(p);
+}
+static fc2vr::authority::PoseEvidence Evidence(bool active, bool located, const XrSpaceLocation& l) {
+    return {active,
+        located && (l.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) && FinitePosition(l.pose),
+        located && (l.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) && FiniteOrientation(l.pose),
+        located && (l.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0,
+        located && (l.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0};
+}
+static void PublishInput(bool synced, const XrPosef& head, bool headValid, XrTime predictedTime = 0) {
+    EnterCriticalSection(&g_inCs);
+    g_stamp.sequence = ++g_snapSeq;
+    g_stamp.receivedMs = GetTickCount64();
+    g_stamp.generation = g_generation;
+    g_stamp.focused = g_state == XR_SESSION_STATE_FOCUSED;
+    g_stamp.synced = synced;
+    g_stamp.predictedTime = predictedTime;
+    for (int h = 0; h < 2; ++h) {
+        const bool tracked = headValid && g_hs[h].gripEvidence.Tracked() && g_hs[h].aimEvidence.Tracked();
+        if (g_wasTracked[h] && !tracked) ++g_handGeneration[h];
+        g_wasTracked[h] = tracked;
+        g_stamp.handGeneration[h] = g_handGeneration[h];
+        g_snap[h] = g_hs[h];
+    }
+    g_snapHeadValid = headValid && synced && g_stamp.focused;
+    g_snapHead = g_snapHeadValid ? head : XrPosef{{0,0,0,1},{0,0,0}};
+    const auto stamp = g_stamp;
+    LeaveCriticalSection(&g_inCs);
+    static int previousState = -1;
+    const int state = (stamp.focused ? 1 : 0) | (stamp.synced ? 2 : 0) | (g_hs[0].poseAuthority ? 4 : 0)
+        | (g_hs[1].poseAuthority ? 8 : 0) | (headValid ? 16 : 0);
+    if (state != previousState || stamp.sequence % 900 == 0) {
+        previousState = state;
+        LOG("XR: input-authority-1 seq=%llu gen=%llu focused=%d sync=%d headTracked=%d L(active=%d gripValid=%d gripTracked=%d aimValid=%d aimTracked=%d held=%d authority=%d) R(active=%d gripValid=%d gripTracked=%d aimValid=%d aimTracked=%d held=%d authority=%d)",
+            (unsigned long long)stamp.sequence,(unsigned long long)stamp.generation,stamp.focused,synced,headValid,
+            g_hs[0].active,g_hs[0].gripEvidence.Valid(),g_hs[0].gripEvidence.Tracked(),g_hs[0].aimEvidence.Valid(),g_hs[0].aimEvidence.Tracked(),g_hs[0].gripHeld||g_hs[0].aimHeld,g_hs[0].poseAuthority,
+            g_hs[1].active,g_hs[1].gripEvidence.Valid(),g_hs[1].gripEvidence.Tracked(),g_hs[1].aimEvidence.Valid(),g_hs[1].aimEvidence.Tracked(),g_hs[1].gripHeld||g_hs[1].aimHeld,g_hs[1].poseAuthority);
+    }
+}
+static void InvalidateInput(const char* reason, bool clearPoses = false) {
+    for (int h = 0; h < 2; ++h) {
+        g_buttonGate[h].Clear(); g_poseGate[h].Clear();
+        g_hs[h] = HandState{};
+        for (int k = 0; k < 2; ++k) {
+            if (clearPoses) g_poseCache[h][k].Clear();
+            const auto kept = g_poseCache[h][k].Resolve(XrPosef{}, {}, g_holdLost);
+            if (k) { g_hs[h].aim = kept.pose; g_hs[h].aimValid = kept.visualValid; g_hs[h].aimHeld = kept.held; }
+            else { g_hs[h].grip = kept.pose; g_hs[h].gripValid = kept.visualValid; g_hs[h].gripHeld = kept.held; }
+        }
+    }
+    EnterCriticalSection(&g_inCs);
+    const bool wasCurrent = g_stamp.synced;
+    ++g_generation; g_rumble[0] = g_rumble[1] = 0;
+    // Revoke the published lease atomically; do not leave an old synced stamp
+    // readable between generation advancement and the neutral publication below.
+    g_stamp.generation = g_generation; g_stamp.synced = false; g_snapHeadValid = false;
+    for (auto& snapshot : g_snap) { snapshot.active = snapshot.poseAuthority = false; ClearButtons(snapshot); }
+    LeaveCriticalSection(&g_inCs);
+    PublishInput(false, {}, false);
+    if (wasCurrent) LOG("XR: input authority invalidated (%s)", reason);
+}
+void InvalidateForRecenter() { InvalidateInput("recenter"); }
+InputStamp CurrentInputStamp() {
+    EnterCriticalSection(&g_inCs); const InputStamp stamp = g_stamp; LeaveCriticalSection(&g_inCs); return stamp;
+}
+bool InputCurrent(const InputStamp& source, int hand) {
+    EnterCriticalSection(&g_inCs);
+    const bool ok = fc2vr::authority::Fresh(source,g_stamp,GetTickCount64(),hand)
+        && (hand < 0 || (hand < 2 && g_snapHeadValid && g_snap[hand].poseAuthority));
+    LeaveCriticalSection(&g_inCs); return ok;
+}
+bool InputCurrent() { return InputCurrent(CurrentInputStamp()); }
+bool HeadCurrent(const InputStamp& source) {
+    EnterCriticalSection(&g_inCs); const auto now = GetTickCount64();
+    const bool ok = g_snapHeadValid && fc2vr::authority::Fresh(source,g_stamp,now,0) && fc2vr::authority::Fresh(source,g_stamp,now,1);
+    LeaveCriticalSection(&g_inCs); return ok;
+}
+bool AcceptedInputCurrent(const InputStamp& source, int hand) {
+    if (hand < 0 || hand > 1) return false;
+    EnterCriticalSection(&g_inCs);
+    const bool ok = fc2vr::authority::Fresh(g_stamp,g_stamp,GetTickCount64(),hand)
+        && fc2vr::authority::SameContext(source,g_stamp,hand) && g_snapHeadValid && g_snap[hand].poseAuthority;
+    LeaveCriticalSection(&g_inCs); return ok;
+}
+static void RevokeViewPoses() {
+    // View location can fail AFTER SyncInput succeeded. Revoke spatial use, not
+    // fresh ordinary buttons; changing authority must not renew receipt age.
+    for (int h = 0; h < 2; ++h) { g_poseGate[h].Clear(); g_hs[h].poseAuthority = false; }
+    EnterCriticalSection(&g_inCs);
+    const bool changed = g_snapHeadValid || g_snap[0].poseAuthority || g_snap[1].poseAuthority;
+    g_snapHeadValid = false;
+    if (changed) g_stamp.sequence = ++g_snapSeq;
+    for (int h = 0; h < 2; ++h) {
+        if (changed) ++g_handGeneration[h];
+        g_stamp.handGeneration[h] = g_handGeneration[h]; g_wasTracked[h] = false; g_snap[h].poseAuthority = false;
+    }
+    LeaveCriticalSection(&g_inCs);
+    static unsigned count = 0;
+    if (changed && count++ % 90 == 0) LOG("XR: input-authority-1 spatial use revoked: incomplete view tracking (events=%u, buttons remain fresh)",count);
+}
+
 static void SyncInput(XrTime t) {
-    if (!g_inputOk) return;
+    bool spaceChanged = false;
+    for (auto it = g_referenceChanges.begin(); it != g_referenceChanges.end();) {
+        if (t >= *it) { it = g_referenceChanges.erase(it); ++g_spaceGeneration; spaceChanged = true; }
+        else ++it;
+    }
+    if (spaceChanged) InvalidateInput("reference-space effective",true);
+    const auto previous = CurrentInputStamp();
+    if (previous.synced && !fc2vr::authority::Fresh(previous,previous,GetTickCount64())) InvalidateInput("publication gap");
+    if (!g_inputOk || g_state != XR_SESSION_STATE_FOCUSED || !g_referenceChanges.empty()) {
+        InvalidateInput("unfocused/pending space"); return;
+    }
     XrActiveActionSet as{ g_set, XR_NULL_PATH };
     XrActionsSyncInfo si{ XR_TYPE_ACTIONS_SYNC_INFO }; si.countActiveActionSets = 1; si.activeActionSets = &as;
-    XrResult r = p_xrSyncActions(g_sess, &si);
-    // v209: a controller the runtime reports inactive (held very still - the Quest may switch to hand tracking -, or the
-    // session not focused while the system menu is up) keeps its last pose with nothing pressed, instead of handing the
-    // arms back to the game (its animated hold: rifle pulled in, left hand on the forearm)
-    static XrPosef keepPose[2][2]; static bool haveKeep[2] = { false, false }; static bool kept[2] = { false, false };
-    auto keepLast = [&](int h) {
-        HandState& s = g_hs[h];
-        if (!g_holdLost || !haveKeep[h]) { s.active = false; return; }
-        s.active = true; s.grip = keepPose[h][0]; s.aim = keepPose[h][1]; s.gripValid = s.aimValid = true;
-        s.trigger = s.squeeze = 0; s.stick = { 0, 0 }; s.stickClick = s.btn1 = s.btn2 = s.menu = false;
-        if (!kept[h]) { kept[h] = true; LOG("XR: %s controller inactive - last pose kept", h ? "right" : "left"); }
-    };
-    if (r != XR_SUCCESS) {   // e.g. session not focused
-        keepLast(0); keepLast(1);
-        EnterCriticalSection(&g_inCs); g_snap[0] = g_hs[0]; g_snap[1] = g_hs[1]; ++g_snapSeq; LeaveCriticalSection(&g_inCs);
-        return;
-    }
+    if (p_xrSyncActions(g_sess, &si) != XR_SUCCESS) { InvalidateInput("sync failed"); return; }
     if (!g_profileLogged) {
         XrInteractionProfileState ps{ XR_TYPE_INTERACTION_PROFILE_STATE };
         if (XR_SUCCEEDED(p_xrGetCurrentInteractionProfile(g_sess, g_hand[1], &ps)) && ps.interactionProfile) {
@@ -368,70 +484,64 @@ static void SyncInput(XrTime t) {
             LOG("XR: interaction profile %s", name); g_profileLogged = true;
         }
     }
+    XrSpaceLocation hl{XR_TYPE_SPACE_LOCATION};
+    const bool headLocated = g_view && p_xrLocateSpace(g_view,g_local,t,&hl) == XR_SUCCESS;
+    const bool headOk = Evidence(headLocated,headLocated,hl).Tracked();
     for (int h = 0; h < 2; ++h) {
-        HandState& s = g_hs[h];
-        XrActionStateGetInfo gi{ XR_TYPE_ACTION_STATE_GET_INFO }; gi.action = g_aGrip; gi.subactionPath = g_hand[h];
-        XrActionStatePose ps{ XR_TYPE_ACTION_STATE_POSE };
-        s.active = XR_SUCCEEDED(p_xrGetActionStatePose(g_sess, &gi, &ps)) && ps.isActive;
-        if (!s.active) { keepLast(h); continue; }
-        if (kept[h]) { kept[h] = false; LOG("XR: %s controller active again", h ? "right" : "left"); }
-        XrSpaceLocation l{ XR_TYPE_SPACE_LOCATION };
-        const XrSpaceLocationFlags need = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT;
-        // A controller held still out of the headset cameras' view (hanging at the side) can lose its position. The game
-        // would then take the arm back (the animated hold: rifle pulled in, left hand on the forearm), so the last
-        // tracked position is kept (with the live orientation when there is one) for as long as the controller is active.
-        static XrPosef lastPose[2][2]; static bool haveLast[2][2] = {}; static int heldState[2] = { 0, 0 };
-        int held = 0;
+        HandState s;
         for (int k = 0; k < 2; ++k) {
-            XrSpace sp = k ? g_aimSpace[h] : g_gripSpace[h];
-            XrPosef& out = k ? s.aim : s.grip; bool& valid = k ? s.aimValid : s.gripValid;
-            l = XrSpaceLocation{ XR_TYPE_SPACE_LOCATION };
-            bool ok = s.active && XR_SUCCEEDED(p_xrLocateSpace(sp, g_local, t, &l));
-            valid = ok && (l.locationFlags & need) == need;
-            if (valid) { out = l.pose; lastPose[h][k] = l.pose; haveLast[h][k] = true; keepPose[h][k] = l.pose; if (k) haveKeep[h] = haveLast[h][0]; continue; }
-            if (!s.active || !haveLast[h][k] || !g_holdLost) continue;
-            out = lastPose[h][k];
-            if (ok && (l.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) { out.orientation = l.pose.orientation; lastPose[h][k].orientation = l.pose.orientation; held |= 1; }
-            else held |= 2;
-            valid = true;
+            XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
+            gi.action = k ? g_aAim : g_aGrip; gi.subactionPath = g_hand[h];
+            XrActionStatePose ps{XR_TYPE_ACTION_STATE_POSE};
+            const bool active = p_xrGetActionStatePose(g_sess,&gi,&ps) == XR_SUCCESS && ps.isActive;
+            XrSpaceLocation l{XR_TYPE_SPACE_LOCATION};
+            const bool located = active && p_xrLocateSpace(k ? g_aimSpace[h] : g_gripSpace[h],g_local,t,&l) == XR_SUCCESS;
+            const auto evidence = Evidence(active,located,l);
+            const auto visual = g_poseCache[h][k].Resolve(l.pose,evidence,g_holdLost);
+            if (k) { s.aim = visual.pose; s.aimEvidence = evidence; s.aimValid = visual.visualValid; s.aimHeld = visual.held; }
+            else { s.grip = visual.pose; s.gripEvidence = evidence; s.gripValid = visual.visualValid; s.gripHeld = visual.held; }
+            s.active |= active;
         }
-        int hs = held ? (held & 2 ? 2 : 1) : 0;
-        if (hs != heldState[h]) {
-            heldState[h] = hs;
-            LOG("XR: %s controller %s", h ? "right" : "left", hs == 0 ? "tracked again" : hs == 1 ? "lost its position: last position kept, live orientation" : "lost tracking: last pose kept");
-        }
-        s.trigger = GetF(g_aTrig, h); s.squeeze = GetF(g_aSqueeze, h); s.stick = GetV(g_aStick, h);
-        s.stickClick = GetB(g_aStickClick, h); s.btn1 = GetB(g_aBtn1, h); s.btn2 = GetB(g_aBtn2, h);
-        s.menu = h == 0 && GetB(g_aMenu, -1);
+        // Buttons are independent of positional tracking and even pose-action activity.
+        bool buttonsActive = false;
+        s.trigger = GetF(g_aTrig,h,&buttonsActive); s.squeeze = GetF(g_aSqueeze,h,&buttonsActive); s.stick = GetV(g_aStick,h,&buttonsActive);
+        s.stickClick = GetB(g_aStickClick,h,&buttonsActive); s.btn1 = GetB(g_aBtn1,h,&buttonsActive); s.btn2 = GetB(g_aBtn2,h,&buttonsActive);
+        s.menu = h == 0 && GetB(g_aMenu,-1,&buttonsActive);
+        s.active |= buttonsActive;
+        const bool neutral = Neutral(s);
+        const bool poseNeutral = s.trigger <= 0.15f && s.squeeze <= 0.2f;   // locomotion sticks need not stop after pose-only loss
+        s.poseAuthority = g_poseGate[h].Update(headOk && s.active && s.gripEvidence.Tracked() && s.aimEvidence.Tracked(),poseNeutral);
+        if (!g_buttonGate[h].Update(s.active,neutral)) ClearButtons(s);
+        g_hs[h] = s;
     }
-    XrSpaceLocation hl{ XR_TYPE_SPACE_LOCATION };
-    bool headOk = g_view && XR_SUCCEEDED(p_xrLocateSpace(g_view, g_local, t, &hl)) && (hl.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT);
-    EnterCriticalSection(&g_inCs);
-    g_snap[0] = g_hs[0]; g_snap[1] = g_hs[1];
-    if (headOk) { g_snapHead = hl.pose; g_snapHeadValid = true; }
-    ++g_snapSeq;
-    float rl = g_rumble[0], rr = g_rumble[1];
-    LeaveCriticalSection(&g_inCs);
-    // game rumble (XInputSetState) -> controller vibration, refreshed every frame while non-zero
-    static float prev[2] = { 0, 0 };
-    float want[2] = { rl, rr };
+    PublishInput(true,hl.pose,headOk,t);
+    float want[2]; EnterCriticalSection(&g_inCs); want[0] = g_rumble[0]; want[1] = g_rumble[1]; LeaveCriticalSection(&g_inCs);
+    static float prev[2]{};
     for (int h = 0; h < 2; ++h) {
-        if (want[h] > 0.02f) Haptic(h, want[h], 0.1f);
-        else if (prev[h] > 0.02f) Haptic(h, 0.0f, 0.0f);
+        if (want[h] > 0.02f) Haptic(h,want[h],0.1f);
+        else if (prev[h] > 0.02f) Haptic(h,0,0);
         prev[h] = want[h];
     }
 }
-bool InputSnapshot(HandState out[2], XrPosef& head, bool& headValid) {
-    if (!g_inputOk) return false;
+bool InputSnapshot(HandState out[2], XrPosef& head, bool& headValid, InputStamp* stamp) {
     EnterCriticalSection(&g_inCs);
-    out[0] = g_snap[0]; out[1] = g_snap[1]; head = g_snapHead; headValid = g_snapHeadValid;
-    LeaveCriticalSection(&g_inCs);
-    return true;
+    const bool fresh = fc2vr::authority::Fresh(g_stamp,g_stamp,GetTickCount64());
+    if (stamp) *stamp = g_stamp;
+    headValid = fresh && g_snapHeadValid;
+    head = headValid ? g_snapHead : XrPosef{{0,0,0,1},{0,0,0}};
+    for (int h = 0; h < 2; ++h) {
+        out[h] = fresh ? g_snap[h] : HandState{};
+        // This API is physical input; the render-only Hand() accessor retains visual fallback.
+        out[h].gripValid = fresh && out[h].poseAuthority && out[h].gripEvidence.Tracked();
+        out[h].aimValid = fresh && out[h].poseAuthority && out[h].aimEvidence.Tracked();
+    }
+    LeaveCriticalSection(&g_inCs); return fresh;
 }
 void SetRumble(float left, float right) { EnterCriticalSection(&g_inCs); g_rumble[0] = left; g_rumble[1] = right; LeaveCriticalSection(&g_inCs); }
 const HandState& Hand(int side) { return g_hs[side ? 1 : 0]; }
 void Haptic(int side, float amplitude, float seconds, float frequency) {
     if (!g_inputOk || !g_running) return;
+    if (amplitude > 0 && !InputCurrent()) return;
     XrHapticActionInfo hi{ XR_TYPE_HAPTIC_ACTION_INFO }; hi.action = g_aHaptic; hi.subactionPath = g_hand[side ? 1 : 0];
     if (amplitude <= 0.0f) { p_xrStopHapticFeedback(g_sess, &hi); return; }
     XrHapticVibration v{ XR_TYPE_HAPTIC_VIBRATION };
@@ -441,6 +551,7 @@ void Haptic(int side, float amplitude, float seconds, float frequency) {
 
 // ---------------------------------------------------------------- init
 static void Teardown() {
+    InvalidateInput("teardown",true); g_referenceChanges.clear(); ++g_spaceGeneration;
     for (int i = 0; i < 5; ++i) { SafeRelease(g_shared[i].tex10); SafeRelease(g_shared[i].tex11); }
     g_hud = Chain{}; g_ret = Chain{}; g_dot = Chain{}; SafeRelease(g_dotTex); g_menu = Chain{}; SafeRelease(g_menuTex); g_ammo = Chain{}; SafeRelease(g_ammoTex); g_vig = Chain{}; SafeRelease(g_vigTex); SafeRelease(g_vigPlainTex); SafeRelease(g_vigMonoTex[0]); SafeRelease(g_vigMonoTex[1]);
     g_eye[0] = Chain{}; g_eye[1] = Chain{}; g_screen = Chain{};
@@ -666,13 +777,16 @@ void PollEvents() {
     if (!g_inst) return;
     XrEventDataBuffer ev{ XR_TYPE_EVENT_DATA_BUFFER };
     while (p_xrPollEvent(g_inst, &ev) == XR_SUCCESS) {
+        if (ev.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) { g_running = false; InvalidateInput("instance loss",true); }
         if (ev.type == XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB) {
             auto* d = (XrEventDataDisplayRefreshRateChangedFB*)&ev;
             LOG("XR: display refresh changed %.1f -> %.1f Hz", d->fromDisplayRefreshRate, d->toDisplayRefreshRate);
         }
         if (ev.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
             auto* s = (XrEventDataSessionStateChanged*)&ev;
+            if (s->session != g_sess) { ev = XrEventDataBuffer{XR_TYPE_EVENT_DATA_BUFFER}; continue; }
             g_state = s->state;
+            if (g_state != XR_SESSION_STATE_FOCUSED) InvalidateInput("session state");
             LOG("XR: session state %d", (int)g_state);
             if (g_state == XR_SESSION_STATE_READY) {
                 XrSessionBeginInfo bi{ XR_TYPE_SESSION_BEGIN_INFO };
@@ -684,6 +798,14 @@ void PollEvents() {
                 g_running = false;
             }
         }
+        if (ev.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
+            const auto* change = (const XrEventDataReferenceSpaceChangePending*)&ev;
+            if (change->session == g_sess && change->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL) {
+                g_referenceChanges.push_back(change->changeTime);
+                InvalidateInput("reference-space pending");
+                LOG("XR: LOCAL reference change queued at %lld", (long long)change->changeTime);
+            }
+        }
         ev = XrEventDataBuffer{ XR_TYPE_EVENT_DATA_BUFFER };
     }
 }
@@ -691,10 +813,10 @@ void PollEvents() {
 // ---------------------------------------------------------------- frames
 static bool WaitBegin(XrFrameState& fs) {
     XrFrameWaitInfo wi{ XR_TYPE_FRAME_WAIT_INFO };
-    if (!Check(p_xrWaitFrame(g_sess, &wi, &fs), "xrWaitFrame")) return false;
+    if (!Check(p_xrWaitFrame(g_sess, &wi, &fs), "xrWaitFrame")) { InvalidateInput("wait failed"); return false; }
     XrFrameBeginInfo bi{ XR_TYPE_FRAME_BEGIN_INFO };
     XrResult r = p_xrBeginFrame(g_sess, &bi);
-    if (!Check(r, "xrBeginFrame")) return false;
+    if (!Check(r, "xrBeginFrame")) { InvalidateInput("begin failed"); return false; }
     g_frameBegun = true;
     diag::GpuFrameStart(g_dev10);
     SyncInput(fs.predictedDisplayTime);
@@ -707,6 +829,7 @@ bool BeginFrame(FrameViews& out) {
     XrFrameState fs{ XR_TYPE_FRAME_STATE };
     if (!WaitBegin(fs)) return false;
     out.displayTime = fs.predictedDisplayTime;
+    out.spaceGeneration = g_spaceGeneration;
     out.shouldRender = fs.shouldRender == XR_TRUE;
     XrViewLocateInfo li{ XR_TYPE_VIEW_LOCATE_INFO };
     li.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
@@ -714,8 +837,13 @@ bool BeginFrame(FrameViews& out) {
     XrViewState vs{ XR_TYPE_VIEW_STATE }; uint32_t n = 0;
     out.views[0].type = out.views[1].type = XR_TYPE_VIEW;
     if (XR_SUCCEEDED(p_xrLocateViews(g_sess, &li, &vs, 2, &n, out.views)) && n == 2 &&
-        (vs.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT))
+        (vs.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) && FiniteOrientation(out.views[0].pose) && FiniteOrientation(out.views[1].pose))
         out.valid = true;
+    out.positionValid = out.valid && (vs.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT)
+        && FinitePosition(out.views[0].pose) && FinitePosition(out.views[1].pose);
+    const XrViewStateFlags trackedViews = XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_POSITION_VALID_BIT
+        | XR_VIEW_STATE_ORIENTATION_TRACKED_BIT | XR_VIEW_STATE_POSITION_TRACKED_BIT;
+    if (!out.positionValid || (vs.viewStateFlags & trackedViews) != trackedViews) RevokeViewPoses();
     return true;
 }
 
