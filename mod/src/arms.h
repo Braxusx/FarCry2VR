@@ -127,7 +127,8 @@ struct FrameUsage {
 };
 bool ReadFrameUsage(FrameUsage& out);
 bool CamBonePos(float out[3]);
-bool BodyClock(); void SetBodyClock(bool on);   // v231 (F4 test toggle)
+bool BodyClock(); void SetBodyClock(bool on);
+long CamBoneSeq();                                  // v231: skeleton updates so far (diagnostic)   // v231 (F4 test toggle)
 void SetMonoCams(const float game[16], const float posed[16]);
 bool MonoTarget();
 void SetHeadWorld(const float pos[3], const float dir[3], const float up[3]);

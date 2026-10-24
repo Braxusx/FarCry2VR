@@ -3196,6 +3196,7 @@ void SetMonoCams(const float game[16], const float posed[16]) {
     M4* ms[2] = { &g_monoG, &g_monoP }; for (M4* m : ms) { m->m[0][3] = m->m[1][3] = m->m[2][3] = 0; m->m[3][3] = 1; }
     g_monoCamTick = GetTickCount(); Unlock();
 }
+long CamBoneSeq() { return g_camBoneSeq; }
 bool BodyClock() { return g_c.bodyClock != 0; }
 void SetBodyClock(bool on) { g_c.bodyClock = on ? 1 : 0; }
 bool CamBonePos(float out[3]) { if (!g_csInit || g_camBoneSeq == 0) return false; Lock(); memcpy(out, g_camBonePos, 12); Unlock(); return true; }

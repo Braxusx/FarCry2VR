@@ -357,7 +357,8 @@ static void PoseCamera(uint8_t* c, V3 pos, V3 dir, V3 up, float tl, float tr, fl
 
 // ============================================================ head tracking -> game space
 static double g_refYTime = 0;
-static int g_rsDelay = 1; static bool g_rsOn = false;   // v231 room-scale (see arms RoomScaleUpdate)
+static int g_rsDelay = 1; static bool g_rsOn = false;
+static int g_motionTrace = 0;   // v231: frames left to trace camera / bone / player positions (F4)   // v231 room-scale (see arms RoomScaleUpdate)
 struct Recenter { bool valid = false; V3 pos{}; V3 fwdH{ 0, 0, -1 }; V3 rightH{ 1, 0, 0 }; } g_ref;
 
 static void DoRecenter(const XrPosef& head) {
@@ -1733,8 +1734,8 @@ static void Hotkeys(const XrPosef* head) {
     bool t = (GetAsyncKeyState(g_cfg.toggleKey) & 0x8000) != 0;
     if (r && !prevR && head) { DoRecenter(*head); g_refYTime = NowMs(); }
     if (t && !prevT) { g_stereoOn = !g_stereoOn; LOG("stereo %s", g_stereoOn ? "on" : "off"); }
-    { static bool prevF4 = false; bool f4 = (GetAsyncKeyState(VK_F4) & 0x8000) != 0 && !(GetAsyncKeyState(VK_MENU) & 0x8000);   // v231: hands on the body clock on / off (A/B test)
-      if (f4 && !prevF4) { bool on = !arms::BodyClock(); arms::SetBodyClock(on); LOG("body clock %s (F4)", on ? "ON" : "OFF"); ShowToast(on ? "Hands on body clock: ON" : "Hands on body clock: OFF"); } prevF4 = f4; }
+    { static bool prevF4 = false; bool f4 = (GetAsyncKeyState(VK_F4) & 0x8000) != 0 && !(GetAsyncKeyState(VK_MENU) & 0x8000);   // v231: 3 s motion trace
+      if (f4 && !prevF4) { g_motionTrace = 270; LOG("motion trace: 3 s started (F4)"); ShowToast("Recording motion (3 s)"); } prevF4 = f4; }
     { static bool prevF10 = false; bool f10 = (DevKey(VK_F10) & 0x8000) != 0; if (f10 && !prevF10) g_traceLeft = 4; prevF10 = f10; }
     { static bool prevF3 = false; bool f3 = (DevKey(VK_F3) & 0x8000) != 0; if (f3 && !prevF3) { g_fovMode = (g_fovMode + 1) % 3; static const char* nm[3] = { "headset frustums", "symmetric", "symmetric + overscan" }; LOG("eye frustum mode %d: %s", g_fovMode, nm[g_fovMode]); } prevF3 = f3; }
     { static bool prevF5 = false; bool f5 = (DevKey(VK_F5) & 0x8000) != 0; if (f5 && !prevF5) { g_cfg.uiScope = (g_cfg.uiScope + 1) % 4; LOG("UI scope %d", g_cfg.uiScope); } prevF5 = f5; }
@@ -2314,6 +2315,21 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
         auto put = [](float* d, V3 v) { d[0] = v.x; d[1] = v.y; d[2] = v.z; };
         af.game = frame.game; af.frameSequence = frame.sequence;
         af.bonePubValid = arms::CamBonePos(af.bonePub);   // v231 body clock
+        if (g_motionTrace > 0) {   // v231 motion trace: one line per frame
+            static double t0 = 0; static long lastSeq = 0; static V3 lastRaw{}, lastBone{}, lastPl{};
+            double tn = NowMs(); if (g_motionTrace == 270) { t0 = tn; lastSeq = arms::CamBoneSeq(); lastRaw = { frame.raw.P.x, frame.raw.P.y, frame.raw.P.z }; }
+            float pl[3] = {}, hd = 0; bool plOk = arms::PlayerState(pl, &hd);
+            long seq = arms::CamBoneSeq();
+            V3 raw{ frame.raw.P.x, frame.raw.P.y, frame.raw.P.z }, bone{ af.bonePub[0], af.bonePub[1], af.bonePub[2] }, pp{ pl[0], pl[1], pl[2] };
+            V3 dr = raw - lastRaw, db = bone - lastBone, dp = pp - lastPl;
+            LOG("mt %6.1f ms | raw %.3f %.3f %.3f d %+6.1f mm | eff-raw %+6.1f %+6.1f %+6.1f mm | bone-raw %+6.1f %+6.1f %+6.1f mm (bone d %+6.1f mm, %ld upd) | player-raw %+6.1f %+6.1f %+6.1f mm (d %+6.1f mm)%s veh %d",
+                tn - t0, raw.x, raw.y, raw.z, sqrtf(dr.x * dr.x + dr.y * dr.y + dr.z * dr.z) * 1000.0f,
+                (frame.game.P.x - raw.x) * 1000.0f, (frame.game.P.y - raw.y) * 1000.0f, (frame.game.P.z - raw.z) * 1000.0f,
+                (bone.x - raw.x) * 1000.0f, (bone.y - raw.y) * 1000.0f, (bone.z - raw.z) * 1000.0f, sqrtf(db.x * db.x + db.y * db.y + db.z * db.z) * 1000.0f, seq - lastSeq,
+                (pp.x - raw.x) * 1000.0f, (pp.y - raw.y) * 1000.0f, (pp.z - raw.z) * 1000.0f, sqrtf(dp.x * dp.x + dp.y * dp.y + dp.z * dp.z) * 1000.0f, plOk ? "" : " (no player)", controls::VehicleMode());
+            lastSeq = seq; lastRaw = raw; lastBone = bone; lastPl = pp;
+            if (--g_motionTrace == 0) { LOG("motion trace: done"); }
+        }
         const float* Wr = &F<float>(rc, cam::World);
         put(af.camRows[0], Norm({ Wr[0], Wr[1], Wr[2] })); put(af.camRows[1], Norm({ Wr[4], Wr[5], Wr[6] })); put(af.camRows[2], Norm({ Wr[8], Wr[9], Wr[10] }));
         if (af.handValid) {
