@@ -132,7 +132,7 @@ bool BodyClock(); void SetBodyClock(bool on);
 long CamBoneSeq();
 bool DiagArmLive(int* differ, int* worstBone, float* worstMm);   // v231
 float DiagForeStep();
-void DiagArm(float pos[6], float rot[6]);   // v231: per-frame change of R/L forearm, R/L upper arm, R/L forearm twist (mm, deg)   // v231: largest per-frame turn of the animated forearms (deg)
+void DiagArm(float pos[10], float rot[10]);   // v231: per-frame change of R/L forearm, R/L upper arm, R/L forearm twist (mm, deg)   // v231: largest per-frame turn of the animated forearms (deg)
 float ArmSmooth(); void SetArmSmooth(float s);
 bool DiagLiveHand(float out[3]);
 bool DiagHand(float applyW[3], float liveW[3], float hand[3], float target[3], long* seq);   // v231 jitter diagnostic                                  // v231: skeleton updates so far (diagnostic)   // v231 (F4 test toggle)
