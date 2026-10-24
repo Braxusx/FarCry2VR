@@ -8,6 +8,11 @@
 
 namespace arms {
 struct Config {
+    float twistFadeFrom = 15.0f, twistFadeTo = 40.0f;   // UpperArmTwistFadeFrom / To (v231): elbow bend (deg) where the upper-arm twist starts / is full
+    float twistSmooth = 0.06f;
+    float softIk = 0.90f;         // SoftIkStart (v231): share of the arm length where the shoulder starts easing toward the hand (0 = off)
+    float softIkMaxPull = 0.12f;  // SoftIkMaxShoulderPull (v231): m, for the free left hand
+    float elbowSmooth = 0.05f;    // ElbowSmoothing (v231): seconds    // UpperArmTwistSmoothing (v231): seconds
     float armSmooth = 0.12f;      // ArmSmoothing (v231): seconds; the animated arm bones the solve starts from are smoothed (0 = off)
     int bodyClock = 1;            // HandsOnBodyClock (v231): hands follow the body's movement since the frame was published
     int roomScale = 0;            // RoomScale (v231): real steps move the player (the body follows the head)
@@ -134,6 +139,7 @@ bool DiagArmLive(int* differ, int* worstBone, float* worstMm);   // v231
 float DiagForeStep();
 void DiagArm(float pos[10], float rot[10]);   // v231: per-frame change of R/L forearm, R/L upper arm, R/L forearm twist (mm, deg)   // v231: largest per-frame turn of the animated forearms (deg)
 float ArmSmooth(); void SetArmSmooth(float s);
+bool ArmStability(); void SetArmStability(bool on);   // v231 F4 A/B
 bool DiagLiveHand(float out[3]);
 bool DiagHand(float applyW[3], float liveW[3], float hand[3], float target[3], long* seq);   // v231 jitter diagnostic                                  // v231: skeleton updates so far (diagnostic)   // v231 (F4 test toggle)
 void SetMonoCams(const float game[16], const float posed[16]);

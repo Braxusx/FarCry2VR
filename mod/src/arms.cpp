@@ -58,7 +58,7 @@ static CRITICAL_SECTION g_cs; static bool g_csInit = false;
 static Frame g_frame;                               // latest from the render thread
 static FrameUsage g_frameUsage;
 static volatile uint8_t* g_playerSkel = nullptr;    // player's skeleton object (bone array +0x20, count +0x2C)
-static float g_dgW[3], g_dgHand[3], g_dgTarget[3]; static long g_dgSeq = 0; static float g_dgForeStep = 0; static float g_dgModel[512][16]; static bool g_dgWritten[512]; static int g_dgN = 0; static uint8_t* g_dgSkel = nullptr; static float g_dgArmPos[10], g_dgArmRot[10];   // v231 jitter diagnostic
+static float g_dgW[3], g_dgHand[3], g_dgTarget[3]; static long g_dgSeq = 0; static float g_dgForeStep = 0; static float g_dgBend[2] = {}; static float g_dgModel[512][16]; static bool g_dgWritten[512]; static int g_dgN = 0; static uint8_t* g_dgSkel = nullptr; static float g_dgArmPos[10], g_dgArmRot[10];   // v231 jitter diagnostic
 static volatile uint8_t* g_playerGfx = nullptr;     // its graphic component (world matrix at +0x170)
 static int g_slot[21];                              // bone-helper slot -> bone index (Camera 0, R Hand 12, R Clavicle 15, L Clavicle 19)
 struct PhoneDiag { volatile LONG calls, player, applied, noFrame, noHand, camUpd; void* other[4]; int otherN[4]; LONG otherCalls[4]; };
@@ -1177,6 +1177,24 @@ static void Apply(uint8_t* skel) {
             if (dl < 1e-4f) continue;
             float nrm[3] = { dv[0] / dl, dv[1] / dl, dv[2] / dl };
             float maxL = 0.995f * (a + b), minL = fabsf(a - b) + 0.05f;
+            // v231 soft IK: near full reach a millimetre of hand distance moved the elbow by centimetres (and flipped
+            // the upper-arm twist), so the arms twitched with the gun held out. From SoftIkStart of the arm's length
+            // the shoulder eases toward the hand instead, so the elbow never reaches the unstable straight zone.
+            if (g_c.softIk > 0.5f && g_c.softIk < 0.99f) {
+                float sStart = g_c.softIk * (a + b), r = maxL - sStart;
+                if (r > 1e-4f && dl > sStart) {
+                    float deff = sStart + r * (1.0f - expf(-(dl - sStart) / r));
+                    float pull = dl - deff;
+                    if (!side && !grabbing && pull > g_c.softIkMaxPull) {   // free left hand far out: shoulder stays near the body
+                        float over = pull - g_c.softIkMaxPull, nT[3]; for (int k = 0; k < 3; ++k) nT[k] = T[k] - nrm[k] * over;
+                        M4 tr = Translate(nT[0] - T[0], nT[1] - T[1], nT[2] - T[2]); SubtreeXform(Bw, bones, n, hand, tr);
+                        for (int k = 0; k < 3; ++k) T[k] = nT[k];
+                        pull = g_c.softIkMaxPull;
+                    }
+                    for (int k = 0; k < 3; ++k) S[k] = T[k] - nrm[k] * deff;
+                    dl = deff;
+                }
+            }
             if (dl > maxL) {
                 if (!side && !grabbing) {   // free left hand out of reach: keep the shoulder on the body, stop the hand short
                     float nT[3]; for (int k = 0; k < 3; ++k) nT[k] = S[k] + nrm[k] * maxL;
@@ -1189,6 +1207,14 @@ static void Apply(uint8_t* skel) {
             if (dl < minL) { for (int k = 0; k < 3; ++k) S[k] = T[k] - nrm[k] * minL; dl = minL; }
             float cosA = (a * a + dl * dl - b * b) / (2 * a * dl); cosA = cosA > 1 ? 1 : cosA < -1 ? -1 : cosA;
             float sinA = sqrtf(1 - cosA * cosA);
+            {   // v231: the elbow's sideways offset is damped a little (it is not tracked, the hands stay exact)
+                static float smS[2] = { -1, -1 }; static ULONGLONG lt2[2] = { 0, 0 }; ULONGLONG tn = GetTickCount64();
+                float dt = lt2[side] ? (float)(tn - lt2[side]) * 0.001f : 1.0f; lt2[side] = tn;
+                if (smS[side] < 0 || dt > 0.25f || g_c.elbowSmooth <= 0) smS[side] = sinA;
+                else smS[side] += (sinA - smS[side]) * (1.0f - expf(-dt / g_c.elbowSmooth));
+                float sa = smS[side];
+                float maxSin = sqrtf(fmaxf(0.0f, 1.0f - cosA * cosA)) + 0.05f; if (sa > maxSin) sa = maxSin;
+                sinA = sa; }
             // elbow hint: down, out to the side, a little back
             float pole[3]; for (int k = 0; k < 3; ++k) pole[k] = -up[k] + hr[k] * sg * 0.6f - hf[k] * 0.3f;
             float pd = Dot3(pole, nrm); for (int k = 0; k < 3; ++k) pole[k] -= nrm[k] * pd; Normalize(pole);
@@ -1224,6 +1250,19 @@ static void Apply(uint8_t* skel) {
                     float d = twist(newU, newF, u1) - twist(Banim[upa], Banim[fore], ur);
                     while (d > 3.14159265f) d -= 6.2831853f; while (d < -3.14159265f) d += 6.2831853f;
                     Normalize(u1);
+                    // v231: a nearly straight arm has no hinge to measure the twist about - the angle jumps from frame
+                    // to frame (up to ~170 deg seen while the gun was held out), which made the arms twitch. Fade the
+                    // twist out as the elbow straightens, limit it, and smooth it over a few frames.
+                    {   float fdir[3] = { T[0] - E[0], T[1] - E[1], T[2] - E[2] }; Normalize(fdir);
+                        float bend = acosf(fmaxf(-1.0f, fminf(1.0f, Dot3(u1, fdir)))) * 57.2958f;   // 0 = straight
+                        float w = fminf(1.0f, fmaxf(0.0f, (bend - g_c.twistFadeFrom) / fmaxf(1.0f, g_c.twistFadeTo - g_c.twistFadeFrom)));
+                        d *= w;
+                        const float lim = 1.5708f; if (d > lim) d = lim; if (d < -lim) d = -lim;
+                        static float sm[2] = { 0, 0 }; static ULONGLONG lt[2] = { 0, 0 }; ULONGLONG tn = GetTickCount64();
+                        float dt = lt[side] ? (float)(tn - lt[side]) * 0.001f : 1.0f; lt[side] = tn;
+                        float k = (dt > 0.25f || g_c.twistSmooth <= 0) ? 1.0f : 1.0f - expf(-dt / g_c.twistSmooth);
+                        sm[side] += (d - sm[side]) * k; d = sm[side];
+                        g_dgBend[side] = bend; }
                     newU = Mul(Mul(Mul(newU, Translate(-S[0], -S[1], -S[2])), RotMat(u1, d * g_c.upperArmTwist)), Translate(S[0], S[1], S[2]));
                 }
             }
@@ -3287,6 +3326,15 @@ bool DiagLiveHand(float out[3]) {   // v231: the right hand bone as it is in the
 }
 float DiagForeStep() { return g_dgForeStep; }
 void DiagArm(float pos[10], float rot[10]) { memcpy(pos, g_dgArmPos, 40); memcpy(rot, g_dgArmRot, 40); }
+static bool g_armStab = true; static float g_stabKeep[5];
+bool ArmStability() { return g_armStab; }
+void SetArmStability(bool on) {
+    if (on == g_armStab) return;
+    if (!on) { g_stabKeep[0] = g_c.softIk; g_stabKeep[1] = g_c.twistFadeFrom; g_stabKeep[2] = g_c.twistFadeTo; g_stabKeep[3] = g_c.twistSmooth; g_stabKeep[4] = g_c.elbowSmooth;
+        g_c.softIk = 0; g_c.twistFadeFrom = -1; g_c.twistFadeTo = 0; g_c.twistSmooth = 0; g_c.elbowSmooth = 0; }
+    else { g_c.softIk = g_stabKeep[0]; g_c.twistFadeFrom = g_stabKeep[1]; g_c.twistFadeTo = g_stabKeep[2]; g_c.twistSmooth = g_stabKeep[3]; g_c.elbowSmooth = g_stabKeep[4]; }
+    g_armStab = on;
+}
 float ArmSmooth() { return g_c.armSmooth; }
 void SetArmSmooth(float s) { g_c.armSmooth = s; }
 // v231: compare the arm bones in the skeleton now with what the mod wrote: count differing bones, worst bone and size
