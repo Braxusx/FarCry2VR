@@ -1,5 +1,6 @@
 // game.cpp - see game.h
 #include "game.h"
+#include "../../mod/src/common/xr_runtime_probe.h"
 #include "zip.h"
 #include "payload_ids.h"
 extern "C" {
@@ -431,7 +432,13 @@ bool Launch(const Game& g, const LaunchOptions& o, std::string& err) {
     STARTUPINFOW si{ sizeof si }; PROCESS_INFORMATION pi{};
     std::vector<wchar_t> buf(cmd.begin(), cmd.end()); buf.push_back(0);
     Log("launch: %s (core limit %d)", Narrow(cmd).c_str(), o.coreLimit);
-    if (!CreateProcessW(exe.c_str(), buf.data(), nullptr, nullptr, FALSE, CREATE_SUSPENDED, nullptr, g.bin.c_str(), &si, &pi)) { err = "Couldn't start the game: " + ErrText(GetLastError()); Log("%s", err.c_str()); return false; }
+    // v1.0.2: a chosen OpenXR runtime goes to the game through XR_RUNTIME_JSON (inherited by the game only)
+    bool envSet = false;
+    if (!o.xrRuntime.empty() && Exists(o.xrRuntime)) { SetEnvironmentVariableW(L"XR_RUNTIME_JSON", o.xrRuntime.c_str()); envSet = true; Log("launch: OpenXR runtime %s", Narrow(o.xrRuntime).c_str()); }
+    BOOL created = CreateProcessW(exe.c_str(), buf.data(), nullptr, nullptr, FALSE, CREATE_SUSPENDED, nullptr, g.bin.c_str(), &si, &pi);
+    DWORD cerr = GetLastError();
+    if (envSet) SetEnvironmentVariableW(L"XR_RUNTIME_JSON", nullptr);
+    if (!created) { err = "Couldn't start the game: " + ErrText(cerr); Log("%s", err.c_str()); return false; }
     // the game doesn't start on more than 16 logical processors: keep it to the first coreLimit of them
     DWORD_PTR procMask = 0, sysMask = 0;
     if (o.coreLimit > 0 && GetProcessAffinityMask(pi.hProcess, &procMask, &sysMask)) {
@@ -466,6 +473,11 @@ std::wstring CollectLogs(const Game& g, std::string& err) {
           for (UINT i = 0; f->EnumAdapters1(i, &a) == S_OK; ++i) { DXGI_ADAPTER_DESC1 d; a->GetDesc1(&d); info += "GPU " + std::to_string(i) + ": " + Narrow(d.Description) + " (" + std::to_string((unsigned)(d.DedicatedVideoMemory >> 20)) + " MB)\r\n"; a->Release(); }
           f->Release(); } }
     info += "OpenXR runtime: " + Narrow(RegString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Khronos\\OpenXR\\1", L"ActiveRuntime", KEY_WOW64_64KEY)) + "\r\n";
+    {   xrprobe::Runtime a = xrprobe::Active32();   // v1.0.2: what the 32-bit game actually gets
+        info += "OpenXR runtime for 32-bit apps: " + (a.json.empty() ? std::string("(none registered)") : Narrow(a.json)) + " (" + xrprobe::BitsText(a.bits) + ")\r\n";
+        for (auto& r : xrprobe::Installed()) info += "  installed: " + Narrow(r.json) + " (" + xrprobe::BitsText(r.bits) + ")\r\n";
+        std::wstring pick = GetPref(L"Launch", L"XrRuntime", L"");
+        info += "Launcher OpenXR runtime choice: " + (pick.empty() ? std::string("Windows default") : Narrow(pick)) + "\r\n"; }
     info += "Game: " + Narrow(g.root) + " (" + (g.store == StoreSteam ? "Steam" : g.store == StoreGog ? "GOG" : "other") + ", Dunia " + (g.build == BuildSteam ? "Steam" : g.build == BuildGog ? "GOG" : "unknown") + ")\r\n";
     State s = Check(g);
     info += "Mod installed: " + std::string(s.installed ? "yes " + s.installedVersion : "no") + ", FarCry2VR.exe: " + (s.vrExe ? "yes" : "no") + ", other dinput8: " + (s.foreignDinput ? "yes" : "no") + "\r\n";

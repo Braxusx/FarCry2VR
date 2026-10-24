@@ -25,10 +25,13 @@ struct Config {
     int   flashlight = 0;      // Flashlight: left hand at the left temple + left trigger switches a head-mounted light on / off (v220)
     float flashRadius = 0.13f; // FlashlightGestureRadius: how close (m) the left hand must be to the temple
     int   macheteTrigger = 0;  // MacheteTriggerAttack: 1 = the right trigger also does the game's machete attack (its animation sways the camera)
+    int   moveDir = 0;         // MovementDirection (v231): 0 = the left stick walks where the body faces, 1 = where the head looks
     int   sightNeedsGrip = 1;   // ScopeNeedsGrip: sights only with the left hand on the weapon   // SightOnDistance / SightOffDistance: right hand to head (m)
 };
 void Install(HMODULE dunia, const Config& c);
 bool Active();   // VR controllers currently drive the game's gamepad
+void SetBodyForward(float x, float z, bool valid);   // v231: the body's forward in tracking space (the recenter forward), horizontal
+float LastMoveStick();           // v231: magnitude of the last on-foot left stick (0..1)
 void SetLeftGripClaimed(bool c);
 void PulseUse();
 bool SightsUp();

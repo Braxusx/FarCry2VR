@@ -47,7 +47,7 @@ Report Uninstall(const Game& g, bool deleteIni);
 // runs the operation in an elevated copy of the launcher when the folder needs admin rights
 Report RunOperation(const Game& g, const char* op, bool deleteIni);
 
-struct LaunchOptions { bool godMode = false, unlimitedAmmo = false, noJam = false, allWeapons = false, skipIntro = true; int coreLimit = 16; };
+struct LaunchOptions { bool godMode = false, unlimitedAmmo = false, noJam = false, allWeapons = false, skipIntro = true; int coreLimit = 16; std::wstring xrRuntime; };   // xrRuntime: OpenXR manifest for the game (XR_RUNTIME_JSON), empty = Windows default
 bool Launch(const Game& g, const LaunchOptions& o, std::string& err);
 
 // launcher preferences (%LOCALAPPDATA%\FarCry2VR\launcher.ini)

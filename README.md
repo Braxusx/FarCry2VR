@@ -4,7 +4,7 @@ A native stereo VR mod for **Far Cry 2** (Dunia engine) with full motion control
 
 The game renders each eye itself through its own engine, with the headset's per-eye projection, so the image has correct depth and scale. It is not a 3D re-projection. Output goes through **OpenXR**. Development and testing used a Meta Quest 3 through Virtual Desktop (VDXR), but any OpenXR runtime should work.
 
-**Version 1.0.1**, mod build v230. Supports the **Steam** and **GOG** versions with the same DLL.
+**Version 1.0.2**, mod build v231. Supports the **Steam** and **GOG** versions with the same DLL.
 
 ## Features
 
@@ -13,6 +13,8 @@ The game renders each eye itself through its own engine, with the headset's per-
   - one wide culling camera shared by both eyes;
   - sun shadows shared between the eyes, which brings busy towns to a solid 90 fps.
 - **Head tracking,** with recentering (hold the left stick for 1 s, or F8).
+- **Room-scale walking (optional):** walking around your room moves you in the game; walls stop you, and leaning stays leaning.
+- **Head-based movement (optional):** the left stick walks you where you look instead of where your body faces.
 - **Motion controls:** the Quest controllers drive the game's own gamepad input, so every menu, vehicle and button prompt works.
   - **Weapons in your hands:** each weapon has its own grip pose, two-handed holds, and aiming down sights and scopes by raising the gun to your eye.
   - **Body holsters:** rifle over the right shoulder, pistol at the right hip, machete in front of the chest.
@@ -42,6 +44,13 @@ The game renders each eye itself through its own engine, with the headset's per-
 - An OpenXR runtime: Virtual Desktop (VDXR), SteamVR, Meta Quest Link and others.
 - For DLSS, an NVIDIA RTX GPU. Without one, the mod runs without DLSS.
 
+## No picture in the headset? Check the OpenXR runtime (Pimax and others)
+
+Far Cry 2 is a **32-bit** game, so it needs an OpenXR runtime that supports 32-bit apps. Some runtimes only install a 64-bit version (for example Pimax's own PiOpenXR). The game then starts on the monitor, but the headset stays dark and `fc2vr.log` shows `xrCreateInstance failed: -51`.
+
+- The launcher's **Overview** page has a **VR runtime** section. It says whether the runtime set up for 32-bit games is usable, and lets you pick any installed runtime that supports 32-bit games for Far Cry 2 only.
+- Runtimes known to work: Virtual Desktop (VDXR), and SteamVR 2.17 or later set as the OpenXR runtime in SteamVR's settings. Pimax headsets can run through SteamVR.
+
 ## Set Far Cry 2 to DirectX 10 (required)
 
 Far Cry 2 can run in DirectX 9 or DirectX 10. **The VR mod only works in DirectX 10.** If the game starts on the monitor but nothing appears in the headset, the game is most likely in DirectX 9 mode. Use any one of these ways to switch:
@@ -64,8 +73,8 @@ Then send the launcher's **Collect logs** zip: it now includes the frame pacing,
 
 ## Install
 
-1. Download `FarCry2VR-1.0.1.zip` from the [Releases](../../releases) page and unzip it.
-2. Run `FarCry2VR-Launcher_1.0.1.exe`, pick your Far Cry 2 folder (Steam or GOG), and press **Install**.
+1. Download `FarCry2VR-1.0.2.zip` from the [Releases](../../releases) page and unzip it.
+2. Run `FarCry2VR-Launcher_1.0.2.exe`, pick your Far Cry 2 folder (Steam or GOG), and press **Install**.
 3. Make sure the game is set to **DirectX 10** (see above).
 4. Start your OpenXR runtime (for example Virtual Desktop), then start the game from the launcher.
 

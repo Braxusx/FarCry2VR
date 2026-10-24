@@ -211,6 +211,22 @@ void CancelPendingInput() {
     InterlockedExchange(&g_holsterReq,0); InterlockedExchange(&g_selectReq,0);
     InterlockedExchange(&g_recapReq,0); InterlockedExchange(&g_mapLiftReq,0); InterlockedExchange(&g_recenterReq,0);
 }
+// v231 head-based movement: the body's forward in tracking space (set by the render thread every frame)
+static volatile float g_bodyFx = 0, g_bodyFz = -1; static volatile LONG g_bodyValid = 0; static volatile float g_moveMag = 0;
+void SetBodyForward(float x, float z, bool valid) { g_bodyFx = x; g_bodyFz = z; InterlockedExchange(&g_bodyValid, valid ? 1 : 0); }
+float LastMoveStick() { return g_moveMag; }
+// stick (x right, y forward) given in the head's frame -> the body's frame (what the game walks along)
+static void StickToHead(float& sx, float& sy, const XrPosef& head) {
+    const XrQuaternionf& q = head.orientation;
+    float fx = -2.0f * (q.x * q.z + q.w * q.y), fz = -(1.0f - 2.0f * (q.x * q.x + q.y * q.y));   // head forward (0,0,-1) rotated, horizontal
+    float n = sqrtf(fx * fx + fz * fz); if (n < 0.2f) return;   // looking straight up / down: keep the body's frame
+    fx /= n; fz /= n;
+    float bx = g_bodyFx, bz = g_bodyFz; float bn = sqrtf(bx * bx + bz * bz); if (bn < 0.5f) return; bx /= bn; bz /= bn;
+    float rx = -bz, rz = bx;                 // the body's right (as the recenter's rightH)
+    float hx = fx * rx + fz * rz, hy = fx * bx + fz * bz;   // the head's forward in the body frame (x right, y forward)
+    float x = sx * hy + sy * hx, y = -sx * hx + sy * hy;
+    sx = x; sy = y;
+}
 static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head, bool headValid) {
     memset(&g, 0, sizeof g);
     xr::HandState hm[2];
@@ -248,7 +264,9 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         return;
     }
     // left hand
-    g.sThumbLX = Axis(L.stick.x); g.sThumbLY = Axis(L.stick.y);
+    {   float sx = L.stick.x, sy = L.stick.y;
+        if (g_c.moveDir == 1 && headValid && g_bodyValid) StickToHead(sx, sy, head);
+        g.sThumbLX = Axis(sx); g.sThumbLY = Axis(sy); g_moveMag = sqrtf(sx * sx + sy * sy); }
     if (L.stickClick) b |= XINPUT_GAMEPAD_LEFT_THUMB;      // sprint
     if (L.btn1 && !g_menuMode) b |= XINPUT_GAMEPAD_Y;     // X: interact / use (E) - doors, turrets, weapons on the ground
     { auto& held = g_history.gadgetHeld; auto& delayed = g_history.gadgetDelayed; auto& at = g_history.gadgetAt;   // map / gadget

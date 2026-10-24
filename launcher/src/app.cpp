@@ -2,6 +2,7 @@
 // The launcher's design follows the Dishonored VR launcher (GingasVR, zlib licence); this is a separate
 // implementation for Far Cry 2 with its own theme (theme.cpp).
 #include "game.h"
+#include "../../mod/src/common/xr_runtime_probe.h"
 #include "theme.h"
 #include "payload_ids.h"
 #include "imgui.h"
@@ -57,6 +58,8 @@ struct App {
     LaunchOptions launch;
     // optional features (mirrors fc2vr.ini)
     bool optClimb = false, optNpc = false, optDot = true, optSteady = true, optFlash = false, optNoFilter = false, optNoRim = false;
+    // v1.0.2: OpenXR runtimes as a 32-bit game sees them
+    std::vector<xrprobe::Runtime> runtimes; xrprobe::Runtime active32; bool rtScanned = false;
 } g_app;
 static const Game& g_app_game_for_settings() { return g_app.game; }
 
@@ -75,6 +78,7 @@ static const SOpt kPreset[] = { { "Transformer K", "11" }, { "Transformer J", "1
 static const SOpt kSnap[] = { { "Smooth turning", "0" }, { "Snap 30 degrees", "30" }, { "Snap 45 degrees", "45" }, { "Snap 60 degrees", "60" }, { "Snap 90 degrees", "90" } };
 static const SOpt kCull[] = { { "Wide view, full detail (recommended)", "1" }, { "Wide view, less distant detail (fastest)", "0" }, { "Game's own camera (edges may pop in)", "2" }, { "Experimental", "3" } };
 static const SOpt kShadowRes[] = { { "Game's own (2048)", "0" }, { "High (2720)", "2720" } };
+static const SOpt kMoveDir[] = { { "Where your body faces", "0" }, { "Where you look (head)", "1" } };
 static const SOpt kCross[] = { { "None", "0" }, { "Duplex", "1" }, { "Duplex with mil dots", "2" } };
 static const Setting kSettings[] = {
     // Display
@@ -94,6 +98,8 @@ static const Setting kSettings[] = {
     { 0, "Menus & HUD", L"ScopeCrosshair", "Scope reticle", nullptr, SCombo, 0, 0, nullptr, 0, kCross, 3, "2" },
     { 0, "Menus & HUD", L"HeightOffset", "View height adjustment", "Added to your real height (negative = lower).", SSlider, -0.3f, 0.3f, "%+.2f m", 1, nullptr, 0, "0.0" },
     // Controls
+    { 1, "Movement", L"MovementDirection", "Walking direction", "Which way the left stick walks you: the way your body faces, or the way your head looks.", SCombo, 0, 0, nullptr, 0, kMoveDir, 2, "0" },
+    { 1, "Movement", L"RoomScale", "Room-scale walking", "Walking around your room moves you in the game too (walls stop you). Leaning stays leaning.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "0" },
     { 1, "Turning", L"SnapTurn", "Turning", "Right stick left / right.", SCombo, 0, 0, nullptr, 0, kSnap, 5, "0" },
     { 1, "Turning", L"TurnFullSpeed", "Full-speed smooth turning", "Any clear push turns at full speed; off = speed follows how far you push.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
     { 1, "Turning", L"TurnStickPitch", "Right stick also tilts the view", "Normally your head does that.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "0" },
@@ -125,6 +131,7 @@ static void LoadPrefs() {
     o.noJam = GetPref(L"Cheats", L"NoGunJam", L"0") == L"1"; o.allWeapons = GetPref(L"Cheats", L"UnlockAllWeapons", L"0") == L"1";
     o.skipIntro = GetPref(L"Cheats", L"SkipIntroMovies", L"1") == L"1";
     o.coreLimit = _wtoi(GetPref(L"Launch", L"CoreLimit", L"16").c_str()); if (o.coreLimit < 0) o.coreLimit = 16;
+    o.xrRuntime = GetPref(L"Launch", L"XrRuntime", L"");
 }
 static void SavePrefs() {
     LaunchOptions& o = g_app.launch;
@@ -151,7 +158,50 @@ static void Rescan() {
     g_app.games = FindGames(); g_app.gameIdx = g_app.games.empty() ? -1 : 0;
     if (g_app.gameIdx >= 0) SelectGame(g_app.games[0]); else { g_app.game = Game{}; g_app.state = State{}; }
 }
-static void Refresh() { if (g_app.game.valid) { g_app.state = Check(g_app.game); ReadOptional(); } g_app.running = GameRunning(); }
+static void StatusLine(char kind, const char* text);
+static void ScanRuntimes() { g_app.active32 = xrprobe::Active32(); g_app.runtimes = xrprobe::Installed(); g_app.rtScanned = true; }
+static void Refresh() { if (g_app.game.valid) { g_app.state = Check(g_app.game); ReadOptional(); } g_app.running = GameRunning(); ScanRuntimes(); }
+static std::string RuntimeLabel(const xrprobe::Runtime& r) {
+    std::string n = r.name.empty() ? xrprobe::N(r.json) : r.name + "  (" + xrprobe::N(r.json) + ")";
+    return n;
+}
+static void RuntimeSection() {
+    if (!g_app.rtScanned) ScanRuntimes();
+    theme::Section("VR runtime");
+    LaunchOptions& o = g_app.launch;
+    const xrprobe::Runtime* pick = nullptr;
+    for (auto& r : g_app.runtimes) if (!o.xrRuntime.empty() && !_wcsicmp(r.json.c_str(), o.xrRuntime.c_str())) pick = &r;
+    if (!o.xrRuntime.empty() && (!pick || pick->bits != xrprobe::Bits32)) {
+        StatusLine('!', "The OpenXR runtime picked below is no longer usable; the game uses the Windows default until you pick another.");
+    }
+    if (pick && pick->bits == xrprobe::Bits32) {
+        std::string t = "The game uses " + RuntimeLabel(*pick) + " (32-bit).";
+        StatusLine('+', t.c_str());
+    } else if (g_app.active32.bits == xrprobe::Bits32) {
+        std::string t = "OpenXR runtime: " + RuntimeLabel(g_app.active32) + " (32-bit, ready).";
+        StatusLine('+', t.c_str());
+    } else {
+        bool any = false; for (auto& r : g_app.runtimes) if (r.bits == xrprobe::Bits32) any = true;
+        std::string t = "Far Cry 2 is a 32-bit game and needs an OpenXR runtime with 32-bit support. ";
+        if (g_app.active32.json.empty()) t += "No OpenXR runtime is set up for 32-bit games on this PC, so the headset would stay dark.";
+        else t += "The one set up for 32-bit games (" + xrprobe::N(g_app.active32.json) + ") is " + xrprobe::BitsText(g_app.active32.bits) + ", so the headset would stay dark.";
+        t += any ? " Pick a 32-bit runtime below." : " Use Virtual Desktop, or update SteamVR (2.17 or later) and set it as the OpenXR runtime in its settings. Pimax: run the headset through SteamVR.";
+        StatusLine('!', t.c_str());
+    }
+    std::string cur = pick ? RuntimeLabel(*pick) : "Windows default";
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##xrruntime", cur.c_str())) {
+        if (ImGui::Selectable("Windows default", o.xrRuntime.empty())) { o.xrRuntime.clear(); SetPref(L"Launch", L"XrRuntime", L""); }
+        for (auto& r : g_app.runtimes) {
+            if (r.bits != xrprobe::Bits32) continue;
+            std::string l = RuntimeLabel(r);
+            if (ImGui::Selectable(l.c_str(), pick == &r)) { o.xrRuntime = r.json; SetPref(L"Launch", L"XrRuntime", r.json); }
+        }
+        ImGui::EndCombo();
+    }
+    theme::Wrapped("Only runtimes that can run a 32-bit game are listed. \"Windows default\" uses the one your VR software set up.", theme::Faded());
+    if (theme::Button("Check again")) ScanRuntimes();
+}
 
 static void StartOp(const char* op, bool deleteIni) {
     if (g_app.busy) return;
@@ -263,6 +313,7 @@ static void PageOverviewDraw(HWND hwnd) {
             ImGui::SameLine(); if (theme::Button("Cancel")) g_app.confirmUninstall = false;
             ImGui::Unindent(14 * g_scale);
         }
+        RuntimeSection();
         theme::Section("Shortcuts");
         if (theme::Button("Create desktop shortcut")) DesktopShortcut();
         ImGui::SameLine(); theme::Wrapped("A shortcut to this launcher. Play starts the game in VR from here.", theme::Faded());

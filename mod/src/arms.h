@@ -8,6 +8,17 @@
 
 namespace arms {
 struct Config {
+    float twistFadeFrom = -1.0f, twistFadeTo = 0.0f;   // UpperArmTwistFadeFrom / To (v231): elbow bend (deg) where the upper-arm twist starts / is full
+    float twistSmooth = 0.0f;
+    float softIk = 0.0f;         // SoftIkStart (v231): share of the arm length where the shoulder starts easing toward the hand (0 = off)
+    float softIkMaxPull = 0.12f;  // SoftIkMaxShoulderPull (v231): m, for the free left hand
+    float elbowSmooth = 0.0f;    // ElbowSmoothing (v231): seconds    // UpperArmTwistSmoothing (v231): seconds
+    float armSmooth = 0.0f;      // ArmSmoothing (v231): seconds; the animated arm bones the solve starts from are smoothed (0 = off)
+    int bodyClock = 1;            // HandsOnBodyClock (v231): hands follow the body's movement since the frame was published
+    int roomScale = 0;            // RoomScale (v231): real steps move the player (the body follows the head)
+    float roomLeash = 0.10f;      // RoomScaleLeash: the head may move this far (m) from the body before the body follows (leaning)
+    float roomMaxSpeed = 4.0f;    // RoomScaleMaxSpeed: m/s the body may be moved at
+    float roomRadius = 0.30f;     // RoomScaleWallDistance: the body stops this far (m) short of a wall
     int weaponInHand = 1;         // WeaponInHand
     int aimFromController = 1;    // AimFromController
     int dump = 1;                 // DumpSkeleton: log the player skeleton's bone list once
@@ -99,6 +110,7 @@ struct Frame {
     void* weapon = nullptr;   // instance identity, not a model/cache generation lease
     fc2vr::tracking::GameBasis game{};
     uint64_t frameSequence = 0;   // diagnostic application-frame stamp, not a freshness lease
+    float bonePub[3] = {}; bool bonePubValid = false;   // v231: the Camera bone when this frame was published (body clock)
     float camRows[3][3];          // RAW native camera rows (incl. pitch): bone-axis calibration only
     float aimO[3], aimR[3], aimU[3], aimB[3];   // right controller aim pose (ref)
     float gripO[3];               // right controller grip position (ref)
@@ -121,9 +133,20 @@ struct FrameUsage {
 };
 bool ReadFrameUsage(FrameUsage& out);
 bool CamBonePos(float out[3]);
+bool BodyClock(); void SetBodyClock(bool on);
+long CamBoneSeq();
+bool DiagArmLive(int* differ, int* worstBone, float* worstMm);   // v231
+float DiagForeStep();
+void DiagArm(float pos[10], float rot[10]);   // v231: per-frame change of R/L forearm, R/L upper arm, R/L forearm twist (mm, deg)   // v231: largest per-frame turn of the animated forearms (deg)
+float ArmSmooth(); void SetArmSmooth(float s);
+bool ArmStability(); void SetArmStability(bool on);   // v231 F4 A/B
+bool DiagLiveHand(float out[3]);
+bool DiagHand(float applyW[3], float liveW[3], float hand[3], float target[3], long* seq);   // v231 jitter diagnostic                                  // v231: skeleton updates so far (diagnostic)   // v231 (F4 test toggle)
 void SetMonoCams(const float game[16], const float posed[16]);
 bool MonoTarget();
-void SetHeadWorld(const float pos[3], const float dir[3], const float up[3]);   // v220: the head in game world space (flashlight)
+void SetHeadWorld(const float pos[3], const float dir[3], const float up[3]);
+void SetRoomScaleOffset(const float off[3], bool valid);   // v231 render thread: the head's horizontal offset from the body, game space
+bool TakeRoomScaleMoved(float out[3]);                    // v231 render thread: how far the body was moved since the last call (game space)   // v220: the head in game world space (flashlight)
 bool MonoEquipped();   // v218: the game has the monocular out (in the hand)   // v217: something taggable is in the monocular's ring (the game's binoculars target)
 void MonoRenderFix(const float game[16], const float posed[16]);   // v216: move the drawn monocular with the scope camera (same frame)   // v215: the game's render camera world and the head-aimed scope camera world
 bool PlayerState(float pos[3], float* heading);   // player entity position and the game's heading (radians)
