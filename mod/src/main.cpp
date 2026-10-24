@@ -2343,6 +2343,15 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
                 (frame.game.P.x - raw.x) * 1000.0f, (frame.game.P.y - raw.y) * 1000.0f, (frame.game.P.z - raw.z) * 1000.0f,
                 (bone.x - raw.x) * 1000.0f, (bone.y - raw.y) * 1000.0f, (bone.z - raw.z) * 1000.0f, sqrtf(db.x * db.x + db.y * db.y + db.z * db.z) * 1000.0f, seq - lastSeq,
                 (pp.x - raw.x) * 1000.0f, (pp.y - raw.y) * 1000.0f, (pp.z - raw.z) * 1000.0f, sqrtf(dp.x * dp.x + dp.y * dp.y + dp.z * dp.z) * 1000.0f, plOk ? "" : " (no player)", controls::VehicleMode());
+            {   float aw[3], lw[3], hd3[3], tg[3]; long ds = 0;
+                if (arms::DiagHand(aw, lw, hd3, tg, &ds)) {
+                    V3 eye{ frame.game.P.x, frame.game.P.y, frame.game.P.z };
+                    LOG("mt2 W(apply)-W(now) %+6.1f %+6.1f %+6.1f mm | hand-eye %+7.1f %+7.1f %+7.1f mm | hand-target %+6.1f %+6.1f %+6.1f mm | apply #%ld",
+                        (aw[0] - lw[0]) * 1000.0f, (aw[1] - lw[1]) * 1000.0f, (aw[2] - lw[2]) * 1000.0f,
+                        (hd3[0] - eye.x) * 1000.0f, (hd3[1] - eye.y) * 1000.0f, (hd3[2] - eye.z) * 1000.0f,
+                        (hd3[0] - tg[0]) * 1000.0f, (hd3[1] - tg[1]) * 1000.0f, (hd3[2] - tg[2]) * 1000.0f, ds);
+                }
+            }
             lastSeq = seq; lastRaw = raw; lastBone = bone; lastPl = pp;
             if (--g_motionTrace == 0) { LOG("motion trace: done"); }
         }

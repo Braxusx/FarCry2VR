@@ -58,6 +58,7 @@ static CRITICAL_SECTION g_cs; static bool g_csInit = false;
 static Frame g_frame;                               // latest from the render thread
 static FrameUsage g_frameUsage;
 static volatile uint8_t* g_playerSkel = nullptr;    // player's skeleton object (bone array +0x20, count +0x2C)
+static float g_dgW[3], g_dgHand[3], g_dgTarget[3]; static long g_dgSeq = 0;   // v231 jitter diagnostic
 static volatile uint8_t* g_playerGfx = nullptr;     // its graphic component (world matrix at +0x170)
 static int g_slot[21];                              // bone-helper slot -> bone index (Camera 0, R Hand 12, R Clavicle 15, L Clavicle 19)
 struct PhoneDiag { volatile LONG calls, player, applied, noFrame, noHand, camUpd; void* other[4]; int otherN[4]; LONG otherCalls[4]; };
@@ -1283,6 +1284,9 @@ static void Apply(uint8_t* skel) {
         dst[3] = w3[0]; dst[7] = w3[1]; dst[11] = w3[2]; dst[15] = w3[3];
     }
     InterlockedIncrement(&g_applied);
+    {   // v231 diagnostic: world matrix used, drawn right hand and its controller target (world)
+        Lock(); for (int k = 0; k < 3; ++k) { g_dgW[k] = W.m[3][k]; g_dgHand[k] = Bw[rh].m[3][k]; g_dgTarget[k] = grip[k]; } ++g_dgSeq; Unlock();
+    }
     Lock(); g_frameUsage.haveApplied = true; g_frameUsage.appliedSequence = f.frameSequence;
     ++g_frameUsage.appliedCalls; g_frameUsage.appliedThread = GetCurrentThreadId(); Unlock();
 }
@@ -3195,6 +3199,12 @@ void SetMonoCams(const float game[16], const float posed[16]) {
     memcpy(g_monoG.m, game, 64); memcpy(g_monoP.m, posed, 64);
     M4* ms[2] = { &g_monoG, &g_monoP }; for (M4* m : ms) { m->m[0][3] = m->m[1][3] = m->m[2][3] = 0; m->m[3][3] = 1; }
     g_monoCamTick = GetTickCount(); Unlock();
+}
+bool DiagHand(float applyW[3], float liveW[3], float hand[3], float target[3], long* seq) {
+    uint8_t* gfx = (uint8_t*)g_playerGfx; if (!g_csInit || !gfx || IsBadReadPtr(gfx + 0x170, 64)) return false;
+    const float* m = (const float*)(gfx + 0x170); liveW[0] = m[12]; liveW[1] = m[13]; liveW[2] = m[14];
+    Lock(); memcpy(applyW, g_dgW, 12); memcpy(hand, g_dgHand, 12); memcpy(target, g_dgTarget, 12); *seq = g_dgSeq; Unlock();
+    return true;
 }
 long CamBoneSeq() { return g_camBoneSeq; }
 bool BodyClock() { return g_c.bodyClock != 0; }
