@@ -2358,7 +2358,9 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
                 if (arms::DiagHand(aw, lw, hd3, tg, &ds)) {
                     V3 eye{ frame.game.P.x, frame.game.P.y, frame.game.P.z };
                     float lh[3] = { NAN, NAN, NAN }; arms::DiagLiveHand(lh);
-                    LOG("mt3 animated forearm turned %.2f deg since the last frame (arm smoothing %.2f s)", arms::DiagForeStep(), arms::ArmSmooth());
+                    { float ap[6], ar[6]; arms::DiagArm(ap, ar);
+                      LOG("mt3 written bones vs camera, change since last frame: R fore %.1f mm %.2f deg | L fore %.1f mm %.2f deg | R upper %.1f mm %.2f deg | L upper %.1f mm %.2f deg | R twist %.1f mm %.2f deg | L twist %.1f mm %.2f deg",
+                          ap[0], ar[0], ap[1], ar[1], ap[2], ar[2], ap[3], ar[3], ap[4], ar[4], ap[5], ar[5]); }
                     LOG("mt2 W(apply)-W(now) %+6.1f %+6.1f %+6.1f mm | hand-eye %+7.1f %+7.1f %+7.1f mm | hand-target %+6.1f %+6.1f %+6.1f mm | apply #%ld",
                         (aw[0] - lw[0]) * 1000.0f, (aw[1] - lw[1]) * 1000.0f, (aw[2] - lw[2]) * 1000.0f,
                         (hd3[0] - eye.x) * 1000.0f, (hd3[1] - eye.y) * 1000.0f, (hd3[2] - eye.z) * 1000.0f,
