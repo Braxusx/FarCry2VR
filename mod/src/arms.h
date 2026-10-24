@@ -8,6 +8,7 @@
 
 namespace arms {
 struct Config {
+    float armSmooth = 0.12f;      // ArmSmoothing (v231): seconds; the animated arm bones the solve starts from are smoothed (0 = off)
     int bodyClock = 1;            // HandsOnBodyClock (v231): hands follow the body's movement since the frame was published
     int roomScale = 0;            // RoomScale (v231): real steps move the player (the body follows the head)
     float roomLeash = 0.10f;      // RoomScaleLeash: the head may move this far (m) from the body before the body follows (leaning)
@@ -129,6 +130,8 @@ bool ReadFrameUsage(FrameUsage& out);
 bool CamBonePos(float out[3]);
 bool BodyClock(); void SetBodyClock(bool on);
 long CamBoneSeq();
+float DiagForeStep();   // v231: largest per-frame turn of the animated forearms (deg)
+float ArmSmooth(); void SetArmSmooth(float s);
 bool DiagLiveHand(float out[3]);
 bool DiagHand(float applyW[3], float liveW[3], float hand[3], float target[3], long* seq);   // v231 jitter diagnostic                                  // v231: skeleton updates so far (diagnostic)   // v231 (F4 test toggle)
 void SetMonoCams(const float game[16], const float posed[16]);

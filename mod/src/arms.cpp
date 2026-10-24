@@ -58,7 +58,7 @@ static CRITICAL_SECTION g_cs; static bool g_csInit = false;
 static Frame g_frame;                               // latest from the render thread
 static FrameUsage g_frameUsage;
 static volatile uint8_t* g_playerSkel = nullptr;    // player's skeleton object (bone array +0x20, count +0x2C)
-static float g_dgW[3], g_dgHand[3], g_dgTarget[3]; static long g_dgSeq = 0;   // v231 jitter diagnostic
+static float g_dgW[3], g_dgHand[3], g_dgTarget[3]; static long g_dgSeq = 0; static float g_dgForeStep = 0;   // v231 jitter diagnostic
 static volatile uint8_t* g_playerGfx = nullptr;     // its graphic component (world matrix at +0x170)
 static int g_slot[21];                              // bone-helper slot -> bone index (Camera 0, R Hand 12, R Clavicle 15, L Clavicle 19)
 struct PhoneDiag { volatile LONG calls, player, applied, noFrame, noHand, camUpd; void* other[4]; int otherN[4]; LONG otherCalls[4]; };
@@ -83,6 +83,29 @@ static float g_foregripRef[3]; static bool g_foregripValid = false, g_oneHanded 
 static float g_shotO[3], g_shotF[3], g_camFwdNow[3], g_camRefO[3], g_camRefD[3]; static bool g_shotValid = false;
 static fc2vr::authority::Stamp g_shotSource; static void* g_shotWeapon = nullptr;
 
+
+// v231 rotation helpers (row-vector matrices: rows 0..2 are the basis vectors)
+static void MatQuat(const M4& M, float* q) {
+    float r[3][3];
+    for (int i = 0; i < 3; ++i) { float l = sqrtf(M.m[i][0] * M.m[i][0] + M.m[i][1] * M.m[i][1] + M.m[i][2] * M.m[i][2]); if (l < 1e-8f) l = 1; for (int j = 0; j < 3; ++j) r[i][j] = M.m[i][j] / l; }
+    float t = r[0][0] + r[1][1] + r[2][2];
+    if (t > 0) { float s = sqrtf(t + 1.0f) * 2; q[3] = 0.25f * s; q[0] = (r[1][2] - r[2][1]) / s; q[1] = (r[2][0] - r[0][2]) / s; q[2] = (r[0][1] - r[1][0]) / s; }
+    else if (r[0][0] > r[1][1] && r[0][0] > r[2][2]) { float s = sqrtf(1.0f + r[0][0] - r[1][1] - r[2][2]) * 2; q[3] = (r[1][2] - r[2][1]) / s; q[0] = 0.25f * s; q[1] = (r[1][0] + r[0][1]) / s; q[2] = (r[2][0] + r[0][2]) / s; }
+    else if (r[1][1] > r[2][2]) { float s = sqrtf(1.0f + r[1][1] - r[0][0] - r[2][2]) * 2; q[3] = (r[2][0] - r[0][2]) / s; q[0] = (r[1][0] + r[0][1]) / s; q[1] = 0.25f * s; q[2] = (r[2][1] + r[1][2]) / s; }
+    else { float s = sqrtf(1.0f + r[2][2] - r[0][0] - r[1][1]) * 2; q[3] = (r[0][1] - r[1][0]) / s; q[0] = (r[2][0] + r[0][2]) / s; q[1] = (r[2][1] + r[1][2]) / s; q[2] = 0.25f * s; }
+}
+static M4 QuatMat(const float* q) {
+    float x = q[0], y = q[1], z = q[2], w = q[3]; M4 M{};
+    M.m[0][0] = 1 - 2 * (y * y + z * z); M.m[0][1] = 2 * (x * y + z * w); M.m[0][2] = 2 * (x * z - y * w);
+    M.m[1][0] = 2 * (x * y - z * w); M.m[1][1] = 1 - 2 * (x * x + z * z); M.m[1][2] = 2 * (y * z + x * w);
+    M.m[2][0] = 2 * (x * z + y * w); M.m[2][1] = 2 * (y * z - x * w); M.m[2][2] = 1 - 2 * (x * x + y * y);
+    M.m[3][3] = 1; return M;
+}
+static void QuatNlerp(const float* a, const float* b, float k, float* o) {
+    float d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3], sg = d < 0 ? -1.0f : 1.0f;
+    for (int i = 0; i < 4; ++i) o[i] = a[i] * (1 - k) + b[i] * sg * k;
+    float l = sqrtf(o[0] * o[0] + o[1] * o[1] + o[2] * o[2] + o[3] * o[3]); if (l < 1e-8f) l = 1; for (int i = 0; i < 4; ++i) o[i] /= l;
+}
 struct Bone { uint32_t hash; uint8_t pad0[12]; float local[16]; float model[16]; int parent; uint8_t locked; uint8_t pad1[11]; };
 static_assert(sizeof(Bone) == 0xA0, "bone stride");
 
@@ -773,6 +796,37 @@ static void Apply(uint8_t* skel) {
                 haveRel = true; relWeapon = g_curWeapon;
             }
         }
+    }
+    // v231 arm smoothing: the game's arm animation steps from frame to frame (a lower animation rate), and the solve
+    // takes the upper arm / forearm / twist bones' roll from it, so the arms twitched while the hands held still.
+    // The animated clavicle, upper arm, forearm and their twist bones are smoothed relative to the camera bone.
+    {
+        static M4 relS[512]; static bool haveS[512]; static double lastT = 0; static void* lastSkel = nullptr;
+        double tn = GetTickCount64() * 1.0; float dt = lastT > 0 ? (float)((tn - lastT) * 0.001) : 0; lastT = tn;
+        if (lastSkel != skel) { for (auto& h : haveS) h = false; lastSkel = skel; }
+        M4 icw; bool ok = Inv(camW, icw);
+        int chain[2][3] = { { g_slot[19], g_slot[18], g_slot[17] }, { g_slot[15], g_slot[14], g_slot[13] } };
+        float stepMax = 0;
+        if (ok) for (int i = 0; i < n && i < 512; ++i) {
+            if (!g_armMask[i]) continue;
+            bool arm = false; int par = bones[i].parent;
+            for (auto& c : chain) for (int b : c) if (b >= 0 && (i == b || par == b)) arm = true;
+            if (!arm || i == g_slot[12] || i == g_slot[20]) continue;
+            M4 rel = Mul(Banim[i], icw);
+            if (!haveS[i] || dt <= 0 || dt > 0.25f || g_c.armSmooth <= 0.0f) { relS[i] = rel; haveS[i] = true; }
+            else {
+                float k = 1.0f - expf(-dt / g_c.armSmooth);
+                float qa[4], qb[4]; MatQuat(relS[i], qa); MatQuat(rel, qb);
+                if (i == g_slot[13] || i == g_slot[17]) { float d = qa[0] * qb[0] + qa[1] * qb[1] + qa[2] * qb[2] + qa[3] * qb[3]; float ang = 2.0f * acosf(fminf(1.0f, fabsf(d))) * 57.2958f; if (ang > stepMax) stepMax = ang; }
+                float q[4]; QuatNlerp(qa, qb, k, q);
+                M4 r = QuatMat(q);
+                for (int c = 0; c < 3; ++c) { float sc = sqrtf(rel.m[c][0] * rel.m[c][0] + rel.m[c][1] * rel.m[c][1] + rel.m[c][2] * rel.m[c][2]); for (int j = 0; j < 3; ++j) r.m[c][j] *= sc; }
+                for (int j = 0; j < 3; ++j) r.m[3][j] = relS[i].m[3][j] + (rel.m[3][j] - relS[i].m[3][j]) * k;
+                relS[i] = r;
+            }
+            if (g_c.armSmooth > 0.0f) { Banim[i] = Mul(relS[i], camW); Bw[i] = Banim[i]; }
+        }
+        g_dgForeStep = stepMax;
     }
     // v213 monocular: its offset relative to the game's animated right hand, once its raise animation has settled
     if (g_monoAt && !g_monoRelValid && g_monoBone >= 0 && g_monoBone < n && g_monoSince && GetTickCount64() - g_monoSince > 700) {
@@ -3216,6 +3270,9 @@ bool DiagLiveHand(float out[3]) {   // v231: the right hand bone as it is in the
     M4 r = Mul(b, W); for (int k = 0; k < 3; ++k) out[k] = r.m[3][k];
     return std::isfinite(out[0]);
 }
+float DiagForeStep() { return g_dgForeStep; }
+float ArmSmooth() { return g_c.armSmooth; }
+void SetArmSmooth(float s) { g_c.armSmooth = s; }
 long CamBoneSeq() { return g_camBoneSeq; }
 bool BodyClock() { return g_c.bodyClock != 0; }
 void SetBodyClock(bool on) { g_c.bodyClock = on ? 1 : 0; }
