@@ -8,12 +8,12 @@
 
 namespace arms {
 struct Config {
-    float twistFadeFrom = 15.0f, twistFadeTo = 40.0f;   // UpperArmTwistFadeFrom / To (v231): elbow bend (deg) where the upper-arm twist starts / is full
-    float twistSmooth = 0.06f;
-    float softIk = 0.90f;         // SoftIkStart (v231): share of the arm length where the shoulder starts easing toward the hand (0 = off)
+    float twistFadeFrom = -1.0f, twistFadeTo = 0.0f;   // UpperArmTwistFadeFrom / To (v231): elbow bend (deg) where the upper-arm twist starts / is full
+    float twistSmooth = 0.0f;
+    float softIk = 0.0f;         // SoftIkStart (v231): share of the arm length where the shoulder starts easing toward the hand (0 = off)
     float softIkMaxPull = 0.12f;  // SoftIkMaxShoulderPull (v231): m, for the free left hand
-    float elbowSmooth = 0.05f;    // ElbowSmoothing (v231): seconds    // UpperArmTwistSmoothing (v231): seconds
-    float armSmooth = 0.12f;      // ArmSmoothing (v231): seconds; the animated arm bones the solve starts from are smoothed (0 = off)
+    float elbowSmooth = 0.0f;    // ElbowSmoothing (v231): seconds    // UpperArmTwistSmoothing (v231): seconds
+    float armSmooth = 0.0f;      // ArmSmoothing (v231): seconds; the animated arm bones the solve starts from are smoothed (0 = off)
     int bodyClock = 1;            // HandsOnBodyClock (v231): hands follow the body's movement since the frame was published
     int roomScale = 0;            // RoomScale (v231): real steps move the player (the body follows the head)
     float roomLeash = 0.10f;      // RoomScaleLeash: the head may move this far (m) from the body before the body follows (leaning)
