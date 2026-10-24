@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cmath>
 #include <d3dcompiler.h>
+#include "common/xr_runtime_probe.h"
 
 namespace xr {
 
@@ -592,7 +593,21 @@ static bool InstanceImpl(ID3D10Device* dev10) {
     ici.applicationInfo.applicationVersion = 1;
     ici.applicationInfo.apiVersion = XR_API_VERSION_1_0;
     ici.enabledExtensionCount = nExt; ici.enabledExtensionNames = exts;
-    if (!Check(p_xrCreateInstance(&ici, &g_inst), "xrCreateInstance")) return false;
+    {   XrResult cr = p_xrCreateInstance(&ici, &g_inst);
+        if (XR_FAILED(cr)) {   // v231: say which runtime this 32-bit game was given and whether it can load here
+            static bool told = false;
+            if (!told) {
+                told = true;
+                std::wstring src; xrprobe::Runtime a = xrprobe::Active32(&src), b = xrprobe::Active64();
+                LOG("XR: runtime for this 32-bit game (%s): %s -> %s (%s)", xrprobe::N(src).c_str(), a.json.empty() ? "(none)" : xrprobe::N(a.json).c_str(),
+                    a.library.empty() ? "(no library)" : xrprobe::N(a.library).c_str(), xrprobe::BitsText(a.bits));
+                LOG("XR: 64-bit active runtime: %s (%s)", b.json.empty() ? "(none)" : xrprobe::N(b.json).c_str(), xrprobe::BitsText(b.bits));
+                for (auto& r : xrprobe::Installed()) LOG("XR: installed runtime %s: %s", xrprobe::N(r.json).c_str(), xrprobe::BitsText(r.bits));
+                if (cr == XR_ERROR_RUNTIME_UNAVAILABLE || a.bits != xrprobe::Bits32)
+                    LOG("XR: Far Cry 2 is a 32-bit game and needs an OpenXR runtime with 32-bit support (for example Virtual Desktop, or SteamVR 2.17 or later set as the OpenXR runtime). Pick one under Launcher > Display > OpenXR runtime.");
+            }
+        }
+        if (!Check(cr, "xrCreateInstance")) return false; }
     if (!LoadInstanceFuncs()) { snprintf(g_err, sizeof(g_err), "function load failed"); return false; }
     o_xrWaitFrame = p_xrWaitFrame; p_xrWaitFrame = W_xrWaitFrame;
     o_xrEndFrame = p_xrEndFrame; p_xrEndFrame = W_xrEndFrame;

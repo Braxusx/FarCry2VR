@@ -1916,6 +1916,62 @@ static void ClimbUpdate(uint8_t* playerEnt, const Frame& f, float dt) {
     memcpy(holdPos, p, 12); holdValid = true;
 }
 
+
+// ---------------------------------------------------------------- v231 room-scale walking
+// The render thread publishes how far the real head is from the body (horizontal, game space). Past a short leash
+// (leaning) the player's character controller is moved after the head, at most RoomScaleMaxSpeed, and stops
+// RoomScaleWallDistance short of walls (rays at knee and chest height). The amount moved goes back to the render
+// thread, which moves its recenter point by the same distance so the view stays where the head is.
+static float g_rsOff[3] = {}; static DWORD g_rsTick = 0; static bool g_rsValid = false;
+static float g_rsMoved[3] = {};
+void SetRoomScaleOffset(const float off[3], bool valid) { Lock(); memcpy(g_rsOff, off, 12); g_rsValid = valid; g_rsTick = GetTickCount(); Unlock(); }
+bool TakeRoomScaleMoved(float out[3]) {
+    Lock(); memcpy(out, g_rsMoved, 12); g_rsMoved[0] = g_rsMoved[1] = g_rsMoved[2] = 0; Unlock();
+    return out[0] != 0 || out[1] != 0 || out[2] != 0;
+}
+// free distance along a horizontal direction from p at height h above the feet (the player's own body ignored)
+static float RoomScaleFree(const float* p, const float* d, float h, float len, uint8_t* playerEnt) {
+    float from[3] = { p[0], p[1], p[2] + h };
+    float travelled = 0;
+    for (int tries = 0; tries < 3; ++tries) {
+        float hit[3], n[3]; uint32_t key = 0;
+        if (!GroundRayEx(from, d, len - travelled, hit, n, &key)) return len;
+        float dist = Dist(hit, from);
+        Handle* hh = HitEntity(key); uint8_t* ent = hh ? hh->ent : nullptr; HandleRelease(hh);
+        if (ent != playerEnt) return travelled + dist;
+        travelled += dist + 0.02f;   // the player's own body: look past it
+        for (int k = 0; k < 3; ++k) from[k] = hit[k] + d[k] * 0.02f;
+        if (travelled >= len) return len;
+    }
+    return len;
+}
+static void RoomScaleUpdate(uint8_t* playerEnt, float dt) {
+    static int nLog = 0; static double logT = 0, movedSum = 0; static int blocked = 0;
+    if (!g_c.roomScale || dt <= 0 || dt > 0.1f) return;
+    float off[3]; bool valid; DWORD tick;
+    Lock(); memcpy(off, g_rsOff, 12); valid = g_rsValid; tick = g_rsTick; Unlock();
+    if (!valid || GetTickCount() - tick > 200) return;
+    if (g_climbWas || controls::VehicleMode() != 0 || controls::MountedWeapon() || !controls::NormalControls()) return;
+    uint8_t* c = PlayerCharComp(playerEnt); if (!c) return;
+    float len = sqrtf(off[0] * off[0] + off[1] * off[1]);
+    if (len <= g_c.roomLeash || !std::isfinite(len)) return;
+    float d[3] = { off[0] / len, off[1] / len, 0 };
+    float want = len - g_c.roomLeash, cap = g_c.roomMaxSpeed * dt;
+    if (want > cap) want = cap;
+    float p[3]; if (!CharGetPos(c, p)) return;
+    float reach = want + g_c.roomRadius;
+    float free = fminf(RoomScaleFree(p, d, 0.45f, reach, playerEnt), RoomScaleFree(p, d, 1.20f, reach, playerEnt));
+    float step = fminf(want, fmaxf(0.0f, free - g_c.roomRadius));
+    if (step < want - 0.001f) ++blocked;
+    if (step < 0.0005f) return;
+    float np[3] = { p[0] + d[0] * step, p[1] + d[1] * step, p[2] };
+    CharSetPos(c, np);
+    Lock(); g_rsMoved[0] += d[0] * step; g_rsMoved[1] += d[1] * step; Unlock();
+    movedSum += step;
+    double now = GetTickCount64() * 1.0;
+    if (nLog < 40 && now - logT > 5000.0) { ++nLog; logT = now; LOG("room-scale: body followed the head %.2f m in the last 5 s (head %.2f m from the body, %d steps shortened by walls)", movedSum, len, blocked); movedSum = 0; blocked = 0; }
+}
+
 // ---------------------------------------------------------------- snap turning
 // One push of the right stick turns the body by SnapTurn degrees at once: the character controller's orientation
 // (+0x88 SetOrientation) is turned about the world up axis. If the game puts it back (vehicles, scripted states), the
@@ -2780,6 +2836,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
         ClimbUpdate(playerEnt, f, dt);
     }
     SnapUpdate(playerEnt, dt);
+    RoomScaleUpdate(playerEnt, dt);
 }
 
 typedef void (__fastcall *Hier_t)(void* skel);

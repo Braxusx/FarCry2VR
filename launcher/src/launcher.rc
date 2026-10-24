@@ -7,8 +7,8 @@ IDR_NGX_DLSS  RCDATA  "nvngx_dlss.dll"
 IDR_INI       RCDATA  "fc2vr.ini"
 1 24 "launcher.manifest"
 1 VERSIONINFO
-FILEVERSION 1,0,1,0
-PRODUCTVERSION 1,0,1,0
+FILEVERSION 1,0,2,0
+PRODUCTVERSION 1,0,2,0
 FILEOS 0x40004
 FILETYPE 0x1
 BEGIN
@@ -18,8 +18,8 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "Far Cry 2 VR Launcher"
       VALUE "ProductName", "Far Cry 2 VR"
-      VALUE "FileVersion", "1.0.1"
-      VALUE "ProductVersion", "1.0.1"
+      VALUE "FileVersion", "1.0.2"
+      VALUE "ProductVersion", "1.0.2"
       VALUE "CompanyName", "Braxus"
       VALUE "LegalCopyright", "Far Cry VR Mod by Braxus"
     END

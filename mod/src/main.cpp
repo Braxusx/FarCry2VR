@@ -357,6 +357,7 @@ static void PoseCamera(uint8_t* c, V3 pos, V3 dir, V3 up, float tl, float tr, fl
 
 // ============================================================ head tracking -> game space
 static double g_refYTime = 0;
+static int g_rsDelay = 1; static bool g_rsOn = false;   // v231 room-scale (see arms RoomScaleUpdate)
 struct Recenter { bool valid = false; V3 pos{}; V3 fwdH{ 0, 0, -1 }; V3 rightH{ 1, 0, 0 }; } g_ref;
 
 static void DoRecenter(const XrPosef& head) {
@@ -1835,6 +1836,29 @@ static ID3D10Texture2D* g_uiTarget = nullptr; static UINT g_uiSamples = 1; stati
 static bool g_uiIsolated[2] = { false, false };
 // Scope view: the scene is kept aside when the UI starts and the UI is drawn onto black, so the ammo counter can be shown
 // on its own (no world behind it); the scope window uses the kept scene.
+
+// v231 diagnostic: mean brightness of the centre 16x16 of a texture (R11G11B10_FLOAT or 8-bit RGBA), -1 if unreadable
+static float DecodeF11(uint32_t v, int mbits) { uint32_t e = (v >> mbits) & 31, m = v & ((1u << mbits) - 1); if (!e) return (float)m / (1 << mbits) * 6.1035e-5f; if (e == 31) return 65504.0f; return ldexpf(1.0f + (float)m / (1 << mbits), (int)e - 15); }
+static float CentreLuma(ID3D10Texture2D* t) {
+    if (!t || !g_dev10) return -1;
+    D3D10_TEXTURE2D_DESC d; t->GetDesc(&d);
+    if (d.SampleDesc.Count > 1 || d.Width < 16 || d.Height < 16) return -1;
+    static ID3D10Texture2D* st = nullptr; static DXGI_FORMAT stf = DXGI_FORMAT_UNKNOWN;
+    if (!st || stf != d.Format) { if (st) st->Release(); st = nullptr;
+        D3D10_TEXTURE2D_DESC sd = d; sd.Width = sd.Height = 16; sd.MipLevels = 1; sd.ArraySize = 1; sd.Usage = D3D10_USAGE_STAGING; sd.BindFlags = 0; sd.CPUAccessFlags = D3D10_CPU_ACCESS_READ; sd.MiscFlags = 0;
+        if (FAILED(g_dev10->CreateTexture2D(&sd, nullptr, &st))) { st = nullptr; return -1; } stf = d.Format; }
+    D3D10_BOX b{ d.Width / 2 - 8, d.Height / 2 - 8, 0, d.Width / 2 + 8, d.Height / 2 + 8, 1 };
+    g_dev10->CopySubresourceRegion(st, 0, 0, 0, 0, t, 0, &b);
+    D3D10_MAPPED_TEXTURE2D m; if (FAILED(st->Map(0, D3D10_MAP_READ, 0, &m))) return -1;
+    double sum = 0;
+    for (int y = 0; y < 16; ++y) { const uint32_t* row = (const uint32_t*)((const uint8_t*)m.pData + y * m.RowPitch);
+        for (int x = 0; x < 16; ++x) { uint32_t v = row[x]; float r, g, bl;
+            if (d.Format == DXGI_FORMAT_R11G11B10_FLOAT) { r = DecodeF11(v & 0x7FF, 6); g = DecodeF11((v >> 11) & 0x7FF, 6); bl = DecodeF11(v >> 22, 5); }
+            else { r = (v & 255) / 255.0f; g = ((v >> 8) & 255) / 255.0f; bl = ((v >> 16) & 255) / 255.0f; }
+            sum += 0.2126 * r + 0.7152 * g + 0.0722 * bl; } }
+    st->Unmap(0);
+    return (float)(sum / 256.0);
+}
 static ID3D10Texture2D* g_scopePre = nullptr; static bool g_scopePreValid = false; static ID3D10Texture2D* g_scopeComp = nullptr; static ID3D10Texture2D* g_scopeBbTmp = nullptr;
 static bool ScopeUiBegin() {
     if (!g_scopeBBres || !g_cfg.scopeAmmoMask || !g_dev10) return false;
@@ -2438,6 +2462,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             }
         }
         UpdateHeightRef(head.position.y, NowMs());
+        controls::SetBodyForward(g_ref.fwdH.x, g_ref.fwdH.z, g_ref.valid);
         if ((g_frame % 900) == 0) LOG("head: y=%.3f refY=%.3f -> view offset %+.3f m", head.position.y, g_ref.pos.y, head.position.y - g_ref.pos.y + g_cfg.heightOffset);
     }
     D3D10_TEXTURE2D_DESC bbd{};
@@ -2515,11 +2540,35 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     const bool renderScope = monoScope || weaponScope;
     const bool renderStereo = poseReady && !g_scopeOn && fv.shouldRender && g_stereoOn && sizeOk;
     // A native flat fallback still uses its native camera: keep its hands raw too.
+    if (g_rsOn && poseReady) {   // v231 room-scale: the body was moved after the head - move the recenter point along
+        static V3 pending[4]; static int pn = 0;
+        float mv[3]; V3 m{ 0, 0, 0 };
+        if (arms::TakeRoomScaleMoved(mv)) m = { mv[0], mv[1], mv[2] };
+        int dl = g_rsDelay < 0 ? 0 : g_rsDelay > 3 ? 3 : g_rsDelay;
+        for (int i = pn; i < dl; ++i) pending[i] = { 0, 0, 0 };
+        pn = dl;
+        V3 apply = m;
+        if (dl > 0) { apply = pending[0]; for (int i = 0; i + 1 < dl; ++i) pending[i] = pending[i + 1]; pending[dl - 1] = m; }
+        if (apply.x != 0 || apply.y != 0) {
+            const GameBasis gb = BasisFromGameCam((uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam);
+            float ws = g_cfg.worldScale > 0 ? g_cfg.worldScale : 1.0f;
+            float dr = (apply.x * gb.R.x + apply.y * gb.R.y) / ws, df = (apply.x * gb.F.x + apply.y * gb.F.y) / ws;
+            g_ref.pos.x += g_ref.rightH.x * dr + g_ref.fwdH.x * df;
+            g_ref.pos.z += g_ref.rightH.z * dr + g_ref.fwdH.z * df;
+        }
+    }
     const PoseFrame frame = poseReady
         ? PreparePoseFrame(g_frame, (uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam, renderScope || renderStereo) : PoseFrame{};
     if (poseReady) {   // arms/weapon/shots follow the controllers on every frame, scoped or not
         uint8_t* rc0 = (uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam;
         SubmitArmsFrame(fv, rc0, frame);
+        if (g_rsOn) {   // v231: the head's horizontal offset from the body (recenter point), game space
+            V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
+            fc2vr::tracking::Vec3 t = frame.reference.Position({ mid.x, mid.y, mid.z });
+            fc2vr::tracking::Vec3 g = frame.game.Direction({ t.x, 0, t.z });
+            float ws = frame.worldScale; float o3[3] = { g.x * ws, g.y * ws, 0 };
+            arms::SetRoomScaleOffset(o3, true);
+        }
         if (controls::FlashlightOn()) {   // v220: the head in game space for the flashlight (placed by the game thread)
             const XrPosef& h0 = fv.views[0].pose;
             V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
@@ -2996,6 +3045,10 @@ static void __fastcall Hook_Present(void* self, void* edx, int a1) {
             const bool monoView = controls::MonocularOut();   // v214: the monocular's own window (its targeting ring, no crosshair / ammo)
             if (monoView && g_scopePre) { src = g_scopePre; resolved = true; }   // v215: the scene before the UI (no tutorial / button prompts); the ring is the monocular's own lens
             xr::SetMonoTarget(monoView && arms::MonoTarget());
+            {   static double nextDiag = 0; static int nDiag = 0;   // v231: is the kept scene black before it reaches the scope layer?
+                if (monoView && nDiag < 8 && NowMs() > nextDiag) { nextDiag = NowMs() + 3000.0; ++nDiag;
+                    D3D10_TEXTURE2D_DESC sd{}; if (src) src->GetDesc(&sd);
+                    LOG("monocular view: scene %p %ux%u fmt %d, centre brightness %.4f (backbuffer %.4f), dlss upscale %d", (void*)src, sd.Width, sd.Height, (int)sd.Format, CentreLuma(src), CentreLuma(bb), g_upscale ? 1 : 0); } }
             xr::EndFrameScope(g_scopeFv, src, g_scopePose, W, (g_cfg.scopeGameReticle && !monoView) ? rc : nullptr, ra, hp, hw, resolved, own && !monoView, monoView);
         } else xr::EndFrameScreen(g_scopeFv, bb, g_scopePose, g_cfg.scopeWidth);
         if (bb) bb->Release();
@@ -3341,7 +3394,7 @@ static void Install() {
     {
         controls::Config cc;
         cc.enable = (int)IniF("MotionControls", 1); cc.rumble = IniF("ControllerRumble", 1.0f);
-        cc.stickPitch = (int)IniF("TurnStickPitch", 0); cc.holdMs = (int)IniF("ButtonHoldMs", 400); cc.turnFull = (int)IniF("TurnFullSpeed", 1); cc.snapTurn = IniF("SnapTurn", 45.0f); cc.throwArc = (int)IniF("ThrowArc", 1); cc.throwArcRight = (int)IniF("ThrowArcRight", 1); cc.macheteTrigger = (int)IniF("MacheteTriggerAttack", 0); cc.monocular = (int)IniF("Monocular", 1); cc.flashlight = (int)IniF("Flashlight", 0); cc.turretInvertY = (int)IniF("TurretInvertY", 0); cc.recenterHoldMs = (int)IniF("RecenterHoldMs", 1000); controls::SetTurnSpeed(IniF("SmoothTurnSpeed", 1.0f)); cc.flashRadius = IniF("FlashlightGestureRadius", 0.13f);
+        cc.stickPitch = (int)IniF("TurnStickPitch", 0); cc.holdMs = (int)IniF("ButtonHoldMs", 400); cc.turnFull = (int)IniF("TurnFullSpeed", 1); cc.snapTurn = IniF("SnapTurn", 45.0f); cc.throwArc = (int)IniF("ThrowArc", 1); cc.throwArcRight = (int)IniF("ThrowArcRight", 1); cc.macheteTrigger = (int)IniF("MacheteTriggerAttack", 0); cc.monocular = (int)IniF("Monocular", 1); cc.flashlight = (int)IniF("Flashlight", 0); cc.moveDir = (int)IniF("MovementDirection", 0); cc.turretInvertY = (int)IniF("TurretInvertY", 0); cc.recenterHoldMs = (int)IniF("RecenterHoldMs", 1000); controls::SetTurnSpeed(IniF("SmoothTurnSpeed", 1.0f)); cc.flashRadius = IniF("FlashlightGestureRadius", 0.13f);
         cc.shoulderFwd = IniF("ShoulderZoneFwd", -0.02f); cc.shoulderUp = IniF("ShoulderZoneUp", -0.20f);
         cc.hipUp = IniF("HipZoneUp", -0.45f); cc.chestUpMin = IniF("ChestZoneUpMin", -0.55f); cc.chestUpMax = IniF("ChestZoneUpMax", -0.10f);
         cc.logZones = (int)IniF("LogHolsterZones", 0);
@@ -3367,7 +3420,7 @@ static void Install() {
         ac.handOfs[0] = IniF("HandOffsetX", 0); ac.handOfs[1] = IniF("HandOffsetY", 0); ac.handOfs[2] = IniF("HandOffsetZ", 0);
         ac.leftHandRoll = IniF("LeftHandRoll", 45.0f); ac.macheteAngle = IniF("MacheteAngle", 60.0f);
         ac.leftHandYaw = IniF("LeftHandYaw", 30.0f); ac.leftForearmTwist = IniF("LeftForearmTwist", 1.0f); ac.armsIndependent = (int)IniF("ArmsIndependent", 1); ac.steadyHands = (int)IniF("SteadyHands", 1); ac.grabBoxShrink = IniF("GrabBoxShrink", 0.25f); ac.upperArmTwist = IniF("UpperArmTwist", 0.5f); ac.macheteYaw = IniF("MacheteYaw", 15.0f); ac.macheteRoll = IniF("MacheteRoll", 0.0f); ac.mapAngle = IniF("MapPitch", 0.0f); ac.mapYaw = IniF("MapYaw", 0.0f); ac.mapRoll = IniF("MapRoll", 0.0f); ac.freePitch = IniF("FreeHandPitch", 0.0f); ac.freeYaw = IniF("FreeHandYaw", 0.0f); ac.freeRoll = IniF("FreeHandRoll", 0.0f); ac.phonePitch = IniF("PhonePitch", ac.freePitch); ac.phoneYaw = IniF("PhoneYaw", ac.freeYaw); ac.phoneRoll = IniF("PhoneRoll", ac.freeRoll); ac.phoneDiag = (int)IniF("PhoneDiag", 0);
-        ac.handGrab = (int)IniF("HandGrab", 1); ac.grabRadius = IniF("GrabRadius", 0.35f); ac.grabReach = IniF("GrabReach", 0.06f); ac.pickupReach = IniF("PickupReach", 0.20f); ac.grabPhysics = (int)IniF("GrabPhysics", 1); ac.grabMaxMass = IniF("GrabMaxMass", 25.0f); ac.grabMaxSize = IniF("GrabMaxSize", 0.8f); ac.throwScale = IniF("ThrowScale", 1.3f); ac.bodyRadius = IniF("BodyRadius", 0.30f); ac.climbing = (int)IniF("Climbing", 0); ac.climbReach = IniF("ClimbReach", 0.10f); ac.climbMode = (int)IniF("ClimbMode", 1); ac.mantleBelowHead = IniF("MantleBelowHead", 0.55f); ac.climbGrace = IniF("ClimbGrace", 1.5f); ac.climbTurnSpeed = IniF("ClimbTurnSpeed", 120.0f); ac.watchStickSign = IniF("WatchStickSign", 1.0f); ac.throwSpeed = IniF("ThrowSpeed", 0.0f); ac.throwRange = IniF("ThrowRange", 1.5f); ac.npcGrab = (int)IniF("NpcGrab", 0); ac.contactPush = (int)IniF("ContactPush", 1); ac.freezeReload = (int)IniF("FreezeReload", 1); ac.macheteHits = (int)IniF("MacheteHits", 1); ac.macheteSpeed = IniF("MacheteSwingSpeed", 2.5f); ac.macheteCooldown = IniF("MacheteCooldown", 0.5f); ac.macheteSound = (int)IniF("MacheteSwingSound", 1); ac.seatWeapon = (int)IniF("SeatWeapon", 1); ac.macheteSoundSpeed = IniF("MacheteSoundSpeed", 6.0f); ac.flashRange = IniF("FlashlightRange", 30.0f); ac.flashInner = IniF("FlashlightInnerAngle", 18.0f); ac.flashOuter = IniF("FlashlightOuterAngle", 32.0f); ac.flashBright = IniF("FlashlightBrightness", 1.0f); ac.noColorFilter = (int)IniF("NoColorFilter", 0); ac.noRimLight = (int)IniF("NoRimLight", 0);
+        ac.handGrab = (int)IniF("HandGrab", 1); ac.grabRadius = IniF("GrabRadius", 0.35f); ac.grabReach = IniF("GrabReach", 0.06f); ac.pickupReach = IniF("PickupReach", 0.20f); ac.grabPhysics = (int)IniF("GrabPhysics", 1); ac.grabMaxMass = IniF("GrabMaxMass", 25.0f); ac.grabMaxSize = IniF("GrabMaxSize", 0.8f); ac.throwScale = IniF("ThrowScale", 1.3f); ac.bodyRadius = IniF("BodyRadius", 0.30f); ac.climbing = (int)IniF("Climbing", 0); ac.climbReach = IniF("ClimbReach", 0.10f); ac.climbMode = (int)IniF("ClimbMode", 1); ac.mantleBelowHead = IniF("MantleBelowHead", 0.55f); ac.climbGrace = IniF("ClimbGrace", 1.5f); ac.climbTurnSpeed = IniF("ClimbTurnSpeed", 120.0f); ac.watchStickSign = IniF("WatchStickSign", 1.0f); ac.throwSpeed = IniF("ThrowSpeed", 0.0f); ac.throwRange = IniF("ThrowRange", 1.5f); ac.npcGrab = (int)IniF("NpcGrab", 0); ac.roomScale = (int)IniF("RoomScale", 0); ac.roomLeash = IniF("RoomScaleLeash", 0.10f); ac.roomMaxSpeed = IniF("RoomScaleMaxSpeed", 4.0f); ac.roomRadius = IniF("RoomScaleWallDistance", 0.30f); g_rsDelay = (int)IniF("RoomScaleViewDelay", 1); g_rsOn = ac.roomScale != 0; ac.contactPush = (int)IniF("ContactPush", 1); ac.freezeReload = (int)IniF("FreezeReload", 1); ac.macheteHits = (int)IniF("MacheteHits", 1); ac.macheteSpeed = IniF("MacheteSwingSpeed", 2.5f); ac.macheteCooldown = IniF("MacheteCooldown", 0.5f); ac.macheteSound = (int)IniF("MacheteSwingSound", 1); ac.seatWeapon = (int)IniF("SeatWeapon", 1); ac.macheteSoundSpeed = IniF("MacheteSoundSpeed", 6.0f); ac.flashRange = IniF("FlashlightRange", 30.0f); ac.flashInner = IniF("FlashlightInnerAngle", 18.0f); ac.flashOuter = IniF("FlashlightOuterAngle", 32.0f); ac.flashBright = IniF("FlashlightBrightness", 1.0f); ac.noColorFilter = (int)IniF("NoColorFilter", 0); ac.noRimLight = (int)IniF("NoRimLight", 0);
         { char b[64], ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "MacheteSoundIds", "", b, sizeof b, ip); unsigned a1 = 0, a2 = 0; int n = b[0] ? sscanf(b, "%x,%x", &a1, &a2) : 0;
           if (n >= 1) { ac.macheteSnd[0] = a1; ac.macheteSnd[1] = n >= 2 ? a2 : 0; } } ac.bladeLen = IniF("MacheteBladeLength", 0.55f); ac.pushMinSpeed = IniF("PushMinSpeed", 0.3f); ac.pushRadius = IniF("PushRadius", 0.06f); ac.pushScale = IniF("PushScale", 1.0f); ac.pushMass = IniF("PushMass", 40.0f); ac.pushWeaponLen = IniF("PushWeaponLen", 0.7f); ac.npcReach = IniF("NpcReach", 0.25f); ac.npcGain = IniF("NpcPullGain", 0.6f); ac.npcMaxSpeed = IniF("NpcMaxSpeed", 10.0f); ac.npcRagdollTime = IniF("NpcRagdollTime", 2.5f); ac.npcActive = (int)IniF("NpcActive", 1); ac.npcActiveWeight = IniF("NpcActiveWeight", 1.0f); ac.npcStiffness = IniF("NpcStiffness", 1.0f); ac.npcKnockPull = IniF("NpcKnockPull", 1.12f); ac.npcKnockDown = IniF("NpcKnockDown", 0.35f); ac.npcLeadGain = IniF("NpcLeadGain", 8.0f); ac.npcLeadSpeed = IniF("NpcLeadSpeed", 4.5f); ac.npcKnockSpeed = IniF("NpcKnockSpeed", 2.1f); ac.weaponRollFix = (int)IniF("WeaponRollFix", 0); ac.climbHolster = (int)IniF("ClimbHolster", 1); ac.gripInteract = (int)IniF("GripInteract", 0); ac.throwMaxSpeed = IniF("ThrowMaxSpeed", 25.0f); ac.useReach = IniF("UseReach", 0.9f); ac.mouthReach = IniF("MouthReach", 0.18f);
         ac.backpackFwd = IniF("BackpackZoneFwd", 0.0f); ac.backpackUp = IniF("BackpackZoneUp", -0.25f);
@@ -3417,7 +3470,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (contribution input-authority-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v231 = 1.0.2 incl. contribution input-authority-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

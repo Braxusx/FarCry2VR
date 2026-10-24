@@ -8,6 +8,10 @@
 
 namespace arms {
 struct Config {
+    int roomScale = 0;            // RoomScale (v231): real steps move the player (the body follows the head)
+    float roomLeash = 0.10f;      // RoomScaleLeash: the head may move this far (m) from the body before the body follows (leaning)
+    float roomMaxSpeed = 4.0f;    // RoomScaleMaxSpeed: m/s the body may be moved at
+    float roomRadius = 0.30f;     // RoomScaleWallDistance: the body stops this far (m) short of a wall
     int weaponInHand = 1;         // WeaponInHand
     int aimFromController = 1;    // AimFromController
     int dump = 1;                 // DumpSkeleton: log the player skeleton's bone list once
@@ -123,7 +127,9 @@ bool ReadFrameUsage(FrameUsage& out);
 bool CamBonePos(float out[3]);
 void SetMonoCams(const float game[16], const float posed[16]);
 bool MonoTarget();
-void SetHeadWorld(const float pos[3], const float dir[3], const float up[3]);   // v220: the head in game world space (flashlight)
+void SetHeadWorld(const float pos[3], const float dir[3], const float up[3]);
+void SetRoomScaleOffset(const float off[3], bool valid);   // v231 render thread: the head's horizontal offset from the body, game space
+bool TakeRoomScaleMoved(float out[3]);                    // v231 render thread: how far the body was moved since the last call (game space)   // v220: the head in game world space (flashlight)
 bool MonoEquipped();   // v218: the game has the monocular out (in the hand)   // v217: something taggable is in the monocular's ring (the game's binoculars target)
 void MonoRenderFix(const float game[16], const float posed[16]);   // v216: move the drawn monocular with the scope camera (same frame)   // v215: the game's render camera world and the head-aimed scope camera world
 bool PlayerState(float pos[3], float* heading);   // player entity position and the game's heading (radians)
