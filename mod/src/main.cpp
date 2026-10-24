@@ -2340,6 +2340,13 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
                 ++frames; if (d > 0.005f) { ++differ; if (d > worst) worst = d; }
             }
             double tn = NowMs();
+            {   static int af = 0, adf = 0, hist[512] = {}; static float aw = 0; int dn = 0, wb = -1; float wm = 0;
+                if (arms::DiagArmLive(&dn, &wb, &wm)) { ++af; if (dn) { ++adf; if (wb >= 0 && wb < 512) ++hist[wb]; if (wm > aw) aw = wm; } }
+                if (tn - lastL > 10000.0 && af) {
+                    char top[256] = ""; int o = 0;
+                    for (int r = 0; r < 6; ++r) { int bi = -1, bv = 0; for (int i = 0; i < 512; ++i) if (hist[i] > bv) { bv = hist[i]; bi = i; } if (bi < 0) break; o += snprintf(top + o, sizeof top - o, " bone %d x%d", bi, bv); hist[bi] = 0; }
+                    LOG("arm bone check: in %d of %d frames some arm bones differed from what the mod wrote (worst %.0f mm); most often:%s", adf, af, aw, top);
+                    af = adf = 0; aw = 0; for (auto& h : hist) h = 0; } }
             if (tn - lastL > 10000.0 && frames) { LOG("skeleton check: in %d of %d frames the skeleton held a different right hand than the mod wrote (up to %.0f mm)", differ, frames, worst * 1000.0f); lastL = tn; frames = differ = 0; worst = 0; }
         }
         if (g_motionTrace > 0) {   // v231 motion trace: one line per frame

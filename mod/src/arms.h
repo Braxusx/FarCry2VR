@@ -130,6 +130,7 @@ bool ReadFrameUsage(FrameUsage& out);
 bool CamBonePos(float out[3]);
 bool BodyClock(); void SetBodyClock(bool on);
 long CamBoneSeq();
+bool DiagArmLive(int* differ, int* worstBone, float* worstMm);   // v231
 float DiagForeStep();
 void DiagArm(float pos[6], float rot[6]);   // v231: per-frame change of R/L forearm, R/L upper arm, R/L forearm twist (mm, deg)   // v231: largest per-frame turn of the animated forearms (deg)
 float ArmSmooth(); void SetArmSmooth(float s);

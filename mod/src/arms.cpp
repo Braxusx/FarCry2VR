@@ -58,7 +58,7 @@ static CRITICAL_SECTION g_cs; static bool g_csInit = false;
 static Frame g_frame;                               // latest from the render thread
 static FrameUsage g_frameUsage;
 static volatile uint8_t* g_playerSkel = nullptr;    // player's skeleton object (bone array +0x20, count +0x2C)
-static float g_dgW[3], g_dgHand[3], g_dgTarget[3]; static long g_dgSeq = 0; static float g_dgForeStep = 0; static float g_dgArmPos[6], g_dgArmRot[6];   // v231 jitter diagnostic
+static float g_dgW[3], g_dgHand[3], g_dgTarget[3]; static long g_dgSeq = 0; static float g_dgForeStep = 0; static float g_dgModel[512][16]; static bool g_dgWritten[512]; static int g_dgN = 0; static uint8_t* g_dgSkel = nullptr; static float g_dgArmPos[6], g_dgArmRot[6];   // v231 jitter diagnostic
 static volatile uint8_t* g_playerGfx = nullptr;     // its graphic component (world matrix at +0x170)
 static int g_slot[21];                              // bone-helper slot -> bone index (Camera 0, R Hand 12, R Clavicle 15, L Clavicle 19)
 struct PhoneDiag { volatile LONG calls, player, applied, noFrame, noHand, camUpd; void* other[4]; int otherN[4]; LONG otherCalls[4]; };
@@ -1338,6 +1338,9 @@ static void Apply(uint8_t* skel) {
         dst[3] = w3[0]; dst[7] = w3[1]; dst[11] = w3[2]; dst[15] = w3[3];
     }
     InterlockedIncrement(&g_applied);
+    {   // v231: keep what was written to every arm / helper bone (model space) for the render-time comparison
+        Lock(); g_dgN = n < 512 ? n : 512; for (int i = 0; i < g_dgN; ++i) { g_dgWritten[i] = (g_armMask[i] || g_follow[i] >= 0); if (g_dgWritten[i]) memcpy(g_dgModel[i], bones[i].model, 64); } g_dgSkel = skel; Unlock();
+    }
     {   // v231 diagnostic: world matrix used, drawn right hand and its controller target (world)
         Lock(); for (int k = 0; k < 3; ++k) { g_dgW[k] = W.m[3][k]; g_dgHand[k] = Bw[rh].m[3][k]; g_dgTarget[k] = grip[k]; } ++g_dgSeq; Unlock();
         // v231: the arm bones as written, relative to the Camera bone: per-frame change (position mm, rotation deg)
@@ -3286,6 +3289,21 @@ float DiagForeStep() { return g_dgForeStep; }
 void DiagArm(float pos[6], float rot[6]) { memcpy(pos, g_dgArmPos, 24); memcpy(rot, g_dgArmRot, 24); }
 float ArmSmooth() { return g_c.armSmooth; }
 void SetArmSmooth(float s) { g_c.armSmooth = s; }
+// v231: compare the arm bones in the skeleton now with what the mod wrote: count differing bones, worst bone and size
+bool DiagArmLive(int* differ, int* worstBone, float* worstMm) {
+    uint8_t* skel = (uint8_t*)g_playerSkel; if (!g_csInit || !skel || IsBadReadPtr(skel + 0x20, 16)) return false;
+    Bone* bones = *(Bone**)(skel + 0x20); int n = *(int*)(skel + 0x2C); if (!bones || n <= 0 || n > 512) return false;
+    int d = 0, wb = -1; float wm = 0;
+    Lock();
+    if (g_dgSkel != skel || g_dgN != n) { Unlock(); return false; }
+    for (int i = 0; i < n; ++i) { if (!g_dgWritten[i]) continue;
+        const float* a = bones[i].model; const float* b = g_dgModel[i]; float m = 0;
+        for (int k = 0; k < 3; ++k) m = fmaxf(m, fabsf(a[12 + k] - b[12 + k]));
+        for (int k = 0; k < 11; ++k) if (k != 3 && k != 7) m = fmaxf(m, fabsf(a[k] - b[k]) * 0.3f);   // rotation difference as mm at 0.3 m
+        if (m > 0.002f) { ++d; if (m > wm) { wm = m; wb = i; } } }
+    Unlock();
+    *differ = d; *worstBone = wb; *worstMm = wm * 1000.0f; return true;
+}
 long CamBoneSeq() { return g_camBoneSeq; }
 bool BodyClock() { return g_c.bodyClock != 0; }
 void SetBodyClock(bool on) { g_c.bodyClock = on ? 1 : 0; }
