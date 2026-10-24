@@ -129,6 +129,7 @@ bool ReadFrameUsage(FrameUsage& out);
 bool CamBonePos(float out[3]);
 bool BodyClock(); void SetBodyClock(bool on);
 long CamBoneSeq();
+bool DiagLiveHand(float out[3]);
 bool DiagHand(float applyW[3], float liveW[3], float hand[3], float target[3], long* seq);   // v231 jitter diagnostic                                  // v231: skeleton updates so far (diagnostic)   // v231 (F4 test toggle)
 void SetMonoCams(const float game[16], const float posed[16]);
 bool MonoTarget();

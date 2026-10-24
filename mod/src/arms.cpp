@@ -3206,6 +3206,16 @@ bool DiagHand(float applyW[3], float liveW[3], float hand[3], float target[3], l
     Lock(); memcpy(applyW, g_dgW, 12); memcpy(hand, g_dgHand, 12); memcpy(target, g_dgTarget, 12); *seq = g_dgSeq; Unlock();
     return true;
 }
+bool DiagLiveHand(float out[3]) {   // v231: the right hand bone as it is in the skeleton right now (world)
+    uint8_t* skel = (uint8_t*)g_playerSkel; uint8_t* gfx = (uint8_t*)g_playerGfx;
+    if (!g_csInit || !skel || !gfx || IsBadReadPtr(skel + 0x20, 16) || IsBadReadPtr(gfx + 0x170, 64)) return false;
+    Bone* bones = *(Bone**)(skel + 0x20); int n = *(int*)(skel + 0x2C); int rh = g_slot[12];
+    if (!bones || rh < 0 || rh >= n || IsBadReadPtr(&bones[rh], sizeof(Bone))) return false;
+    M4 W; memcpy(W.m, gfx + 0x170, 64); W.m[0][3] = W.m[1][3] = W.m[2][3] = 0; W.m[3][3] = 1;
+    M4 b; memcpy(b.m, bones[rh].model, 64); b.m[0][3] = b.m[1][3] = b.m[2][3] = 0; b.m[3][3] = 1;
+    M4 r = Mul(b, W); for (int k = 0; k < 3; ++k) out[k] = r.m[3][k];
+    return std::isfinite(out[0]);
+}
 long CamBoneSeq() { return g_camBoneSeq; }
 bool BodyClock() { return g_c.bodyClock != 0; }
 void SetBodyClock(bool on) { g_c.bodyClock = on ? 1 : 0; }

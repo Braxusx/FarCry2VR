@@ -2331,6 +2331,16 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
         auto put = [](float* d, V3 v) { d[0] = v.x; d[1] = v.y; d[2] = v.z; };
         af.game = frame.game; af.frameSequence = frame.sequence;
         af.bonePubValid = arms::CamBonePos(af.bonePub);   // v231 body clock
+        {   // v231 diagnostic: does the skeleton (as the renderer will read it) still hold the hand the mod wrote?
+            static int frames = 0, differ = 0; static float worst = 0; static double lastL = 0;
+            float aw[3], lw[3], hd3[3], tg[3], lh[3]; long ds = 0;
+            if (arms::DiagHand(aw, lw, hd3, tg, &ds) && arms::DiagLiveHand(lh)) {
+                float dx = lh[0] - hd3[0], dy = lh[1] - hd3[1], dz = lh[2] - hd3[2], d = sqrtf(dx * dx + dy * dy + dz * dz);
+                ++frames; if (d > 0.005f) { ++differ; if (d > worst) worst = d; }
+            }
+            double tn = NowMs();
+            if (tn - lastL > 10000.0 && frames) { LOG("skeleton check: in %d of %d frames the skeleton held a different right hand than the mod wrote (up to %.0f mm)", differ, frames, worst * 1000.0f); lastL = tn; frames = differ = 0; worst = 0; }
+        }
         if (g_motionTrace > 0) {   // v231 motion trace: one line per frame
             static double t0 = 0; static long lastSeq = 0; static V3 lastRaw{}, lastBone{}, lastPl{};
             double tn = NowMs(); if (g_motionTrace == 270) { t0 = tn; lastSeq = arms::CamBoneSeq(); lastRaw = { frame.raw.P.x, frame.raw.P.y, frame.raw.P.z }; }
@@ -2346,6 +2356,8 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             {   float aw[3], lw[3], hd3[3], tg[3]; long ds = 0;
                 if (arms::DiagHand(aw, lw, hd3, tg, &ds)) {
                     V3 eye{ frame.game.P.x, frame.game.P.y, frame.game.P.z };
+                    float lh[3] = { NAN, NAN, NAN }; arms::DiagLiveHand(lh);
+                    LOG("mt3 skeleton hand now - hand the mod wrote %+7.1f %+7.1f %+7.1f mm", (lh[0] - hd3[0]) * 1000.0f, (lh[1] - hd3[1]) * 1000.0f, (lh[2] - hd3[2]) * 1000.0f);
                     LOG("mt2 W(apply)-W(now) %+6.1f %+6.1f %+6.1f mm | hand-eye %+7.1f %+7.1f %+7.1f mm | hand-target %+6.1f %+6.1f %+6.1f mm | apply #%ld",
                         (aw[0] - lw[0]) * 1000.0f, (aw[1] - lw[1]) * 1000.0f, (aw[2] - lw[2]) * 1000.0f,
                         (hd3[0] - eye.x) * 1000.0f, (hd3[1] - eye.y) * 1000.0f, (hd3[2] - eye.z) * 1000.0f,
