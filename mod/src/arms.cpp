@@ -732,6 +732,17 @@ static void Apply(uint8_t* skel) {
     Normalize(cr); Normalize(cu); Normalize(cb); Normalize(cf);
     // Published effective origin/basis, not the current animated Camera bone.
     // camW still owns animation mapping/calibration, never the tracking origin.
+    // v231 body clock: the frame was published from the camera one game frame earlier (the skeleton is updated
+    // before the render thread publishes this frame's sample). Move the published origin by how far the Camera bone
+    // has moved since, so the hands keep pace with walking, vehicles and the body (no lag-dependent jitter).
+    if (g_c.bodyClock && f.bonePubValid) {
+        float d[3] = { co[0] - f.bonePub[0], co[1] - f.bonePub[1], co[2] - f.bonePub[2] };
+        float dl = sqrtf(Dot3(d, d));
+        static double sum = 0; static int cnt = 0, nLog = 0; static ULONGLONG lastL = 0;
+        if (std::isfinite(dl) && dl < 1.5f) { f.game.P.x += d[0]; f.game.P.y += d[1]; f.game.P.z += d[2]; sum += dl; ++cnt; }
+        ULONGLONG tn = GetTickCount64();
+        if (nLog < 30 && tn - lastL > 10000 && cnt) { ++nLog; lastL = tn; LOG("body clock: hands moved with the body by %.1f mm per frame on average (%d frames)", sum / cnt * 1000.0, cnt); sum = 0; cnt = 0; }
+    }
     auto toWorld = [&](const float* ref, float* out, bool point) {
         Put3(out, point ? f.game.Position(Read3(ref)) : f.game.Direction(Read3(ref)));
     };
@@ -3185,6 +3196,8 @@ void SetMonoCams(const float game[16], const float posed[16]) {
     M4* ms[2] = { &g_monoG, &g_monoP }; for (M4* m : ms) { m->m[0][3] = m->m[1][3] = m->m[2][3] = 0; m->m[3][3] = 1; }
     g_monoCamTick = GetTickCount(); Unlock();
 }
+bool BodyClock() { return g_c.bodyClock != 0; }
+void SetBodyClock(bool on) { g_c.bodyClock = on ? 1 : 0; }
 bool CamBonePos(float out[3]) { if (!g_csInit || g_camBoneSeq == 0) return false; Lock(); memcpy(out, g_camBonePos, 12); Unlock(); return true; }
 void Stats(LONG& applied, LONG& shots) { applied = InterlockedExchange(&g_applied, 0); shots = g_shots; }
 

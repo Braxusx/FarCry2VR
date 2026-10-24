@@ -8,6 +8,7 @@
 
 namespace arms {
 struct Config {
+    int bodyClock = 1;            // HandsOnBodyClock (v231): hands follow the body's movement since the frame was published
     int roomScale = 0;            // RoomScale (v231): real steps move the player (the body follows the head)
     float roomLeash = 0.10f;      // RoomScaleLeash: the head may move this far (m) from the body before the body follows (leaning)
     float roomMaxSpeed = 4.0f;    // RoomScaleMaxSpeed: m/s the body may be moved at
@@ -103,6 +104,7 @@ struct Frame {
     void* weapon = nullptr;   // instance identity, not a model/cache generation lease
     fc2vr::tracking::GameBasis game{};
     uint64_t frameSequence = 0;   // diagnostic application-frame stamp, not a freshness lease
+    float bonePub[3] = {}; bool bonePubValid = false;   // v231: the Camera bone when this frame was published (body clock)
     float camRows[3][3];          // RAW native camera rows (incl. pitch): bone-axis calibration only
     float aimO[3], aimR[3], aimU[3], aimB[3];   // right controller aim pose (ref)
     float gripO[3];               // right controller grip position (ref)
@@ -125,6 +127,7 @@ struct FrameUsage {
 };
 bool ReadFrameUsage(FrameUsage& out);
 bool CamBonePos(float out[3]);
+bool BodyClock(); void SetBodyClock(bool on);   // v231 (F4 test toggle)
 void SetMonoCams(const float game[16], const float posed[16]);
 bool MonoTarget();
 void SetHeadWorld(const float pos[3], const float dir[3], const float up[3]);
