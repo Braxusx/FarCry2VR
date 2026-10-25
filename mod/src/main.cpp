@@ -114,6 +114,7 @@ struct Config {
     int   recenterKey = VK_F8;
     int   toggleKey = VK_F9;
     int   hudSnap = 0;              // v228 test: HUD + eye snapshots when a UI element appears in gameplay (HudSnap)
+    int   vehicleViewPrev = 1;      // VehicleViewPrevious (v232 test 15): the seat of the skeleton update being drawn (the one before the latest)
     float vehicleViewSmooth = 0.2f; // VehicleViewSmoothing (v232): seconds; 0 = view on the Camera bone in vehicles
     int   devKeys = 0;              // DevKeys: 1 = the developer test keys (F2 F3 F5 F6 F7 F10 F11 Pause) - off for release (v225)
 } g_cfg;
@@ -147,7 +148,7 @@ static void LoadConfig() {
     g_treeCache = IniF("TreeCache", 0) != 0;     // experimental; unnecessary once DpiAware stops the resize loop
     g_cfg.profile = (int)IniF("Profile", 0);
     g_cfg.devKeys = (int)IniF("DevKeys", 0);
-    g_cfg.vehicleViewSmooth = IniF("VehicleViewSmoothing", 0.2f);
+    g_cfg.vehicleViewSmooth = IniF("VehicleViewSmoothing", 0.2f); g_cfg.vehicleViewPrev = (int)IniF("VehicleViewPrevious", 1);
     g_cfg.hudSnap = (int)IniF("HudSnap", 0);
     g_cfg.dpiAware = (int)IniF("DpiAware", 1);
     g_cfg.heightAdapt = IniF("HeightAdapt", 15.0f);
@@ -457,7 +458,7 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
         {   static float ls[3]; static bool have = false; static double lt = 0;
             float cp[3], Wm[16]; double tn = input.nowMs; float dt = lt > 0 ? (float)((tn - lt) * 0.001) : 1.0f; lt = tn;
             bool veh = g_cfg.vehicleViewSmooth > 0 && (controls::VehicleMode() != 0 || g_riding);
-            if (veh && arms::CamBoneRoot(cp, Wm)) {
+            if (veh && arms::CamBoneRoot(cp, Wm, g_cfg.vehicleViewPrev != 0)) {
                 float d[3] = { cp[0] - Wm[12], cp[1] - Wm[13], cp[2] - Wm[14] }, l[3];
                 for (int r = 0; r < 3; ++r) { float n2 = Wm[r * 4] * Wm[r * 4] + Wm[r * 4 + 1] * Wm[r * 4 + 1] + Wm[r * 4 + 2] * Wm[r * 4 + 2]; l[r] = n2 > 1e-8f ? (d[0] * Wm[r * 4] + d[1] * Wm[r * 4 + 1] + d[2] * Wm[r * 4 + 2]) / n2 : 0; }
                 if (!have || dt > 0.25f || l[0] * l[0] + l[1] * l[1] + l[2] * l[2] > 9.0f) { memcpy(ls, l, 12); have = true; }
@@ -1957,7 +1958,12 @@ static void Hotkeys(const XrPosef* head) {
       if (f4 && !prevF4 && !sh && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) { bool on = arms::ClavFix(true); LOG("shoulder fix %d (F4)", on); ShowToast(on ? "Shoulder fix: ON" : "Shoulder fix: OFF (old arms)"); }
 
       prevF4 = f4; }
-    { static bool p7 = false; static float keep = 0.2f; bool k7 = (GetAsyncKeyState(VK_F7) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k7 && !p7) { if (g_cfg.vehicleViewSmooth > 0) { keep = g_cfg.vehicleViewSmooth; g_cfg.vehicleViewSmooth = 0; } else g_cfg.vehicleViewSmooth = keep; LOG("vehicle view smoothing %.2f (Ctrl+F7)", g_cfg.vehicleViewSmooth); ShowToast(g_cfg.vehicleViewSmooth > 0 ? "Vehicle view steadier: ON" : "Vehicle view steadier: OFF"); } p7 = k7; }
+    { static bool p7 = false; static float keep = 0.2f; bool k7 = (GetAsyncKeyState(VK_F7) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k7 && !p7) {   // cycle: seat (drawn update) -> seat (latest update) -> off
+        if (g_cfg.vehicleViewSmooth > 0 && g_cfg.vehicleViewPrev) g_cfg.vehicleViewPrev = 0;
+        else if (g_cfg.vehicleViewSmooth > 0) { keep = g_cfg.vehicleViewSmooth; g_cfg.vehicleViewSmooth = 0; }
+        else { g_cfg.vehicleViewSmooth = keep; g_cfg.vehicleViewPrev = 1; }
+        LOG("vehicle view smoothing %.2f previous %d (Ctrl+F7)", g_cfg.vehicleViewSmooth, g_cfg.vehicleViewPrev);
+        ShowToast(g_cfg.vehicleViewSmooth <= 0 ? "Vehicle view: 3 OFF (head bone)" : g_cfg.vehicleViewPrev ? "Vehicle view: 1 seat, drawn update" : "Vehicle view: 2 seat, latest update"); } p7 = k7; }
     { static bool p6 = false; bool k6 = (GetAsyncKeyState(VK_F6) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k6 && !p6) { g_handSmooth = !g_handSmooth; LOG("hand smoothing %d (Ctrl+F6)", g_handSmooth); ShowToast(g_handSmooth ? "Hand stabiliser: ON" : "Hand stabiliser: OFF"); } p6 = k6; }
     { static bool p5 = false; bool k5 = (GetAsyncKeyState(VK_F5) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k5 && !p5) { bool on = arms::LocalFrameToggle(); LOG("arm local frame %d (Ctrl+F5)", on); ShowToast(on ? "Arm precision fix: ON" : "Arm precision fix: OFF"); } p5 = k5; }
     {   // v232 test keys (jitter A/B): Insert = DLSS on/off, Page Down = DLSS debug mode (1 = no sub-pixel jitter)
@@ -3804,7 +3810,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v232 test 14 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Insert/PgDn DLSS A/B, local arm frame (Ctrl+F5), hand stabiliser (Ctrl+F6), vehicle view on the seat (Ctrl+F7), Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v232 test 15 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Insert/PgDn DLSS A/B, local arm frame (Ctrl+F5), hand stabiliser (Ctrl+F6), vehicle view on the seat (Ctrl+F7), Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

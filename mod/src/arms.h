@@ -136,7 +136,7 @@ struct FrameUsage {
 };
 bool ReadFrameUsage(FrameUsage& out);
 bool CamBonePos(float out[3]);
-bool CamBoneRoot(float cam[3], float W[16]);   // v232: Camera bone and the skeleton's world matrix from the same update
+bool CamBoneRoot(float cam[3], float W[16], bool previous = false);   // v232: Camera bone and the skeleton's world matrix from the same update
 bool BodyClock(); void SetBodyClock(bool on);
 long CamBoneSeq();
 bool DiagArmLive(int* differ, int* worstBone, float* worstMm);   // v231
