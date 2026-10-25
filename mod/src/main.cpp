@@ -409,6 +409,7 @@ static GameBasis BasisFromGameCam(uint8_t* c) {
 // Bypass in vehicles, mounted guns and special controls. Prepare once, then share.
 static inline double NowMs();
 static bool g_riding = false;
+static bool g_handSmooth = true;
 static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize) {
     static fc2vr::tracking::PoseFrameBuilder builder;
     fc2vr::tracking::SteadyInput input;
@@ -1933,6 +1934,7 @@ static void Hotkeys(const XrPosef* head) {
       if (f4 && !prevF4 && !sh && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) { bool on = arms::ClavFix(true); LOG("shoulder fix %d (F4)", on); ShowToast(on ? "Shoulder fix: ON" : "Shoulder fix: OFF (old arms)"); }
 
       prevF4 = f4; }
+    { static bool p6 = false; bool k6 = (GetAsyncKeyState(VK_F6) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k6 && !p6) { g_handSmooth = !g_handSmooth; LOG("hand smoothing %d (Ctrl+F6)", g_handSmooth); ShowToast(g_handSmooth ? "Hand stabiliser: ON" : "Hand stabiliser: OFF"); } p6 = k6; }
     { static bool p5 = false; bool k5 = (GetAsyncKeyState(VK_F5) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k5 && !p5) { bool on = arms::LocalFrameToggle(); LOG("arm local frame %d (Ctrl+F5)", on); ShowToast(on ? "Arm precision fix: ON" : "Arm precision fix: OFF"); } p5 = k5; }
     {   // v232 test keys (jitter A/B): Insert = DLSS on/off, Page Down = DLSS debug mode (1 = no sub-pixel jitter)
         static bool pI = false, pN = false; bool i = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0, nx = (GetAsyncKeyState(VK_NEXT) & 0x8000) != 0;
@@ -2500,12 +2502,54 @@ static void TurnMenu() {
     }
     prevH = h; prevL = kl; prevR = kr;
 }
+// v232 micro-stabilisation: a One Euro filter on the controller poses the arms and the weapon are built from.
+// Standing still the hand's tremor and tracking noise pass through (~0.2-0.4 mm per frame); slow movement is
+// filtered at HandSmoothCutoff Hz, fast movement opens the filter (HandSmoothBeta) so it never lags a swing.
+static float g_handCut = 8.0f, g_handBeta = 4.0f, g_handRotBeta = 0.06f;
+struct EuroPose { bool have = false; V3 p{}, dp{}; XrQuaternionf q{ 0, 0, 0, 1 }; float w = 0; };
+static float EuroAlpha(float fc, float dt) { float tau = 1.0f / (6.2831853f * fc); return 1.0f / (1.0f + tau / dt); }
+static void EuroUpdate(EuroPose& e, XrPosef& pose, float dt, bool valid) {
+    V3 x = ToV3(pose.position); XrQuaternionf q = pose.orientation;
+    if (!valid || !g_handSmooth || !e.have || dt <= 0 || dt > 0.1f) { e.have = valid; e.p = x; e.q = q; e.dp = { 0, 0, 0 }; e.w = 0; return; }
+    // position
+    V3 v = (x - e.p) * (1.0f / dt);
+    float ad = EuroAlpha(1.0f, dt); e.dp = e.dp + (v - e.dp) * ad;
+    float sp = sqrtf(Dot(e.dp, e.dp));
+    float a = EuroAlpha(g_handCut + g_handBeta * sp, dt); e.p = e.p + (x - e.p) * a;
+    // orientation (nlerp, cutoff opened by the angular speed in deg/s)
+    float d = e.q.x * q.x + e.q.y * q.y + e.q.z * q.z + e.q.w * q.w; if (d < 0) { q.x = -q.x; q.y = -q.y; q.z = -q.z; q.w = -q.w; d = -d; }
+    float ang = 2.0f * acosf(fminf(1.0f, d)) * 57.29578f / dt;
+    e.w += (ang - e.w) * ad;
+    float b = EuroAlpha(g_handCut + g_handRotBeta * e.w, dt);
+    XrQuaternionf r{ e.q.x + (q.x - e.q.x) * b, e.q.y + (q.y - e.q.y) * b, e.q.z + (q.z - e.q.z) * b, e.q.w + (q.w - e.q.w) * b };
+    float n = sqrtf(r.x * r.x + r.y * r.y + r.z * r.z + r.w * r.w); if (n > 1e-6f) { r.x /= n; r.y /= n; r.z /= n; r.w /= n; }
+    e.q = r;
+    pose.position = { e.p.x, e.p.y, e.p.z }; pose.orientation = e.q;
+}
+static xr::HandState SmoothHand(int side, XrTime t) {
+    static EuroPose eg[2], ea[2]; static XrTime last[2] = { 0, 0 };
+    xr::HandState h = xr::Hand(side);
+    float dt = last[side] ? (float)((double)(t - last[side]) * 1e-9) : 0; last[side] = t;
+    // the aim pose is rigid with the grip: filter the grip, carry the same correction to the aim
+    XrPosef g0 = h.grip; EuroUpdate(eg[side], h.grip, dt, h.gripValid);
+    if (h.gripValid && h.aimValid && g_handSmooth) {
+        // aim = grip * offset: offset in the grip frame from the raw poses, re-applied to the filtered grip
+        XrQuaternionf gi{ -g0.orientation.x, -g0.orientation.y, -g0.orientation.z, g0.orientation.w };
+        auto qm = [](XrQuaternionf a, XrQuaternionf b) { return XrQuaternionf{ a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x, a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z }; };
+        XrQuaternionf ro = qm(gi, h.aim.orientation);
+        V3 po = QRot(gi, ToV3(h.aim.position) - ToV3(g0.position));
+        h.aim.orientation = qm(h.grip.orientation, ro);
+        V3 p = ToV3(h.grip.position) + QRot(h.grip.orientation, po); h.aim.position = { p.x, p.y, p.z };
+        ea[side].have = false;
+    } else EuroUpdate(ea[side], h.aim, dt, h.aimValid);
+    return h;
+}
 static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFrame& frame) {
     const float s = frame.worldScale;
     TurnMenu();
     MacheteMenu(fv);
     {   // controller pose for the arms/weapon and shots (game thread reads it)
-        arms::Frame af; const xr::HandState& rh = xr::Hand(1);
+        arms::Frame af; const xr::HandState rh = SmoothHand(1, fv.displayTime);
         xr::HandState physical[2]; XrPosef inputHead; bool inputHeadValid = false;
         const bool inputCurrent = xr::InputSnapshot(physical,inputHead,inputHeadValid,&af.source);
         af.handAuthority = inputCurrent && physical[1].gripValid && physical[1].aimValid;
@@ -2570,7 +2614,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             put(af.aimB, frame.ReferenceDirection(QRot(rh.aim.orientation, { 0, 0, 1 })));
             put(af.gripO, frame.ReferencePosition(ToV3(rh.grip.position)));
         }
-        const xr::HandState& lh = xr::Hand(0);
+        const xr::HandState lh = SmoothHand(0, fv.displayTime);
         af.leftValid = lh.aimValid && lh.gripValid;
         af.lSqueeze = af.leftAuthority ? lh.squeeze : 0; af.rSqueeze = af.handAuthority ? rh.squeeze : 0;
         af.machete = controls::MacheteSelected(); af.map = controls::MapOpen();
@@ -3686,7 +3730,7 @@ static void Install() {
         ac.handOfs[0] = IniF("HandOffsetX", 0); ac.handOfs[1] = IniF("HandOffsetY", 0); ac.handOfs[2] = IniF("HandOffsetZ", 0);
         ac.leftHandRoll = IniF("LeftHandRoll", 45.0f); ac.macheteAngle = IniF("MacheteAngle", 60.0f);
         ac.leftHandYaw = IniF("LeftHandYaw", 30.0f); ac.leftForearmTwist = IniF("LeftForearmTwist", 1.0f); ac.armsIndependent = (int)IniF("ArmsIndependent", 1); ac.steadyHands = (int)IniF("SteadyHands", 1); ac.grabBoxShrink = IniF("GrabBoxShrink", 0.25f); ac.upperArmTwist = IniF("UpperArmTwist", 0.5f); ac.macheteYaw = IniF("MacheteYaw", 15.0f); ac.macheteRoll = IniF("MacheteRoll", 0.0f); ac.mapAngle = IniF("MapPitch", 0.0f); ac.mapYaw = IniF("MapYaw", 0.0f); ac.mapRoll = IniF("MapRoll", 0.0f); ac.freePitch = IniF("FreeHandPitch", 0.0f); ac.freeYaw = IniF("FreeHandYaw", 0.0f); ac.freeRoll = IniF("FreeHandRoll", 0.0f); ac.phonePitch = IniF("PhonePitch", ac.freePitch); ac.phoneYaw = IniF("PhoneYaw", ac.freeYaw); ac.phoneRoll = IniF("PhoneRoll", ac.freeRoll); ac.phoneDiag = (int)IniF("PhoneDiag", 0);
-        ac.handGrab = (int)IniF("HandGrab", 1); ac.grabRadius = IniF("GrabRadius", 0.35f); ac.grabReach = IniF("GrabReach", 0.06f); ac.pickupReach = IniF("PickupReach", 0.20f); ac.grabPhysics = (int)IniF("GrabPhysics", 1); ac.grabMaxMass = IniF("GrabMaxMass", 25.0f); ac.grabMaxSize = IniF("GrabMaxSize", 0.8f); ac.throwScale = IniF("ThrowScale", 1.3f); ac.bodyRadius = IniF("BodyRadius", 0.30f); ac.climbing = (int)IniF("Climbing", 0); ac.climbReach = IniF("ClimbReach", 0.10f); ac.climbMode = (int)IniF("ClimbMode", 1); ac.mantleBelowHead = IniF("MantleBelowHead", 0.55f); ac.climbGrace = IniF("ClimbGrace", 1.5f); ac.climbTurnSpeed = IniF("ClimbTurnSpeed", 120.0f); ac.watchStickSign = IniF("WatchStickSign", 1.0f); ac.throwSpeed = IniF("ThrowSpeed", 0.0f); ac.throwRange = IniF("ThrowRange", 1.5f); ac.npcGrab = (int)IniF("NpcGrab", 0); ac.bodyClock = (int)IniF("HandsOnBodyClock", 1); ac.armSmooth = IniF("ArmSmoothing", 0.0f); ac.clavSmooth = IniF("ClavicleSmoothing", 0.5f); ac.localFrame = (int)IniF("ArmLocalFrame", 1); g_framePacing = (int)IniF("FramePacing", 1); ac.foregripSmooth = IniF("ForegripSmoothing", 0.3f); ac.twistFadeFrom = IniF("UpperArmTwistFadeFrom", -1.0f); ac.twistFadeTo = IniF("UpperArmTwistFadeTo", 0.0f); ac.twistSmooth = IniF("UpperArmTwistSmoothing", 0.0f); ac.softIk = IniF("SoftIkStart", 0.0f); ac.softIkMaxPull = IniF("SoftIkMaxShoulderPull", 0.12f); ac.elbowSmooth = IniF("ElbowSmoothing", 0.0f); g_camBodyClock = (int)IniF("CameraOnBodyClock", 1); g_motionDiag = (int)IniF("MotionDiag", 0); ac.roomScale = (int)IniF("RoomScale", 0); ac.roomLeash = IniF("RoomScaleLeash", 0.10f); ac.roomMaxSpeed = IniF("RoomScaleMaxSpeed", 4.0f); ac.roomRadius = IniF("RoomScaleWallDistance", 0.30f); g_rsDelay = (int)IniF("RoomScaleViewDelay", 1); g_rsOn = ac.roomScale != 0; ac.contactPush = (int)IniF("ContactPush", 1); ac.freezeReload = (int)IniF("FreezeReload", 1); ac.macheteHits = (int)IniF("MacheteHits", 1); ac.macheteSpeed = IniF("MacheteSwingSpeed", 2.5f); ac.macheteCooldown = IniF("MacheteCooldown", 0.5f); ac.macheteSound = (int)IniF("MacheteSwingSound", 1); ac.seatWeapon = (int)IniF("SeatWeapon", 1); ac.macheteSoundSpeed = IniF("MacheteSoundSpeed", 6.0f); ac.flashRange = IniF("FlashlightRange", 30.0f); ac.flashInner = IniF("FlashlightInnerAngle", 18.0f); ac.flashOuter = IniF("FlashlightOuterAngle", 32.0f); ac.flashBright = IniF("FlashlightBrightness", 1.0f); ac.noColorFilter = (int)IniF("NoColorFilter", 0); ac.noRimLight = (int)IniF("NoRimLight", 0);
+        ac.handGrab = (int)IniF("HandGrab", 1); ac.grabRadius = IniF("GrabRadius", 0.35f); ac.grabReach = IniF("GrabReach", 0.06f); ac.pickupReach = IniF("PickupReach", 0.20f); ac.grabPhysics = (int)IniF("GrabPhysics", 1); ac.grabMaxMass = IniF("GrabMaxMass", 25.0f); ac.grabMaxSize = IniF("GrabMaxSize", 0.8f); ac.throwScale = IniF("ThrowScale", 1.3f); ac.bodyRadius = IniF("BodyRadius", 0.30f); ac.climbing = (int)IniF("Climbing", 0); ac.climbReach = IniF("ClimbReach", 0.10f); ac.climbMode = (int)IniF("ClimbMode", 1); ac.mantleBelowHead = IniF("MantleBelowHead", 0.55f); ac.climbGrace = IniF("ClimbGrace", 1.5f); ac.climbTurnSpeed = IniF("ClimbTurnSpeed", 120.0f); ac.watchStickSign = IniF("WatchStickSign", 1.0f); ac.throwSpeed = IniF("ThrowSpeed", 0.0f); ac.throwRange = IniF("ThrowRange", 1.5f); ac.npcGrab = (int)IniF("NpcGrab", 0); ac.bodyClock = (int)IniF("HandsOnBodyClock", 1); ac.armSmooth = IniF("ArmSmoothing", 0.0f); ac.clavSmooth = IniF("ClavicleSmoothing", 0.5f); g_handSmooth = IniF("HandSmoothing", 1) != 0; g_handCut = IniF("HandSmoothCutoff", 8.0f); g_handBeta = IniF("HandSmoothBeta", 4.0f); g_handRotBeta = IniF("HandSmoothRotBeta", 0.06f); ac.localFrame = (int)IniF("ArmLocalFrame", 1); g_framePacing = (int)IniF("FramePacing", 1); ac.foregripSmooth = IniF("ForegripSmoothing", 0.3f); ac.twistFadeFrom = IniF("UpperArmTwistFadeFrom", -1.0f); ac.twistFadeTo = IniF("UpperArmTwistFadeTo", 0.0f); ac.twistSmooth = IniF("UpperArmTwistSmoothing", 0.0f); ac.softIk = IniF("SoftIkStart", 0.0f); ac.softIkMaxPull = IniF("SoftIkMaxShoulderPull", 0.12f); ac.elbowSmooth = IniF("ElbowSmoothing", 0.0f); g_camBodyClock = (int)IniF("CameraOnBodyClock", 1); g_motionDiag = (int)IniF("MotionDiag", 0); ac.roomScale = (int)IniF("RoomScale", 0); ac.roomLeash = IniF("RoomScaleLeash", 0.10f); ac.roomMaxSpeed = IniF("RoomScaleMaxSpeed", 4.0f); ac.roomRadius = IniF("RoomScaleWallDistance", 0.30f); g_rsDelay = (int)IniF("RoomScaleViewDelay", 1); g_rsOn = ac.roomScale != 0; ac.contactPush = (int)IniF("ContactPush", 1); ac.freezeReload = (int)IniF("FreezeReload", 1); ac.macheteHits = (int)IniF("MacheteHits", 1); ac.macheteSpeed = IniF("MacheteSwingSpeed", 2.5f); ac.macheteCooldown = IniF("MacheteCooldown", 0.5f); ac.macheteSound = (int)IniF("MacheteSwingSound", 1); ac.seatWeapon = (int)IniF("SeatWeapon", 1); ac.macheteSoundSpeed = IniF("MacheteSoundSpeed", 6.0f); ac.flashRange = IniF("FlashlightRange", 30.0f); ac.flashInner = IniF("FlashlightInnerAngle", 18.0f); ac.flashOuter = IniF("FlashlightOuterAngle", 32.0f); ac.flashBright = IniF("FlashlightBrightness", 1.0f); ac.noColorFilter = (int)IniF("NoColorFilter", 0); ac.noRimLight = (int)IniF("NoRimLight", 0);
         { char b[64], ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "MacheteSoundIds", "", b, sizeof b, ip); unsigned a1 = 0, a2 = 0; int n = b[0] ? sscanf(b, "%x,%x", &a1, &a2) : 0;
           if (n >= 1) { ac.macheteSnd[0] = a1; ac.macheteSnd[1] = n >= 2 ? a2 : 0; } } ac.bladeLen = IniF("MacheteBladeLength", 0.55f); ac.pushMinSpeed = IniF("PushMinSpeed", 0.3f); ac.pushRadius = IniF("PushRadius", 0.06f); ac.pushScale = IniF("PushScale", 1.0f); ac.pushMass = IniF("PushMass", 40.0f); ac.pushWeaponLen = IniF("PushWeaponLen", 0.7f); ac.npcReach = IniF("NpcReach", 0.25f); ac.npcGain = IniF("NpcPullGain", 0.6f); ac.npcMaxSpeed = IniF("NpcMaxSpeed", 10.0f); ac.npcRagdollTime = IniF("NpcRagdollTime", 2.5f); ac.npcActive = (int)IniF("NpcActive", 1); ac.npcActiveWeight = IniF("NpcActiveWeight", 1.0f); ac.npcStiffness = IniF("NpcStiffness", 1.0f); ac.npcKnockPull = IniF("NpcKnockPull", 1.12f); ac.npcKnockDown = IniF("NpcKnockDown", 0.35f); ac.npcLeadGain = IniF("NpcLeadGain", 8.0f); ac.npcLeadSpeed = IniF("NpcLeadSpeed", 4.5f); ac.npcKnockSpeed = IniF("NpcKnockSpeed", 2.1f); ac.weaponRollFix = (int)IniF("WeaponRollFix", 0); ac.climbHolster = (int)IniF("ClimbHolster", 1); ac.gripInteract = (int)IniF("GripInteract", 0); ac.throwMaxSpeed = IniF("ThrowMaxSpeed", 25.0f); ac.useReach = IniF("UseReach", 0.9f); ac.mouthReach = IniF("MouthReach", 0.18f);
         ac.backpackFwd = IniF("BackpackZoneFwd", 0.0f); ac.backpackUp = IniF("BackpackZoneUp", -0.25f);
@@ -3736,7 +3780,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v232 test 10 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Insert/PgDn DLSS A/B, local arm frame (Ctrl+F5 A/B), Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v232 test 11 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Insert/PgDn DLSS A/B, local arm frame (Ctrl+F5), hand stabiliser (Ctrl+F6), Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
