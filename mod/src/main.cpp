@@ -1933,6 +1933,9 @@ static void Hotkeys(const XrPosef* head) {
       if (f4 && !prevF4 && !sh && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) { bool on = arms::ClavFix(true); LOG("shoulder fix %d (F4)", on); ShowToast(on ? "Shoulder fix: ON" : "Shoulder fix: OFF (old arms)"); }
 
       prevF4 = f4; }
+    {   // v232 test keys (jitter A/B): Insert = DLSS on/off, Page Down = DLSS debug mode (1 = no sub-pixel jitter)
+        static bool pI = false, pN = false; bool i = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0, nx = (GetAsyncKeyState(VK_NEXT) & 0x8000) != 0;
+        if (i && !pI) dlssfc2::Toggle(); if (nx && !pN) dlssfc2::CycleDebug(); pI = i; pN = nx; }
     { static bool prevF10 = false; bool f10 = (DevKey(VK_F10) & 0x8000) != 0; if (f10 && !prevF10) g_traceLeft = 4; prevF10 = f10; }
     { static bool prevF3 = false; bool f3 = (DevKey(VK_F3) & 0x8000) != 0; if (f3 && !prevF3) { g_fovMode = (g_fovMode + 1) % 3; static const char* nm[3] = { "headset frustums", "symmetric", "symmetric + overscan" }; LOG("eye frustum mode %d: %s", g_fovMode, nm[g_fovMode]); } prevF3 = f3; }
     { static bool prevF5 = false; bool f5 = (DevKey(VK_F5) & 0x8000) != 0; if (f5 && !prevF5) { g_cfg.uiScope = (g_cfg.uiScope + 1) % 4; LOG("UI scope %d", g_cfg.uiScope); } prevF5 = f5; }
@@ -3732,7 +3735,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v232 test 9 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v232 test 9 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Insert/PgDn DLSS A/B, Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
