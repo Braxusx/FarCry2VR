@@ -162,10 +162,13 @@ static PFN_xrGetDisplayRefreshRateFB p_xrGetDisplayRefreshRateFB;
 static PFN_xrRequestDisplayRefreshRateFB p_xrRequestDisplayRefreshRateFB;
 static bool g_hasRefreshExt;
 static float g_wantRefresh;   // ini DisplayRefreshRate (0 = leave it to the runtime)
+volatile double g_displayPeriod = 0;   // v232: seconds, from xrWaitFrame (frame pacing)
+double DisplayPeriod() { return g_displayPeriod; }
 static double QpcMs() { static double k = 0; if (!k) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); k = 1000.0 / (double)f.QuadPart; } LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart * k; }
 static XrResult XRAPI_CALL W_xrWaitFrame(XrSession s, const XrFrameWaitInfo* wi, XrFrameState* fs) {
     double t0 = QpcMs(); XrResult r = o_xrWaitFrame(s, wi, fs); double t1 = QpcMs();
     if (XR_SUCCEEDED(r) && fs) diag::OnWaitFrame(t1 - t0, (int64_t)fs->predictedDisplayPeriod, fs->shouldRender != XR_FALSE);
+    if (XR_SUCCEEDED(r) && fs && fs->predictedDisplayPeriod > 0) g_displayPeriod = (double)fs->predictedDisplayPeriod * 1e-9;
     return r;
 }
 static XrResult XRAPI_CALL W_xrEndFrame(XrSession s, const XrFrameEndInfo* ei) {
