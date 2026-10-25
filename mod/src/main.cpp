@@ -2566,7 +2566,8 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             float gameW[16]; memcpy(gameW, &F<float>(rc, cam::World), 64);
             PoseCamera(rc, pos, sm, { 0, 0, 1 }, -th, th, -tv, tv, false);
             if (monoRay) arms::SetMonoCams(gameW, &F<float>(rc, cam::World));   // v217: the model is hidden at the eye (the mod draws the ring)
-            { float o3[3] = { pos.x, pos.y, pos.z }, d3[3] = { sm.x, sm.y, sm.z }; arms::SetScopeRay(o3, d3, scopeContext); }
+            { float o3[3] = { pos.x, pos.y, pos.z }, d3[3] = { sm.x, sm.y, sm.z };
+              const float* scopeWorld=&F<float>(rc,cam::World); arms::SetScopeRay(o3,d3,scopeContext,scopeWorld,scopeWorld+8); }
             PoseCamera(cc, pos, sm, { 0, 0, 1 }, -th * 1.2f, th * 1.2f, -tv * 1.2f, tv * 1.2f, false);
             posed = true;
         }
@@ -3415,7 +3416,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (contribution support-socket-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (contribution motion-pose-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

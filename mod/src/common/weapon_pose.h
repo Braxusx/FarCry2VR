@@ -96,4 +96,14 @@ inline bool FromTo(Vec3 from,Vec3 to,Vec3 hint,Vec3& axis,float& angle) {
     }
     angle=arm::Pi; return true;
 }
+// A direction is a vector in the native camera basis, not a world-axis residual
+// to add to another ray. Transport all components, including roll and longitudinal
+// spread, into the accepted weapon/scope basis. No RNG or gameplay state changes.
+inline bool TransportSpread(Vec3 nativeDirection,const Pose& native,const Pose& target,Vec3& out) {
+    Vec3 unit;
+    if (!Rigid(native) || !Rigid(target) || !arm::Unit(nativeDirection,unit)
+        || DotProduct(arm::Cross(native.r,native.u),native.b)<0.98f
+        || DotProduct(arm::Cross(target.r,target.u),target.b)<0.98f) return false;
+    return arm::Unit(target.Direction(native.LocalDirection(unit)),out);
+}
 } // namespace fc2vr::weapon

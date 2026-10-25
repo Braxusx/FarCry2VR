@@ -94,7 +94,7 @@ void Latch() {
     }
 }
 void Arc() {
-    tracking::Vec3 axis; float angle=0;
+    tracking::Vec3 axis{}; float angle=0;
     Check(weapon::FromTo({1,0,0},{0,1,0},{0,0,1},axis,angle) && std::fabs(angle-arm::Pi/2)<1e-5f && Near(axis,{0,0,1}),"support quarter turn");
     Check(weapon::FromTo({1,0,0},{-1,0,0},{0,1,0},axis,angle) && std::fabs(angle-arm::Pi)<1e-5f && Near(axis,{0,1,0}),"antiparallel support has stable axis");
     Check(weapon::FromTo({1,0,0},{-1,0,0},{1,0,0},axis,angle) && arm::Finite(axis),"parallel hint has deterministic fallback");
@@ -110,6 +110,59 @@ void Arc() {
         Check(Near(tracking::Subtract(tracking::Add(root,rotated),root),target),"steering pivots about fixed right hand");
     }
 }
+tracking::Vec3 Rotate(tracking::Vec3 v,tracking::Vec3 axis,float angle) {
+    return tracking::Add(tracking::Add(tracking::Scale(v,std::cos(angle)),tracking::Scale(arm::Cross(axis,v),std::sin(angle))),tracking::Scale(axis,tracking::DotProduct(axis,v)*(1-std::cos(angle))));
+}
+weapon::Pose Orientation(float yaw,float pitch,float roll) {
+    weapon::Pose p;
+    p.r=Rotate(p.r,{0,1,0},yaw); p.u=Rotate(p.u,{0,1,0},yaw); p.b=Rotate(p.b,{0,1,0},yaw);
+    p.u=Rotate(p.u,p.r,pitch); p.b=Rotate(p.b,p.r,pitch);
+    p.r=Rotate(p.r,p.b,roll); p.u=Rotate(p.u,p.b,roll); return p;
+}
+void Spread() {
+    for(int i=0;i<1440;++i) {
+        const auto native=Orientation(i*0.013f,std::sin(i*0.1f)*1.55f,i*0.027f);
+        const auto target=Orientation(-i*0.017f,std::cos(i*0.2f)*1.55f,-i*0.031f);
+        const tracking::Vec3 raw{std::sin(i*0.03f)*0.08f,std::cos(i*0.07f)*0.05f,-1};
+        tracking::Vec3 local{}; Check(arm::Unit(raw,local),"native fixture normalized");
+        const auto shot=native.Direction(local), expected=target.Direction(local);
+        tracking::Vec3 actual{};
+        Check(weapon::TransportSpread(shot,native,target,actual),"yaw/pitch/roll spread transport available");
+        Check(Near(actual,expected),"all spread components follow target basis");
+        Check(Near(target.LocalDirection(actual),local),"asymmetric native spread preserved in local coordinates");
+        Check(std::fabs(tracking::DotProduct(actual,tracking::Scale(target.b,-1))+local.z)<1e-5f,"native cone angle retained");
+        Check(std::fabs(tracking::DotProduct(actual,actual)-1)<1e-5f,"result unit length");
+        tracking::Vec3 identity{};
+        Check(weapon::TransportSpread(shot,native,native,identity) && Near(identity,shot),"identity orientation preserves native shot");
+        Check(weapon::TransportSpread(tracking::Scale(native.b,-1),native,target,actual) && Near(actual,tracking::Scale(target.b,-1)),"zero spread follows accepted central ray");
+        // Common rigid world motion must cancel from the local spread coordinates.
+        const auto world=Orientation(i*0.002f,0.4f,-0.8f);
+        const auto n=weapon::Compose(native,world),t=weapon::Compose(target,world);
+        Check(weapon::TransportSpread(world.Direction(shot),n,t,actual) && Near(actual,world.Direction(expected)),"transport equivariant under common world rotation");
+    }
+    const weapon::Pose native{},rolled=Orientation(0,0,arm::Pi/2);
+    tracking::Vec3 shot{}; arm::Unit({0.1f,0,-1},shot); tracking::Vec3 correct{};
+    Check(weapon::TransportSpread(shot,native,rolled,correct),"roll control available");
+    // The old addition leaves the X residual in world X when the weapon rolls.
+    const auto legacy=tracking::Add(tracking::Scale(rolled.b,-1),tracking::Subtract(shot,{0,0,-1}));
+    tracking::Vec3 old{}; arm::Unit(legacy,old);
+    Check(!Near(old,correct,0.05f),"negative control: old world residual fails 90-degree roll");
+    tracking::Vec3 scoped{};
+    const auto scope=Orientation(0.7f,-0.3f,0);
+    Check(weapon::TransportSpread(shot,native,scope,scoped) && Near(scoped,scope.Direction(shot)),"scope uses its rendered basis, not weapon roll");
+}
+void InvalidSpread() {
+    weapon::Pose good; tracking::Vec3 out{7,8,9};
+    Check(!weapon::TransportSpread({0,0,0},good,good,out) && Near(out,{7,8,9}),"invalid input leaves caller output unchanged");
+    Check(!weapon::TransportSpread({0,std::numeric_limits<float>::infinity(),-1},good,good,out),"nonfinite native shot rejected");
+    auto bad=good; bad.r={2,0,0};
+    Check(!weapon::TransportSpread({0,0,-1},bad,good,out),"scaled source basis rejected");
+    Check(!weapon::TransportSpread({0,0,-1},good,bad,out),"scaled target basis rejected");
+    bad=good; bad.u=bad.r; Check(!weapon::TransportSpread({0,0,-1},good,bad,out),"singular basis rejected");
+    bad=good; bad.r={-1,0,0}; Check(!weapon::TransportSpread({0,0,-1},good,bad,out),"reflected target cannot mirror spread");
+    bad=good; bad.p.x=std::numeric_limits<float>::quiet_NaN();
+    Check(!weapon::TransportSpread({0,0,-1},good,bad,out),"nonfinite target origin rejected");
+}
 }
 int main(int argc,char** argv) {
     if(argc!=2) return 2;
@@ -117,6 +170,8 @@ int main(int argc,char** argv) {
     else if(!std::strcmp(argv[1],"ownership")) Ownership();
     else if(!std::strcmp(argv[1],"latch")) Latch();
     else if(!std::strcmp(argv[1],"arc")) Arc();
+    else if(!std::strcmp(argv[1],"spread")) Spread();
+    else if(!std::strcmp(argv[1],"invalid_spread")) InvalidSpread();
     else return 2;
     std::printf("%s: %d checks, %d failures\n",argv[1],checks,failures); return failures?1:0;
 }

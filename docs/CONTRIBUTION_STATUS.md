@@ -1,9 +1,33 @@
 # Contributor status — tracking frame fixes
 
-Date: 2026-10-23. Branch: `codex/tracking-arms-physical-steering`.
+Date: 2026-10-25. Branch: `codex/tracking-arms-physical-steering`.
 Base: `92a29c5b1e28a652d067262aacc59b421ed044c1` (upstream 1.0.1).
 
-## Latest checkpoint: input-authority-1
+## Latest checkpoint: motion-pose-1 (local only)
+
+R2 fractional twist now unwraps continuously once per physical source sample,
+with observed rig/owner/context resets and degenerate-measurement rejection.
+R3 support uses a stable hand-relative socket from the existing accepted hold,
+current controller placement and binding-token/neutral-regrip cancellation.
+R8 hitscan spread now transports a full native camera-basis direction into the
+accepted weapon or actual rendered scope basis, including roll.
+
+All 29 MSVC x86 CTest groups pass: 62,986 numeric checks plus three source-wiring
+guards. The nine new numeric groups also pass GCC x86. Rebuilt old-formula mutants
+fail for twist, animated socket renewal and world-space spread. The full x86 GCC
+development DLL builds with no new warnings (31 existing versus 32 at the parent).
+See [motion pose checkpoint](MOTION_POSE_2026-10-25.md) for artifact identity,
+controls, limitations, acceptance and rollback.
+
+This is not headset acceptance of the arm rig or weapon alignment. Native timing,
+full owner/model lifetime, named weighted/corrective roles, saved-hold provenance
+and unsupported-image refusal remain open. No steering, manual reload or DQS was
+added. Per the user's current instruction, these commits remain local; no game
+launch, deployment, packaging, push or PR. The earlier four-commit branch was
+published on 2026-10-24 through `5fdfaa4`; historical notes below describe their
+individual checkpoint status.
+
+## Prior checkpoint: input-authority-1 (`5fdfaa4`)
 
 First R4 safety slice is implemented and built offline. Original receipt timestamps,
 focus/sync and lifecycle/hand epochs now bound input, physical hand contacts and

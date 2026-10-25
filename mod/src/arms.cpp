@@ -73,6 +73,7 @@ static uint8_t g_armMask[512]; static int g_maskCount = -1; static uint8_t* g_ma
 static volatile LONG g_applied = 0, g_shots = 0;
 static float g_scopeO[3], g_scopeD[3]; static DWORD g_scopeTick = 0;
 static fc2vr::authority::Stamp g_scopeSource; static void* g_scopeWeapon = nullptr;
+static fc2vr::weapon::Pose g_scopeBasis,g_nativeBasis,g_weaponBasis;
 // Reloads: the weapon reload state (0x10166xxx) starts the "reload" animation at 0x10166501 (edi = state object,
 // [state+0xC] = owner, owner -> pawn via 0x100EA6C0, [state+5] set to 1 by the "reload_done" animation event,
 // 0x10165800). A detour there notes the player's reloads; while one runs, the arms keep the pose they had before it.
@@ -85,7 +86,7 @@ static float g_lastSpan = 0; static float g_rayRefO[3], g_rayRefD[3]; static DWO
 static fc2vr::weapon::SupportBinding g_support; // g_cs protects descriptor/token publication
 static M4 g_supportHoldR{},g_supportHoldL{}; static uint64_t g_supportHoldSerial=0;
 static uint64_t g_supportReported=0;
-static float g_shotO[3], g_shotF[3], g_camFwdNow[3], g_camRefO[3], g_camRefD[3]; static bool g_shotValid = false;
+static float g_shotO[3], g_shotF[3], g_camRefO[3], g_camRefD[3]; static bool g_shotValid = false;
 static fc2vr::authority::Stamp g_shotSource; static void* g_shotWeapon = nullptr;
 static fc2vr::arm::TwistHistory g_twist[2]; // protected by g_cs; one update per source sample
 static uint64_t g_twistReport[2]{};
@@ -261,15 +262,17 @@ static void SaveHold(uint32_t key, const M4& r, const M4& l, int axis, float sig
 static bool ShotCurrent(const fc2vr::authority::Stamp& source, void* weapon) {
     return fc2vr::authority::SameOwner(weapon,g_curWeapon) && xr::InputCurrent(source,1);
 }
-static bool ReadAim(float o[3], float d[3], float* cameraForward = nullptr) {
+static bool ReadAim(float o[3], float d[3],fc2vr::weapon::Pose* native=nullptr,fc2vr::weapon::Pose* target=nullptr) {
     fc2vr::authority::Stamp shotSource,scopeSource; void* shotWeapon; void* scopeWeapon;
-    float scopeO[3],scopeD[3]; bool valid,scope;
+    float scopeO[3],scopeD[3]; bool valid,scope; fc2vr::weapon::Pose scopeBasis;
     Lock(); valid = g_shotValid; shotSource = g_shotSource; shotWeapon = g_shotWeapon;
-    memcpy(o,g_shotO,12); memcpy(d,g_shotF,12); if (cameraForward) memcpy(cameraForward,g_camFwdNow,12);
+    memcpy(o,g_shotO,12); memcpy(d,g_shotF,12);
+    if (native) *native=g_nativeBasis;
+    if (target) *target=g_weaponBasis;
     scope = g_scopeTick && GetTickCount()-g_scopeTick < 200;
-    scopeSource = g_scopeSource; scopeWeapon = g_scopeWeapon; memcpy(scopeO,g_scopeO,12); memcpy(scopeD,g_scopeD,12); Unlock();
+    scopeSource = g_scopeSource; scopeWeapon = g_scopeWeapon; scopeBasis=g_scopeBasis; memcpy(scopeO,g_scopeO,12); memcpy(scopeD,g_scopeD,12); Unlock();
     if (!valid || !ShotCurrent(shotSource,shotWeapon)) return false;
-    if (scope && scopeWeapon == shotWeapon && ShotCurrent(scopeSource,scopeWeapon)) { memcpy(o,scopeO,12); memcpy(d,scopeD,12); }
+    if (scope && scopeWeapon == shotWeapon && ShotCurrent(scopeSource,scopeWeapon)) { memcpy(o,scopeO,12); memcpy(d,scopeD,12); if (target) *target=scopeBasis; }
     return true;
 }
 // ---- diagnostic (phone calls and other special controls): which skeletons are animated, does the arm code run
@@ -1016,10 +1019,11 @@ static void Apply(uint8_t* skel) {
     // shots follow the sight line of the re-posed weapon
     // (steady hands: from the camera as it sat on the hand when the hold was taken, carried by the re-pose - not
     // from the game's camera now, which sways while sprinting and would make the aiming dot and shots sway with it)
-    { float so[3], sf[3]; XformPt(Map, co, so); XformDir(Map, cf, sf);
+    { float so[3], sf[3]; M4 sight=Mul(C,Map); XformPt(Map, co, so); XformDir(Map, cf, sf);
       if (g_c.steadyHands && g_relHave && !f.map) {
           M4 ir; if (Inv(g_relR, ir)) {
               M4 V = Mul(Mul(ir, Bw[rh]), Map);   // the capture-time camera, re-posed with the weapon
+              sight=V;
               for (int k = 0; k < 3; ++k) { so[k] = V.m[3][k]; sf[k] = -V.m[2][k]; }
           }
       }
@@ -1029,7 +1033,9 @@ static void Apply(uint8_t* skel) {
       const bool authority = f.handAuthority && f.weapon && f.weapon == g_curWeapon && xr::InputCurrent(f.source,1);
       Lock(); if (g_shotWeapon != f.weapon) g_scopeTick = 0;
       g_shotSource = f.source; g_shotWeapon = f.weapon;
-      memcpy(g_shotO, so, 12); memcpy(g_shotF, sf, 12); memcpy(g_camFwdNow, cf, 12); g_shotValid = authority; memcpy(g_rayRefO, sr, 12); memcpy(g_rayRefD, sfr, 12);
+      g_nativeBasis={Read3(f.camRows[0]),Read3(f.camRows[2]),fc2vr::tracking::Scale(Read3(f.camRows[1]),-1),{}};
+      g_weaponBasis=PoseOf(sight);
+      memcpy(g_shotO, so, 12); memcpy(g_shotF, sf, 12); g_shotValid = authority; memcpy(g_rayRefO, sr, 12); memcpy(g_rayRefD, sfr, 12);
       memcpy(g_camRefO, cro, 12); memcpy(g_camRefD, crd, 12); g_rayTick = GetTickCount(); Unlock(); }
     // rigid re-pose of both arm chains
     for (int i = 0; i < n && i < 512; ++i) if (g_armMask[i]) Bw[i] = Mul(Bw[i], Map);
@@ -2849,13 +2855,11 @@ static void __fastcall Hook_PlayerShot(void* self, void* edx, void* pawn, float*
     if (!g_c.aimFromController || !origin || !dir) return;
     if (controls::MountedWeapon()) {   // v221: a mounted gun fires along the game's camera line (where its dot is), not the hand's
         static int nl = 0; if (nl++ < 3) LOG("arms: mounted gun shot left as the game aims it (dir %.3f %.3f %.3f)", dir[0], dir[1], dir[2]); return; }
-    float ao[3], af[3], cfw[3];
-    if (!ReadAim(ao,af,cfw)) return;
-    // keep the game's spread: the deviation of its direction from the camera's forward
-    float nd[3]; for (int k = 0; k < 3; ++k) nd[k] = af[k] + (dir[k] - cfw[k]);
-    Normalize(nd);
+    float ao[3], af[3]; fc2vr::weapon::Pose native,target; fc2vr::tracking::Vec3 transported;
+    if (!ReadAim(ao,af,&native,&target) || !fc2vr::weapon::TransportSpread(Read3(dir),native,target,transported)) return;
+    float nd[3]; Put3(nd,transported);
     for (int k = 0; k < 3; ++k) { origin[k] = ao[k]; dir[k] = nd[k]; }
-    if (InterlockedIncrement(&g_shots) <= 3) LOG("arms: shot from controller %.2f %.2f %.2f dir %.3f %.3f %.3f", ao[0], ao[1], ao[2], nd[0], nd[1], nd[2]);
+    if (InterlockedIncrement(&g_shots) <= 3) LOG("arms: spread-basis-1 shot from controller %.2f %.2f %.2f dir %.3f %.3f %.3f", ao[0], ao[1], ao[2], nd[0], nd[1], nd[2]);
 }
 
 // Projectile weapons (crossbow, rocket and grenade launchers): CWeaponFireProjectileStrategy, player branch
@@ -3135,8 +3139,10 @@ void MonoRenderFix(const float game[16], const float posed[16]) {
 }
 bool MonoEquipped() { return g_monoAt != nullptr; }
 bool MonoTarget() { return g_monoTarget && GetTickCount() - g_monoTargetTick < 300; }
-void SetScopeRay(const float o[3], const float d[3], const RayContext& context) { if (!g_csInit) return;
-    Lock(); memcpy(g_scopeO,o,12); memcpy(g_scopeD,d,12); g_scopeSource = context.source; g_scopeWeapon = context.weapon; g_scopeTick = GetTickCount(); Unlock(); }
+void SetScopeRay(const float o[3], const float d[3], const RayContext& context,const float right[3],const float up[3]) { if (!g_csInit) return;
+    const fc2vr::weapon::Pose basis{Read3(right),Read3(up),fc2vr::tracking::Scale(Read3(d),-1),Read3(o)};
+    if (!fc2vr::weapon::Rigid(basis)) { Lock(); g_scopeTick=0; Unlock(); return; }
+    Lock(); g_scopeBasis=basis; memcpy(g_scopeO,o,12); memcpy(g_scopeD,d,12); g_scopeSource = context.source; g_scopeWeapon = context.weapon; g_scopeTick = GetTickCount(); Unlock(); }
 void* CurrentWeapon() { return g_curWeapon; }
 void SetMachete(float angle, float yaw, float roll) { g_c.macheteAngle = angle; g_c.macheteYaw = yaw; g_c.macheteRoll = roll; }
 void GetMachete(float& angle, float& yaw, float& roll) { angle = g_c.macheteAngle; yaw = g_c.macheteYaw; roll = g_c.macheteRoll; }

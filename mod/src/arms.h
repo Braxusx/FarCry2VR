@@ -135,7 +135,7 @@ int GetThrowArc(float (*pts)[3], int maxPts, bool& land, float normal[3], bool& 
 bool Foregrip(const Frame& f,float out[3],bool& oneHanded,uint64_t& token); // current ref placement of an owner-bound socket
 float LastHandSpan();
 struct RayContext { fc2vr::authority::Stamp source{}; void* weapon = nullptr; };
-void SetScopeRay(const float o[3], const float d[3], const RayContext& context);   // world; retains original source age/owner
+void SetScopeRay(const float o[3],const float d[3],const RayContext& context,const float right[3],const float up[3]); // world; original source age/owner and actual rendered scope basis
 void SetUseCallback(void (*cb)());
 void SetMachete(float angle, float yaw, float roll);
 void GetMachete(float& angle, float& yaw, float& roll);

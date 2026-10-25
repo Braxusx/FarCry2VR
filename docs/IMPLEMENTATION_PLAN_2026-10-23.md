@@ -5,8 +5,8 @@ Date: 2026-10-23. Proposed contributor work against
 Local source and GitHub main matched when this plan was written. Rebase the plan's
 source locations against newer work before implementation. The plan is checkpointed
 on `codex/tracking-arms-physical-steering`. R5's position/direction boundary and
-R1's shared effective camera frame and the first R4 input-authority safety slice
-are now built and desk-tested.
+R1's shared effective camera frame, the first R4 safety slice and the R2/R3/R8
+motion-pose mechanisms are now built and desk-tested (latest: 2026-10-25).
 Runtime acceptance has not started. See [contribution status](CONTRIBUTION_STATUS.md).
 
 ## Current checkpoint
@@ -26,10 +26,16 @@ Runtime acceptance has not started. See [contribution status](CONTRIBUTION_STATU
   contacts and cached NPC drive retain source evidence. Accepted throw intents
   keep a separate bounded native-animation deadline. See the
   [authority checkpoint](INPUT_AUTHORITY_2026-10-23.md) for boundaries and limits.
-- Nineteen CTest groups pass with MSVC x86: 31,225 numeric checks plus two
+- R2 now unwraps fractional twist once per source sample. R3 binds a stable socket
+  from the existing accepted hold, places it from current controllers and cancels
+  held-through-token changes. R8 transports full native hitscan spread into the
+  accepted weapon/rendered scope basis. These are mechanism fixes, not full PR 3/4
+  or headset acceptance; see [motion pose checkpoint](MOTION_POSE_2026-10-25.md).
+- Twenty-nine CTest groups pass with MSVC x86: 62,986 numeric checks plus three
   source-wiring guards. Numeric groups have passed MinGW GCC x86 as well. A frozen
   original SteadyCam oracle verifies extraction; bob/yaw/bone negative controls
-  exercise the old split. Rebuilt expiry/rearm mutants fail the new safety tests.
+  exercise the old split. Rebuilt expiry/rearm and twist/socket/spread mutants
+  fail the corresponding regression tests.
 - Both unmodified baseline and changed x86 DLL build with installed MinGW GCC;
   exports checked, no added warnings. The documented llvm-mingw toolchain is not
   installed, so that build route remains unverified. Nothing deployed or packaged.
@@ -38,7 +44,9 @@ Runtime acceptance has not started. See [contribution status](CONTRIBUTION_STATU
   refusal and full native session/pawn/model/palette/cache ownership remain open.
   If hierarchy hooks apply the previous sample before viewport publication, resolve
   the clock with a proved presentation seam; do not mask it with bone-origin drift.
-  No arm-twist, support-grip, manual-reload, physical-steering or DQS fix is claimed.
+  R2/R3/R8 runtime and visual acceptance, R6/R7 rig/IK robustness and R10 saved-hold
+  provenance remain open. No manual-reload, physical-steering or DQS feature is
+  claimed. The October 25 changes remain local; published branch ends at `5fdfaa4`.
 
 ## Contribution branch and upstream review
 
