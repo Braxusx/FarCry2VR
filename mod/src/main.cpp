@@ -563,12 +563,13 @@ static void NoteDraw(void* frame, ID3D10Device* dev) {
         }
     }
 }
-static void STDMETHODCALLTYPE Hook_DrawIndexed(ID3D10Device* d, UINT n, UINT s0, INT b) { o_DrawIndexed(d, n, s0, b); }
-static void STDMETHODCALLTYPE Hook_Draw(ID3D10Device* d, UINT n, UINT s0) { o_Draw(d, n, s0); }
+namespace cbcap { void OnDraw(uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t e, uint32_t f, void* rtv, int eye); }
+static void STDMETHODCALLTYPE Hook_DrawIndexed(ID3D10Device* d, UINT n, UINT s0, INT b) { cbcap::OnDraw(0x101, n, s0, (uint32_t)b, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); o_DrawIndexed(d, n, s0, b); }
+static void STDMETHODCALLTYPE Hook_Draw(ID3D10Device* d, UINT n, UINT s0) { cbcap::OnDraw(0x102, n, s0, 0, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); o_Draw(d, n, s0); }
 typedef void (STDMETHODCALLTYPE *DrawIdxInst_t)(ID3D10Device*, UINT, UINT, UINT, INT, UINT);
 typedef void (STDMETHODCALLTYPE *DrawInst_t)(ID3D10Device*, UINT, UINT, UINT, UINT);
 static DrawIdxInst_t o_DrawIdxInst = nullptr; static DrawInst_t o_DrawInst = nullptr;
-static void STDMETHODCALLTYPE Hook_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, UINT c, INT e, UINT f) { o_DrawIdxInst(d, a, b, c, e, f); }
+static void STDMETHODCALLTYPE Hook_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, UINT c, INT e, UINT f) { cbcap::OnDraw(0x103, a, b, c, (uint32_t)e, f, g_capRTV0, g_inEye ? g_capEye : 3); o_DrawIdxInst(d, a, b, c, e, f); }
 static void STDMETHODCALLTYPE Hook_DrawInst(ID3D10Device* d, UINT a, UINT b, UINT c, UINT e) { o_DrawInst(d, a, b, c, e); }
 // Inline hooks on the runtime implementations (catch every caller, cached pointers included).
 static DrawIndexed_t t_DrawIndexed = nullptr; static Draw_t t_Draw = nullptr; static DrawIdxInst_t t_DrawIdxInst = nullptr; static DrawInst_t t_DrawInst = nullptr; static OMSetRT_t t_OMSetRT = nullptr;
@@ -1027,8 +1028,10 @@ void Install(void** vt) {
     InlineHookImpl(vt[34], (void*)&I_UpdSub, (void**)&t_UpdSub, "UpdateSubresource");
 }
 void HookCreateVS(void** vt) { DWORD o; VirtualProtect(&vt[79], 4, PAGE_EXECUTE_READWRITE, &o); o_CreateVS = (CreateVS_t)vt[79]; vt[79] = (void*)&H_CreateVS; VirtualProtect(&vt[79], 4, o, &o); }
+static long drawCalls[2];
 void OnDraw(uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t e, uint32_t f, void* rtv, int eye) {
     if (!On()) return;
+    InterlockedIncrement(&drawCalls[(kind & 0x100) ? 1 : 0]);
     uint32_t h[8 + 8] = { kind, a, b, c, e, f, (uint32_t)(uintptr_t)curVS, (uint32_t)(uintptr_t)rtv | ((uint32_t)(eye & 3) << 30) };
     for (int i = 0; i < 8; ++i) h[8 + i] = (uint32_t)(uintptr_t)cb[i];
     EnterCriticalSection(&cs); Put('D', h, sizeof h); LeaveCriticalSection(&cs);
@@ -1055,7 +1058,7 @@ void Present(const char* iniDir) {   // render thread, each present
     LeaveCriticalSection(&vsCs);
     char path[MAX_PATH]; snprintf(path, sizeof path, "%sfc2vr_cbcap.bin", iniDir);
     FILE* fp = fopen(path, "wb"); if (fp) { fwrite(out.data(), 1, out.size(), fp); fclose(fp); }
-    LOG("cbcap: %u bytes written to %s (%u vertex shaders)", (unsigned)out.size(), path, (unsigned)used.size());
+    LOG("cbcap: %u bytes written to %s (%u vertex shaders; draws seen: inline %ld, vtable %ld)", (unsigned)out.size(), path, (unsigned)used.size(), drawCalls[0], drawCalls[1]); drawCalls[0] = drawCalls[1] = 0;
     ShowToast("GPU capture saved");
     out.clear(); out.shrink_to_fit(); state = 0;
 }
@@ -3647,7 +3650,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v232 test 3 = 1.0.2 + F4 rigid A/B, Ctrl+F4 GPU constant capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v232 test 4 = 1.0.2 + F4 rigid A/B, Ctrl+F4 GPU constant capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
