@@ -113,7 +113,7 @@ struct Frame {
     void* weapon = nullptr;   // instance identity, not a model/cache generation lease
     fc2vr::tracking::GameBasis game{};
     uint64_t frameSequence = 0;   // diagnostic application-frame stamp, not a freshness lease
-    float bonePub[3] = {}; bool bonePubValid = false;   // v231: the Camera bone when this frame was published (body clock)
+    float bonePub[3] = {}; bool bonePubValid = false; bool bonePubRoot = false;   // v232: bonePub is the seat (skeleton world position) of the drawn update   // v231: the Camera bone when this frame was published (body clock)
     float camRows[3][3];          // RAW native camera rows (incl. pitch): bone-axis calibration only
     float aimO[3], aimR[3], aimU[3], aimB[3];   // right controller aim pose (ref)
     float gripO[3];               // right controller grip position (ref)

@@ -783,7 +783,8 @@ static void Apply(uint8_t* skel) {
     // before the render thread publishes this frame's sample). Move the published origin by how far the Camera bone
     // has moved since, so the hands keep pace with walking, vehicles and the body (no lag-dependent jitter).
     if (g_c.bodyClock && f.bonePubValid) {
-        float d[3] = { co[0] - f.bonePub[0], co[1] - f.bonePub[1], co[2] - f.bonePub[2] };
+        const float* now = f.bonePubRoot ? W.m[3] : co;   // v232 vehicles: the seat moved since the drawn update the view was placed from
+        float d[3] = { now[0] - f.bonePub[0], now[1] - f.bonePub[1], now[2] - f.bonePub[2] };
         float dl = sqrtf(Dot3(d, d));
         static double sum = 0; static int cnt = 0, nLog = 0; static ULONGLONG lastL = 0;
         if (std::isfinite(dl) && dl < 1.5f) { f.game.P.x += d[0]; f.game.P.y += d[1]; f.game.P.z += d[2]; sum += dl; ++cnt; }

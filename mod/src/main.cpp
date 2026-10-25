@@ -412,6 +412,7 @@ static GameBasis BasisFromGameCam(uint8_t* c) {
 // Bypass in vehicles, mounted guns and special controls. Prepare once, then share.
 static inline double NowMs();
 static bool g_riding = false;
+static bool g_vehViewUsed = false;
 static bool g_handSmooth = true;
 static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize) {
     static fc2vr::tracking::PoseFrameBuilder builder;
@@ -455,6 +456,7 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
         // v232 vehicles and rides: the Camera bone moves against the seated body (driver / passenger animation, ~10 mm
         // of jerk per frame), so the view shook against the car. The view rides on the skeleton's world matrix (the
         // seat) plus the Camera bone's offset from it, low-passed in the seat's frame (VehicleViewSmoothing, seconds).
+        g_vehViewUsed = false;
         {   static float ls[3]; static bool have = false; static double lt = 0;
             float cp[3], Wm[16]; double tn = input.nowMs; float dt = lt > 0 ? (float)((tn - lt) * 0.001) : 1.0f; lt = tn;
             bool veh = g_cfg.vehicleViewSmooth > 0 && (controls::VehicleMode() != 0 || g_riding);
@@ -465,7 +467,7 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
                 else { float k = 1.0f - expf(-dt / g_cfg.vehicleViewSmooth); for (int r = 0; r < 3; ++r) ls[r] += (l[r] - ls[r]) * k; }
                 float p[3]; for (int c = 0; c < 3; ++c) p[c] = Wm[12 + c] + ls[0] * Wm[c] + ls[1] * Wm[4 + c] + ls[2] * Wm[8 + c];
                 float ex = p[0] - gb.P.x, ey = p[1] - gb.P.y, ez = p[2] - gb.P.z;
-                if (ex * ex + ey * ey + ez * ez < 0.5f * 0.5f) gb.P = { p[0], p[1], p[2] };
+                if (ex * ex + ey * ey + ez * ez < 0.5f * 0.5f) { gb.P = { p[0], p[1], p[2] }; g_vehViewUsed = true; }
             } else have = false;
         }
     }
@@ -2590,6 +2592,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
         auto put = [](float* d, V3 v) { d[0] = v.x; d[1] = v.y; d[2] = v.z; };
         af.game = frame.game; af.frameSequence = frame.sequence;
         af.bonePubValid = arms::CamBonePos(af.bonePub);   // v231 body clock
+        if (g_vehViewUsed) { float cp[3], Wm[16]; if (arms::CamBoneRoot(cp, Wm, g_cfg.vehicleViewPrev != 0)) { af.bonePub[0] = Wm[12]; af.bonePub[1] = Wm[13]; af.bonePub[2] = Wm[14]; af.bonePubRoot = true; af.bonePubValid = true; } }
         if (g_motionDiag) {   // v231 diagnostic (MotionDiag=1): does the skeleton (as the renderer will read it) still hold the hand the mod wrote?
             static int frames = 0, differ = 0; static float worst = 0; static double lastL = 0;
             float aw[3], lw[3], hd3[3], tg[3], lh[3]; long ds = 0;
@@ -3810,7 +3813,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v232 test 15 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Insert/PgDn DLSS A/B, local arm frame (Ctrl+F5), hand stabiliser (Ctrl+F6), vehicle view on the seat (Ctrl+F7), Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v232 test 16 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Insert/PgDn DLSS A/B, local arm frame (Ctrl+F5), hand stabiliser (Ctrl+F6), vehicle view on the seat (Ctrl+F7), Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
