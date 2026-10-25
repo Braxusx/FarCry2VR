@@ -672,6 +672,7 @@ static D3D10_VIEWPORT UiXform(const D3D10_VIEWPORT& v) {
 }
 static inline bool UiShiftNow() { return g_uiShift && (g_cfg.uiScope == 1 || g_uiShiftRT); }
 static void ScanDrawSlots();
+namespace cbcap { void NoteVP(const D3D10_VIEWPORT* vp, UINT n); void NoteRT(ID3D10RenderTargetView* rtv); }
 static void STDMETHODCALLTYPE I_RSSetVP(ID3D10Device* d, UINT n, const D3D10_VIEWPORT* vp) {
     ScanDrawSlots();
     // the near pass (arms, weapon) draws into a compressed depth range: its viewport's MaxDepth is where it ends (DLSS mask)
@@ -679,6 +680,7 @@ static void STDMETHODCALLTYPE I_RSSetVP(ID3D10Device* d, UINT n, const D3D10_VIE
         if (vp[0].MaxDepth != g_nearMaxDepth) { static int logged = 0; if (logged++ < 4) LOG("eye viewport with depth range %.5f..%.5f (near pass)", vp[0].MinDepth, vp[0].MaxDepth); }
         g_nearMaxDepth = vp[0].MaxDepth;
     }
+    cbcap::NoteVP(vp, n);
     if (g_traceDraws && n && vp) LogWrite(" RSSetViewports %d,%d %ux%u%s", vp[0].TopLeftX, vp[0].TopLeftY, vp[0].Width, vp[0].Height, g_uiShift ? " [UI]" : "");
     if (g_uiShift && n >= 1 && vp) {
         g_uiVpOrig = vp[0]; g_uiVpValid = true;
@@ -707,6 +709,7 @@ static void NoteEyeBind(ID3D10View* v, bool depth) {
 }
 static void STDMETHODCALLTYPE I_OMSetRT(ID3D10Device* d, UINT n, ID3D10RenderTargetView* const* rtv, ID3D10DepthStencilView* dsv) {
     g_capRTV0 = (rtv && n) ? (void*)rtv[0] : nullptr;
+    cbcap::NoteRT((rtv && n) ? rtv[0] : nullptr);
     ScanDrawSlots();
     if (g_eyeBindsOn && g_inEye) { NoteEyeBind(dsv, true); if (rtv) for (UINT k = 0; k < n && k < 8; ++k) NoteEyeBind(rtv[k], false); }
     if (g_capCollect && rtv) for (UINT k = 0; k < n && k < 8; ++k) if (rtv[k] && g_nCapRTs < 64) {
@@ -1071,6 +1074,23 @@ static HRESULT STDMETHODCALLTYPE H_CreateVS(ID3D10Device* d, const void* code, S
     if (SUCCEEDED(hr) && out_ && *out_ && code && n < 262144) { if (!vsInit) { InitializeCriticalSection(&vsCs); vsInit = true; } EnterCriticalSection(&vsCs); vsCodes.push_back({ *out_, std::string((const char*)code, n) }); LeaveCriticalSection(&vsCs); }
     return hr;
 }
+void NoteVP(const D3D10_VIEWPORT* vp, UINT n) {   // 'V': x, y, w, h of the first viewport
+    if (!On() || !vp || !n) return; int32_t h[4] = { vp[0].TopLeftX, vp[0].TopLeftY, (int32_t)vp[0].Width, (int32_t)vp[0].Height };
+    EnterCriticalSection(&cs); Put('V', h, 16); LeaveCriticalSection(&cs);
+}
+void NoteRT(ID3D10RenderTargetView* rtv) {   // 'T': view, its texture, width, height, format
+    if (!On()) return; uint32_t h[5] = { (uint32_t)(uintptr_t)rtv, 0, 0, 0, 0 };
+    if (rtv) { ID3D10Resource* r = nullptr; rtv->GetResource(&r); ID3D10Texture2D* t = nullptr;
+        if (r && SUCCEEDED(r->QueryInterface(__uuidof(ID3D10Texture2D), (void**)&t)) && t) { D3D10_TEXTURE2D_DESC d; t->GetDesc(&d); h[1] = (uint32_t)(uintptr_t)t; h[2] = d.Width; h[3] = d.Height; h[4] = d.Format; t->Release(); }
+        if (r) r->Release(); }
+    EnterCriticalSection(&cs); Put('T', h, 20); LeaveCriticalSection(&cs);
+}
+typedef void (STDMETHODCALLTYPE *RSSetSc_t)(ID3D10Device*, UINT, const D3D10_RECT*);
+static RSSetSc_t t_RSSetSc;
+static void STDMETHODCALLTYPE I_RSSetSc(ID3D10Device* d, UINT n, const D3D10_RECT* r) {   // 'R': scissor rect
+    if (On() && n && r) { int32_t h[4] = { r[0].left, r[0].top, r[0].right, r[0].bottom }; EnterCriticalSection(&cs); Put('R', h, 16); LeaveCriticalSection(&cs); }
+    t_RSSetSc(d, n, r);
+}
 void NoteBuffer(ID3D10Buffer* b) {   // first constant buffer created: hook Map/Unmap on the runtime implementation
     static bool done = false; if (done || !b) return; done = true;
     void** vt = *(void***)b;
@@ -1083,6 +1103,7 @@ void Install(void** vt) {
     InlineHookImpl(vt[3], (void*)&I_VSSetCB, (void**)&t_VSSetCB, "VSSetConstantBuffers");
     InlineHookImpl(vt[7], (void*)&I_VSSetShader, (void**)&t_VSSetShader, "VSSetShader");
     InlineHookImpl(vt[34], (void*)&I_UpdSub, (void**)&t_UpdSub, "UpdateSubresource");
+    InlineHookImpl(vt[31], (void*)&I_RSSetSc, (void**)&t_RSSetSc, "RSSetScissorRects");
 }
 void HookCreateVS(void** vt) { DWORD o; VirtualProtect(&vt[79], 4, PAGE_EXECUTE_READWRITE, &o); o_CreateVS = (CreateVS_t)vt[79]; vt[79] = (void*)&H_CreateVS; VirtualProtect(&vt[79], 4, o, &o); }
 static long drawCalls[2];
@@ -2096,6 +2117,57 @@ static float CentreLuma(ID3D10Texture2D* t) {
             sum += 0.2126 * r + 0.7152 * g + 0.0722 * bl; } }
     st->Unmap(0);
     return (float)(sum / 256.0);
+}
+// v232: the monocular window copies the scene kept before the UI. With the game's HDR post-processing that scene is
+// R11G11B10_FLOAT, which cannot be copied into the 8-bit screen texture (the copy is dropped: a black window).
+// A small shader pass converts it to the back buffer's format first.
+static ID3D10Texture2D* g_convTex = nullptr; static ID3D10RenderTargetView* g_convRtv = nullptr; static ID3D10ShaderResourceView* g_convSrv = nullptr; static ID3D10Texture2D* g_convSrc = nullptr;
+static ID3D10VertexShader* g_convVs = nullptr; static ID3D10PixelShader* g_convPs = nullptr; static ID3D10StateBlock* g_convSb = nullptr;
+static ID3D10DepthStencilState* g_convDss = nullptr; static ID3D10RasterizerState* g_convRs = nullptr; static ID3D10BlendState* g_convBs = nullptr; static bool g_convBad = false;
+static ID3D10Texture2D* ConvertScene(ID3D10Texture2D* src, DXGI_FORMAT outFmt) {
+    if (!src || g_convBad || !g_dev10) return nullptr;
+    D3D10_TEXTURE2D_DESC sd; src->GetDesc(&sd);
+    if (!g_convVs) {
+        g_convBad = true;
+        static const char k[] = "Texture2D t : register(t0);\n"
+            "void vs(uint id : SV_VertexID, out float4 p : SV_Position) { float2 u = float2((id << 1) & 2, id & 2); p = float4(u * float2(2, -2) + float2(-1, 1), 0, 1); }\n"
+            "float4 ps(float4 p : SV_Position) : SV_Target { return float4(saturate(t.Load(int3(p.xy, 0)).rgb), 1); }\n";
+        HMODULE dc = LoadLibraryW(L"d3dcompiler_47.dll");
+        typedef HRESULT (WINAPI* Comp_t)(const void*, SIZE_T, const char*, const void*, void*, const char*, const char*, UINT, UINT, ID3D10Blob**, ID3D10Blob**);
+        Comp_t comp = dc ? (Comp_t)GetProcAddress(dc, "D3DCompile") : nullptr;
+        ID3D10Blob *bv = nullptr, *bp = nullptr, *er = nullptr;
+        if (!comp || FAILED(comp(k, sizeof k - 1, "fc2vr_conv", nullptr, nullptr, "vs", "vs_4_0", 0, 0, &bv, &er)) || FAILED(comp(k, sizeof k - 1, "fc2vr_conv", nullptr, nullptr, "ps", "ps_4_0", 0, 0, &bp, &er))) {
+            LOG("monocular: scene conversion shader failed (%s)", er ? (const char*)er->GetBufferPointer() : "no d3dcompiler_47"); if (er) er->Release(); if (bv) bv->Release(); return nullptr; }
+        bool ok = SUCCEEDED(g_dev10->CreateVertexShader(bv->GetBufferPointer(), bv->GetBufferSize(), &g_convVs)) && SUCCEEDED(g_dev10->CreatePixelShader(bp->GetBufferPointer(), bp->GetBufferSize(), &g_convPs));
+        bv->Release(); bp->Release();
+        D3D10_DEPTH_STENCIL_DESC dd = {}; ok = ok && SUCCEEDED(g_dev10->CreateDepthStencilState(&dd, &g_convDss));
+        D3D10_RASTERIZER_DESC rd = {}; rd.FillMode = D3D10_FILL_SOLID; rd.CullMode = D3D10_CULL_NONE; rd.DepthClipEnable = TRUE; ok = ok && SUCCEEDED(g_dev10->CreateRasterizerState(&rd, &g_convRs));
+        D3D10_BLEND_DESC bl = {}; for (int i = 0; i < 8; ++i) bl.RenderTargetWriteMask[i] = D3D10_COLOR_WRITE_ENABLE_ALL; ok = ok && SUCCEEDED(g_dev10->CreateBlendState(&bl, &g_convBs));
+        typedef HRESULT (WINAPI* CreateSB_t)(ID3D10Device*, D3D10_STATE_BLOCK_MASK*, ID3D10StateBlock**); typedef HRESULT (WINAPI* MaskAll_t)(D3D10_STATE_BLOCK_MASK*);
+        HMODULE d10 = GetModuleHandleW(L"d3d10.dll"); if (!d10) d10 = LoadLibraryW(L"d3d10.dll");
+        CreateSB_t csb = d10 ? (CreateSB_t)GetProcAddress(d10, "D3D10CreateStateBlock") : nullptr; MaskAll_t mall = d10 ? (MaskAll_t)GetProcAddress(d10, "D3D10StateBlockMaskEnableAll") : nullptr;
+        if (ok && csb && mall) { D3D10_STATE_BLOCK_MASK mk; mall(&mk); ok = SUCCEEDED(csb(g_dev10, &mk, &g_convSb)); } else ok = false;
+        if (!ok) { LOG("monocular: scene conversion setup failed"); return nullptr; }
+        g_convBad = false; LOG("monocular: scene conversion ready (%d -> %d)", (int)sd.Format, (int)outFmt);
+    }
+    if (g_convTex) { D3D10_TEXTURE2D_DESC cd; g_convTex->GetDesc(&cd); if (cd.Width != sd.Width || cd.Height != sd.Height || cd.Format != outFmt) { g_convRtv->Release(); g_convTex->Release(); g_convRtv = nullptr; g_convTex = nullptr; } }
+    if (!g_convTex) {
+        D3D10_TEXTURE2D_DESC cd = sd; cd.Format = outFmt; cd.MipLevels = 1; cd.ArraySize = 1; cd.SampleDesc.Count = 1; cd.SampleDesc.Quality = 0; cd.Usage = D3D10_USAGE_DEFAULT; cd.BindFlags = D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE; cd.CPUAccessFlags = 0; cd.MiscFlags = 0;
+        if (FAILED(g_dev10->CreateTexture2D(&cd, nullptr, &g_convTex)) || FAILED(g_dev10->CreateRenderTargetView(g_convTex, nullptr, &g_convRtv))) { if (g_convTex) g_convTex->Release(); g_convTex = nullptr; g_convBad = true; LOG("monocular: conversion target failed"); return nullptr; }
+    }
+    if (g_convSrc != src) { if (g_convSrv) g_convSrv->Release(); g_convSrv = nullptr; g_convSrc = nullptr;
+        if (FAILED(g_dev10->CreateShaderResourceView(src, nullptr, &g_convSrv))) { g_convSrv = nullptr; return nullptr; } g_convSrc = src; }
+    g_convSb->Capture();
+    g_dev10->OMSetRenderTargets(1, &g_convRtv, nullptr);
+    D3D10_VIEWPORT vp = { 0, 0, sd.Width, sd.Height, 0, 1 }; g_dev10->RSSetViewports(1, &vp);
+    g_dev10->IASetInputLayout(nullptr); g_dev10->IASetPrimitiveTopology(D3D10_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    g_dev10->VSSetShader(g_convVs); g_dev10->GSSetShader(nullptr); g_dev10->PSSetShader(g_convPs);
+    g_dev10->PSSetShaderResources(0, 1, &g_convSrv);
+    g_dev10->OMSetDepthStencilState(g_convDss, 0); g_dev10->RSSetState(g_convRs); float bf[4] = {}; g_dev10->OMSetBlendState(g_convBs, bf, 0xFFFFFFFF);
+    o_Draw ? o_Draw(g_dev10, 3, 0) : g_dev10->Draw(3, 0);
+    ID3D10ShaderResourceView* nul = nullptr; g_dev10->PSSetShaderResources(0, 1, &nul);
+    g_convSb->Apply();
+    return g_convTex;
 }
 static ID3D10Texture2D* g_scopePre = nullptr; static bool g_scopePreValid = false; static ID3D10Texture2D* g_scopeComp = nullptr; static ID3D10Texture2D* g_scopeBbTmp = nullptr;
 static bool ScopeUiBegin() {
@@ -3385,7 +3457,13 @@ static void __fastcall Hook_Present(void* self, void* edx, int a1) {
             }
             g_scopePreValid = false;
             const bool monoView = controls::MonocularOut();   // v214: the monocular's own window (its targeting ring, no crosshair / ammo)
-            if (monoView && g_scopePre) { src = g_scopePre; resolved = true; }   // v215: the scene before the UI (no tutorial / button prompts); the ring is the monocular's own lens
+            if (monoView && g_scopePre) { src = g_scopePre; resolved = true;
+                D3D10_TEXTURE2D_DESC bd2{}, pd2{}; if (bb) bb->GetDesc(&bd2); g_scopePre->GetDesc(&pd2);
+                if (bb && TypelessFamily10(bd2.Format) != TypelessFamily10(pd2.Format)) {
+                    ID3D10Texture2D* c = ConvertScene(g_scopePre, bd2.Format);
+                    if (c) src = c; else src = bb;   // no conversion: at least the finished frame, not a black window
+                }
+            }   // v215: the scene before the UI (no tutorial / button prompts); the ring is the monocular's own lens
             xr::SetMonoTarget(monoView && arms::MonoTarget());
             {   static double nextDiag = 0; static int nDiag = 0;   // v231: is the kept scene black before it reaches the scope layer?
                 if (monoView && nDiag < 8 && NowMs() > nextDiag) { nextDiag = NowMs() + 3000.0; ++nDiag;
@@ -3813,7 +3891,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v232 test 16 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Insert/PgDn DLSS A/B, local arm frame (Ctrl+F5), hand stabiliser (Ctrl+F6), vehicle view on the seat (Ctrl+F7), Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v232 test 17 = 1.0.2 + monocular HDR scene conversion, capture records viewports/scissors/targets + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Insert/PgDn DLSS A/B, local arm frame (Ctrl+F5), hand stabiliser (Ctrl+F6), vehicle view on the seat (Ctrl+F7), Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
