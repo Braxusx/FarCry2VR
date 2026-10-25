@@ -162,10 +162,13 @@ static PFN_xrGetDisplayRefreshRateFB p_xrGetDisplayRefreshRateFB;
 static PFN_xrRequestDisplayRefreshRateFB p_xrRequestDisplayRefreshRateFB;
 static bool g_hasRefreshExt;
 static float g_wantRefresh;   // ini DisplayRefreshRate (0 = leave it to the runtime)
+volatile double g_displayPeriod = 0;   // v232: seconds, from xrWaitFrame (frame pacing)
+double DisplayPeriod() { return g_displayPeriod; }
 static double QpcMs() { static double k = 0; if (!k) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); k = 1000.0 / (double)f.QuadPart; } LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart * k; }
 static XrResult XRAPI_CALL W_xrWaitFrame(XrSession s, const XrFrameWaitInfo* wi, XrFrameState* fs) {
     double t0 = QpcMs(); XrResult r = o_xrWaitFrame(s, wi, fs); double t1 = QpcMs();
     if (XR_SUCCEEDED(r) && fs) diag::OnWaitFrame(t1 - t0, (int64_t)fs->predictedDisplayPeriod, fs->shouldRender != XR_FALSE);
+    if (XR_SUCCEEDED(r) && fs && fs->predictedDisplayPeriod > 0) g_displayPeriod = (double)fs->predictedDisplayPeriod * 1e-9;
     return r;
 }
 static XrResult XRAPI_CALL W_xrEndFrame(XrSession s, const XrFrameEndInfo* ei) {
@@ -1078,6 +1081,45 @@ static bool BlitEye(int e, const XrRect2Di& rect, XrRect2Di& out) {
 static XrRect2Di g_eyeRect[2]; static bool g_eyeRectSet[2];
 void SetEyeRect(int e, int x, int y, int w, int h) { if (e < 0 || e > 1 || w <= 0 || h <= 0) return; g_eyeRect[e] = { { x, y }, { w, h } }; g_eyeRectSet[e] = true; }
 
+// v232: the lowered top strip of the HUD was cut at a fixed row, and a tutorial message crossing that row was split
+// in two (its top half lowered, the rest left in place). The HUD's alpha is read back small (a mip level ~256 rows,
+// two frames late) and the strip is cut at the empty row nearest to HudTopBand; no empty row nearby = no strip.
+static ID3D10Texture2D* g_bandMip = nullptr; static ID3D10ShaderResourceView* g_bandSrv = nullptr; static ID3D10Texture2D* g_bandSt[3] = {};
+static int g_bandLevel = 0, g_bandIdx = 0, g_bandFrames = 0; static int32_t g_bandCut = -1; static bool g_bandBad = false;
+static void HudBandScan() {
+    if (g_bandBad || !g_shared[3].tex10 || !g_dev10) return;
+    if (!g_bandMip) {
+        g_bandBad = true;
+        D3D10_TEXTURE2D_DESC d{}; d.Width = g_eyeW; d.Height = g_eyeH; d.MipLevels = 0; d.ArraySize = 1; d.Format = g_eyeFormat; d.SampleDesc.Count = 1;
+        d.Usage = D3D10_USAGE_DEFAULT; d.BindFlags = D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE; d.MiscFlags = D3D10_RESOURCE_MISC_GENERATE_MIPS;
+        if (FAILED(g_dev10->CreateTexture2D(&d, nullptr, &g_bandMip)) || FAILED(g_dev10->CreateShaderResourceView(g_bandMip, nullptr, &g_bandSrv))) { LOG("HUD strip: mip texture failed"); return; }
+        g_bandLevel = 0; while ((g_eyeH >> (g_bandLevel + 1)) >= 256) ++g_bandLevel;
+        D3D10_TEXTURE2D_DESC s{}; s.Width = g_eyeW >> g_bandLevel; s.Height = g_eyeH >> g_bandLevel; if (!s.Width) s.Width = 1; s.MipLevels = 1; s.ArraySize = 1; s.Format = g_eyeFormat; s.SampleDesc.Count = 1;
+        s.Usage = D3D10_USAGE_STAGING; s.CPUAccessFlags = D3D10_CPU_ACCESS_READ;
+        for (auto& t : g_bandSt) if (FAILED(g_dev10->CreateTexture2D(&s, nullptr, &t))) { LOG("HUD strip: staging failed"); return; }
+        g_bandBad = false; LOG("HUD strip: cut row from the HUD alpha (mip %d, %ux%u)", g_bandLevel, s.Width, s.Height);
+    }
+    g_dev10->CopySubresourceRegion(g_bandMip, 0, 0, 0, 0, g_shared[3].tex10, 0, nullptr);
+    g_dev10->GenerateMips(g_bandSrv);
+    int i = g_bandIdx; g_bandIdx = (g_bandIdx + 1) % 3;
+    g_dev10->CopySubresourceRegion(g_bandSt[i], 0, 0, 0, 0, g_bandMip, g_bandLevel, nullptr);
+    if (++g_bandFrames < 3) return;
+    ID3D10Texture2D* rd = g_bandSt[g_bandIdx];   // written two frames ago
+    D3D10_MAPPED_TEXTURE2D m;
+    if (FAILED(rd->Map(0, D3D10_MAP_READ, D3D10_MAP_FLAG_DO_NOT_WAIT, &m))) return;
+    D3D10_TEXTURE2D_DESC sd; rd->GetDesc(&sd);
+    auto empty = [&](int y) { const uint8_t* row = (const uint8_t*)m.pData + (size_t)y * m.RowPitch; for (UINT k = 0; k < sd.Width; ++k) if (row[k * 4 + 3] > 2) return false; return true; };
+    int want = (int)(sd.Height * g_hudBand), range = (int)(sd.Height * 0.08f) + 1, found = -1;
+    for (int d = 0; d <= range && found < 0; ++d) {
+        if (want + d < (int)sd.Height && empty(want + d)) found = want + d;
+        else if (d && want - d > 0 && empty(want - d)) found = want - d;
+    }
+    rd->Unmap(0);
+    int32_t cut = found < 0 ? -1 : (int32_t)(((found << g_bandLevel)) + (1 << g_bandLevel) / 2);
+    if ((cut < 0) != (g_bandCut < 0)) LOG("HUD strip: %s", cut < 0 ? "something crosses the strip line - strip off" : "strip on");
+    g_bandCut = cut;
+}
+
 void EndFrame(const FrameViews& fv, bool submittedEyes) {
     bool rectSet[2] = { g_eyeRectSet[0], g_eyeRectSet[1] }; g_eyeRectSet[0] = g_eyeRectSet[1] = false;
     if (!g_frameBegun) return;
@@ -1089,6 +1131,7 @@ void EndFrame(const FrameViews& fv, bool submittedEyes) {
     const XrCompositionLayerBaseHeader* layers[6] = { (XrCompositionLayerBaseHeader*)&layer, nullptr, nullptr, nullptr, nullptr, nullptr };
     uint32_t layerCount = 0;
     if (submittedEyes && fv.valid && fv.shouldRender) {
+        if (g_hudOn && g_hudBandOn && g_hudDrop > 0) HudBandScan();
         Sync10();
         XrRect2Di used[2];
         for (int e = 0; e < 2; ++e) g_arcViews[e] = fv.views[e];
@@ -1111,7 +1154,7 @@ void EndFrame(const FrameViews& fv, bool submittedEyes) {
                 hq.pose = g_hudPose;
                 hq.size = { g_hudWidth, g_hudWidth * (float)g_hud.h / (float)g_hud.w };
                 layers[layerCount++] = (XrCompositionLayerBaseHeader*)&hq;
-                int32_t b = (int32_t)(g_hud.h * g_hudBand);
+                int32_t b = g_bandBad ? (int32_t)(g_hud.h * g_hudBand) : g_bandCut;
                 if (g_hudBandOn && b > 0 && b < g_hud.h && g_hudDrop > 0) {
                     const float H = hq.size.height, px = H / (float)g_hud.h;
                     auto shifted = [&](float dy) {   // the HUD pose moved by dy along its own up axis

@@ -34,6 +34,7 @@ bool SessionRunning();    // session in a state where frames should be submitted
 void PollEvents();
 
 // Stereo frame: Begin -> CopyEye(0), CopyEye(1) -> End
+double DisplayPeriod();               // v232: the runtime's display period in seconds (0 = unknown)
 bool BeginFrame(FrameViews& out);       // xrWaitFrame + xrBeginFrame + xrLocateViews
 void CopyEye(int eye, ID3D10Texture2D* src);
 void EndFrame(const FrameViews& fv, bool submittedEyes);

@@ -114,6 +114,8 @@ struct Config {
     int   recenterKey = VK_F8;
     int   toggleKey = VK_F9;
     int   hudSnap = 0;              // v228 test: HUD + eye snapshots when a UI element appears in gameplay (HudSnap)
+    int   vehicleViewPrev = 1;      // VehicleViewPrevious (v232 test 15): the seat of the skeleton update being drawn (the one before the latest)
+    float vehicleViewSmooth = 0.2f; // VehicleViewSmoothing (v232): seconds; 0 = view on the Camera bone in vehicles
     int   devKeys = 0;              // DevKeys: 1 = the developer test keys (F2 F3 F5 F6 F7 F10 F11 Pause) - off for release (v225)
 } g_cfg;
 static bool g_treeCache = false;
@@ -146,6 +148,7 @@ static void LoadConfig() {
     g_treeCache = IniF("TreeCache", 0) != 0;     // experimental; unnecessary once DpiAware stops the resize loop
     g_cfg.profile = (int)IniF("Profile", 0);
     g_cfg.devKeys = (int)IniF("DevKeys", 0);
+    g_cfg.vehicleViewSmooth = IniF("VehicleViewSmoothing", 0.2f); g_cfg.vehicleViewPrev = (int)IniF("VehicleViewPrevious", 1);
     g_cfg.hudSnap = (int)IniF("HudSnap", 0);
     g_cfg.dpiAware = (int)IniF("DpiAware", 1);
     g_cfg.heightAdapt = IniF("HeightAdapt", 15.0f);
@@ -408,15 +411,37 @@ static GameBasis BasisFromGameCam(uint8_t* c) {
 // sprint yaw sway at stick rest; follow forward motion and deliberate turns.
 // Bypass in vehicles, mounted guns and special controls. Prepare once, then share.
 static inline double NowMs();
+static bool g_riding = false;
+static bool g_vehViewUsed = false;
+static bool g_handSmooth = true;
 static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize) {
     static fc2vr::tracking::PoseFrameBuilder builder;
     fc2vr::tracking::SteadyInput input;
     input.nowMs = NowMs();
     float pos[3]{}, heading = 0;
+    const bool havePlayer = arms::PlayerState(pos, &heading);   // v232: always read (the ride check needs it in every mode)
     input.eligible = stabilize && g_cfg.steadyCam && controls::NormalControls() && controls::VehicleMode() == 0
-        && !controls::MountedWeapon() && arms::PlayerState(pos, &heading);
+        && !controls::MountedWeapon() && havePlayer;
     input.playerPosition = {pos[0],pos[1],pos[2]};
     input.turning = fabsf(xr::Hand(1).stick.x) > 0.15f;
+    {   // v232: riding (the intro taxi, a bus, any vehicle the controls don't report): the player moves without the stick.
+        // SteadyCamera would smooth the view while the body and the car interior move with the vehicle - they judder
+        // in the view. Not eligible while riding.
+        static float lp[3]; static double lt = 0, still = 0; static bool riding = false;
+        double tn = input.nowMs; float dt = lt > 0 ? (float)((tn - lt) * 0.001) : 0; lt = tn;
+        float dx = pos[0] - lp[0], dy = pos[1] - lp[1]; lp[0] = pos[0]; lp[1] = pos[1]; lp[2] = pos[2];
+        float spd = dt > 0.0005f && dt < 0.1f ? sqrtf(dx * dx + dy * dy) / dt : 0;
+        const xr::HandState& L = xr::Hand(0); bool stick = fabsf(L.stick.x) > 0.2f || fabsf(L.stick.y) > 0.2f;
+        if (!havePlayer) spd = 0;
+        static double slow = 0;   // a single odd frame (a hitch, a skipped position update) doesn't end a ride
+        if (!stick && spd > 2.5f && spd < 60.0f) { still += dt * 1000.0; slow = 0; }
+        else if (stick) still = slow = 0;
+        else if (spd < 1.0f) { slow += dt * 1000.0; if (slow > 500.0) still = 0; }
+        bool r = still > 400.0;
+        if (r != riding) { riding = r; LOG("steady camera: %s", r ? "riding (off)" : "on foot"); }
+        g_riding = riding;
+        if (riding) input.eligible = false;
+    }
     GameBasis gb = BasisFromGameCam(rc);
     {   // v231 camera on the body clock: the game's camera is one game frame behind the player's body (it moves by the
         // body's previous step), so the body, arms and weapon jitter by the frame-to-frame step difference. The body's
@@ -428,8 +453,37 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
             if (dx * dx + dy * dy + dz * dz < 0.6f * 0.6f) { gb.P = { bp[0], bp[1], bp[2] }; ++g_camBodyUsed; }
         }
         lastSeq = seq;
+        // v232 vehicles and rides: the Camera bone moves against the seated body (driver / passenger animation, ~10 mm
+        // of jerk per frame), so the view shook against the car. The view rides on the skeleton's world matrix (the
+        // seat) plus the Camera bone's offset from it, low-passed in the seat's frame (VehicleViewSmoothing, seconds).
+        g_vehViewUsed = false;
+        {   static float ls[3]; static bool have = false; static double lt = 0;
+            float cp[3], Wm[16]; double tn = input.nowMs; float dt = lt > 0 ? (float)((tn - lt) * 0.001) : 1.0f; lt = tn;
+            bool veh = g_cfg.vehicleViewSmooth > 0 && (controls::VehicleMode() != 0 || g_riding);
+            if (veh && arms::CamBoneRoot(cp, Wm, g_cfg.vehicleViewPrev != 0)) {
+                float d[3] = { cp[0] - Wm[12], cp[1] - Wm[13], cp[2] - Wm[14] }, l[3];
+                for (int r = 0; r < 3; ++r) { float n2 = Wm[r * 4] * Wm[r * 4] + Wm[r * 4 + 1] * Wm[r * 4 + 1] + Wm[r * 4 + 2] * Wm[r * 4 + 2]; l[r] = n2 > 1e-8f ? (d[0] * Wm[r * 4] + d[1] * Wm[r * 4 + 1] + d[2] * Wm[r * 4 + 2]) / n2 : 0; }
+                if (!have || dt > 0.25f || l[0] * l[0] + l[1] * l[1] + l[2] * l[2] > 9.0f) { memcpy(ls, l, 12); have = true; }
+                else { float k = 1.0f - expf(-dt / g_cfg.vehicleViewSmooth); for (int r = 0; r < 3; ++r) ls[r] += (l[r] - ls[r]) * k; }
+                float p[3]; for (int c = 0; c < 3; ++c) p[c] = Wm[12 + c] + ls[0] * Wm[c] + ls[1] * Wm[4 + c] + ls[2] * Wm[8 + c];
+                float ex = p[0] - gb.P.x, ey = p[1] - gb.P.y, ez = p[2] - gb.P.z;
+                if (ex * ex + ey * ey + ez * ez < 0.5f * 0.5f) { gb.P = { p[0], p[1], p[2] }; g_vehViewUsed = true; }
+            } else have = false;
+        }
     }
-    const PoseFrame frame = builder.Build(sequence, gb, TrackingReference(), g_cfg.worldScale, input);
+    PoseFrame frame = builder.Build(sequence, gb, TrackingReference(), g_cfg.worldScale, input);
+    {   // v232: when SteadyCamera stops applying (riding, a vehicle), its offset fades out instead of jumping
+        static V3 carry{ 0, 0, 0 }, lastOff{ 0, 0, 0 }; static bool wasSmoothed = false; static double lt = 0; static uint64_t lastSeq = ~0ull;
+        if (sequence != lastSeq) {
+            lastSeq = sequence; double tn = input.nowMs; float dt = lt > 0 ? (float)((tn - lt) * 0.001) : 1; lt = tn;
+            V3 off = frame.game.P - frame.raw.P;
+            bool smoothed = input.eligible;
+            if (wasSmoothed && !smoothed && Dot(lastOff, lastOff) < 0.25f) carry = lastOff;
+            wasSmoothed = smoothed; lastOff = off;
+            if (!smoothed) { carry = carry * (dt < 1 ? expf(-dt / 0.3f) : 0.0f); frame.game.P = frame.raw.P + carry; }
+            else carry = { 0, 0, 0 };
+        } else if (!input.eligible) frame.game.P = frame.raw.P + carry;
+    }
     if (sequence % 900 == 0) LOG("pose frame shared-camera-1 seq=%llu steadyEligible=%d rawP=%.3f,%.3f,%.3f effectiveP=%.3f,%.3f,%.3f rawF=%.4f,%.4f effectiveF=%.4f,%.4f",
         (unsigned long long)frame.sequence, input.eligible, frame.raw.P.x, frame.raw.P.y, frame.raw.P.z,
         frame.game.P.x, frame.game.P.y, frame.game.P.z, frame.raw.F.x, frame.raw.F.y, frame.game.F.x, frame.game.F.y);
@@ -482,6 +536,11 @@ static volatile LONG g_bufCreates = 0; static LONG g_bufLogged = 0; static LONGL
 static void ModOff(uintptr_t a, char* out, size_t n);
 struct BufSite { uint32_t c[4]; int usage, bind; uint32_t n; uint64_t bytes; };
 static BufSite g_bufSites[128];
+static void* g_capRTV0 = nullptr; static int g_capEye = 0;
+#include <string>
+#include <vector>
+static void ShowToast(const char* t);
+namespace cbcap { void NoteBuffer(ID3D10Buffer* b); void HookCreateVS(void** vt); void Install(void** vt); void Arm(); void Present(const char* dir); void NoteBones(const float* W, const float* models, int n); }
 static HRESULT STDMETHODCALLTYPE Hook_CreateBuffer(ID3D10Device* d, const D3D10_BUFFER_DESC* bd, const D3D10_SUBRESOURCE_DATA* init, ID3D10Buffer** out) {
     InterlockedIncrement(&g_bufCreates);
     if (bd) g_bufBytes += bd->ByteWidth;
@@ -494,7 +553,9 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateBuffer(ID3D10Device* d, const D3D10_
             if (!e.n) { memcpy(e.c, c, sizeof c); e.usage = bd->Usage; e.bind = bd->BindFlags; e.n = 1; e.bytes = bd->ByteWidth; break; }
         }
     }
-    return o_CreateBuffer(d, bd, init, out);
+    HRESULT hr = o_CreateBuffer(d, bd, init, out);
+    if (SUCCEEDED(hr) && bd && (bd->BindFlags & D3D10_BIND_CONSTANT_BUFFER) && out && *out) cbcap::NoteBuffer(*out);
+    return hr;
 }
 static CreateRTV_t o_CreateRTV = nullptr;
 static HRESULT STDMETHODCALLTYPE Hook_CreateTexture2D(ID3D10Device* d, const D3D10_TEXTURE2D_DESC* td, const D3D10_SUBRESOURCE_DATA* init, ID3D10Texture2D** out) {
@@ -556,19 +617,21 @@ static void NoteDraw(void* frame, ID3D10Device* dev) {
         }
     }
 }
-static void STDMETHODCALLTYPE Hook_DrawIndexed(ID3D10Device* d, UINT n, UINT s0, INT b) { o_DrawIndexed(d, n, s0, b); }
-static void STDMETHODCALLTYPE Hook_Draw(ID3D10Device* d, UINT n, UINT s0) { o_Draw(d, n, s0); }
+namespace cbcap { void OnDraw(uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t e, uint32_t f, void* rtv, int eye); }
+static void STDMETHODCALLTYPE Hook_DrawIndexed(ID3D10Device* d, UINT n, UINT s0, INT b) { cbcap::OnDraw(0x101, n, s0, (uint32_t)b, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); o_DrawIndexed(d, n, s0, b); }
+static void STDMETHODCALLTYPE Hook_Draw(ID3D10Device* d, UINT n, UINT s0) { cbcap::OnDraw(0x102, n, s0, 0, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); o_Draw(d, n, s0); }
 typedef void (STDMETHODCALLTYPE *DrawIdxInst_t)(ID3D10Device*, UINT, UINT, UINT, INT, UINT);
 typedef void (STDMETHODCALLTYPE *DrawInst_t)(ID3D10Device*, UINT, UINT, UINT, UINT);
 static DrawIdxInst_t o_DrawIdxInst = nullptr; static DrawInst_t o_DrawInst = nullptr;
-static void STDMETHODCALLTYPE Hook_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, UINT c, INT e, UINT f) { o_DrawIdxInst(d, a, b, c, e, f); }
+static void STDMETHODCALLTYPE Hook_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, UINT c, INT e, UINT f) { cbcap::OnDraw(0x103, a, b, c, (uint32_t)e, f, g_capRTV0, g_inEye ? g_capEye : 3); o_DrawIdxInst(d, a, b, c, e, f); }
 static void STDMETHODCALLTYPE Hook_DrawInst(ID3D10Device* d, UINT a, UINT b, UINT c, UINT e) { o_DrawInst(d, a, b, c, e); }
 // Inline hooks on the runtime implementations (catch every caller, cached pointers included).
 static DrawIndexed_t t_DrawIndexed = nullptr; static Draw_t t_Draw = nullptr; static DrawIdxInst_t t_DrawIdxInst = nullptr; static DrawInst_t t_DrawInst = nullptr; static OMSetRT_t t_OMSetRT = nullptr;
-static void STDMETHODCALLTYPE I_DrawIndexed(ID3D10Device* d, UINT n, UINT s0, INT b) { NoteDraw(__builtin_frame_address(0), d); t_DrawIndexed(d, n, s0, b); }
-static void STDMETHODCALLTYPE I_Draw(ID3D10Device* d, UINT n, UINT s0) { NoteDraw(__builtin_frame_address(0), d); t_Draw(d, n, s0); }
-static void STDMETHODCALLTYPE I_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, UINT c, INT e, UINT f) { NoteDraw(__builtin_frame_address(0), d); t_DrawIdxInst(d, a, b, c, e, f); }
-static void STDMETHODCALLTYPE I_DrawInst(ID3D10Device* d, UINT a, UINT b, UINT c, UINT e) { NoteDraw(__builtin_frame_address(0), d); t_DrawInst(d, a, b, c, e); }
+namespace cbcap { void OnDraw(uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t e, uint32_t f, void* rtv, int eye); }
+static void STDMETHODCALLTYPE I_DrawIndexed(ID3D10Device* d, UINT n, UINT s0, INT b) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(1, n, s0, (uint32_t)b, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawIndexed(d, n, s0, b); }
+static void STDMETHODCALLTYPE I_Draw(ID3D10Device* d, UINT n, UINT s0) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(2, n, s0, 0, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_Draw(d, n, s0); }
+static void STDMETHODCALLTYPE I_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, UINT c, INT e, UINT f) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(3, a, b, c, (uint32_t)e, f, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawIdxInst(d, a, b, c, e, f); }
+static void STDMETHODCALLTYPE I_DrawInst(ID3D10Device* d, UINT a, UINT b, UINT c, UINT e) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(4, a, b, c, e, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawInst(d, a, b, c, e); }
 // ---- per-eye UI viewport (UiMode 1)
 typedef void (STDMETHODCALLTYPE *RSSetVP_t)(ID3D10Device*, UINT, const D3D10_VIEWPORT*);
 static RSSetVP_t o_RSSetVP = nullptr, t_RSSetVP = nullptr;
@@ -609,6 +672,7 @@ static D3D10_VIEWPORT UiXform(const D3D10_VIEWPORT& v) {
 }
 static inline bool UiShiftNow() { return g_uiShift && (g_cfg.uiScope == 1 || g_uiShiftRT); }
 static void ScanDrawSlots();
+namespace cbcap { void NoteVP(const D3D10_VIEWPORT* vp, UINT n); void NoteRT(ID3D10RenderTargetView* rtv); }
 static void STDMETHODCALLTYPE I_RSSetVP(ID3D10Device* d, UINT n, const D3D10_VIEWPORT* vp) {
     ScanDrawSlots();
     // the near pass (arms, weapon) draws into a compressed depth range: its viewport's MaxDepth is where it ends (DLSS mask)
@@ -616,6 +680,7 @@ static void STDMETHODCALLTYPE I_RSSetVP(ID3D10Device* d, UINT n, const D3D10_VIE
         if (vp[0].MaxDepth != g_nearMaxDepth) { static int logged = 0; if (logged++ < 4) LOG("eye viewport with depth range %.5f..%.5f (near pass)", vp[0].MinDepth, vp[0].MaxDepth); }
         g_nearMaxDepth = vp[0].MaxDepth;
     }
+    cbcap::NoteVP(vp, n);
     if (g_traceDraws && n && vp) LogWrite(" RSSetViewports %d,%d %ux%u%s", vp[0].TopLeftX, vp[0].TopLeftY, vp[0].Width, vp[0].Height, g_uiShift ? " [UI]" : "");
     if (g_uiShift && n >= 1 && vp) {
         g_uiVpOrig = vp[0]; g_uiVpValid = true;
@@ -643,6 +708,8 @@ static void NoteEyeBind(ID3D10View* v, bool depth) {
     t->Release();
 }
 static void STDMETHODCALLTYPE I_OMSetRT(ID3D10Device* d, UINT n, ID3D10RenderTargetView* const* rtv, ID3D10DepthStencilView* dsv) {
+    g_capRTV0 = (rtv && n) ? (void*)rtv[0] : nullptr;
+    cbcap::NoteRT((rtv && n) ? rtv[0] : nullptr);
     ScanDrawSlots();
     if (g_eyeBindsOn && g_inEye) { NoteEyeBind(dsv, true); if (rtv) for (UINT k = 0; k < n && k < 8; ++k) NoteEyeBind(rtv[k], false); }
     if (g_capCollect && rtv) for (UINT k = 0; k < n && k < 8; ++k) if (rtv[k] && g_nCapRTs < 64) {
@@ -732,6 +799,7 @@ static int g_drawPolicy(uintptr_t* sp, int slot);
 static volatile LONG g_drawSkipFlag = 0;
 extern "C" int __cdecl OnDrawThunk(uintptr_t* sp, int slot) {
     NoteDraw(sp, g_vtDev);
+    cbcap::OnDraw(0x200 | slot, (uint32_t)sp[2], (uint32_t)sp[3], slot == 9 ? 0 : (uint32_t)sp[4], slot >= 14 ? (uint32_t)sp[5] : 0, slot == 14 ? (uint32_t)sp[6] : 0, g_capRTV0, g_inEye ? g_capEye : 3);
     int skip = g_drawPolicy(sp, slot);
     g_drawSkipFlag = skip;
     return skip;
@@ -954,6 +1022,162 @@ static void InlineHookImpl(void* fn, void* hook, void** tramp, const char* name)
     char where[96]; ModOff((uintptr_t)p, where, sizeof where);
     LOG("inline %s at %s: %d", name, where, ok);
 }
+
+// ---------------------------------------------------------------- v232 arm jitter: GPU constant capture (Ctrl+F4)
+// Records 3 consecutive frames: every constant buffer write (Map/Unmap, UpdateSubresource), VS constant-buffer and
+// shader bindings, every draw (with the bound VS CBs, render target, eye), and the arm skeleton the mod wrote (from the
+// game thread). Written to fc2vr_cbcap.bin with the bytecode of the vertex shaders used, for offline analysis.
+namespace cbcap {
+typedef void (STDMETHODCALLTYPE *VSSetCB_t)(ID3D10Device*, UINT, UINT, ID3D10Buffer* const*);
+typedef void (STDMETHODCALLTYPE *VSSetShader_t)(ID3D10Device*, ID3D10VertexShader*);
+typedef void (STDMETHODCALLTYPE *UpdSub_t)(ID3D10Device*, ID3D10Resource*, UINT, const D3D10_BOX*, const void*, UINT, UINT);
+typedef HRESULT (STDMETHODCALLTYPE *CreateVS_t)(ID3D10Device*, const void*, SIZE_T, ID3D10VertexShader**);
+typedef HRESULT (STDMETHODCALLTYPE *BufMap_t)(ID3D10Buffer*, D3D10_MAP, UINT, void**);
+typedef void (STDMETHODCALLTYPE *BufUnmap_t)(ID3D10Buffer*);
+static VSSetCB_t t_VSSetCB; static VSSetShader_t t_VSSetShader; static UpdSub_t t_UpdSub; static CreateVS_t o_CreateVS; static BufMap_t t_Map; static BufUnmap_t t_Unmap;
+static CRITICAL_SECTION cs; static bool csInit; static volatile int state;   // 0 idle, 1 armed (starts at next present), 2 capturing
+static int frames; static std::string out; static ID3D10Buffer* cb[16]; static void* curVS;
+struct MapRec { ID3D10Buffer* b; void* p; }; static MapRec maps[64];
+struct VsCode { void* vs; std::string code; }; static std::vector<VsCode> vsCodes; static CRITICAL_SECTION vsCs; static bool vsInit;
+static void Put(char type, const void* a, uint32_t na, const void* b = nullptr, uint32_t nb = 0) {
+    if (out.size() > (64u << 20)) return;
+    uint32_t len = na + nb; out.push_back(type); out.append((const char*)&len, 4); out.append((const char*)a, na); if (b && nb) out.append((const char*)b, nb);
+}
+static bool lite = false;   // Ctrl+Shift+F4 motion capture: per-frame poses + skeleton only (540 frames)
+static bool On() { return state == 2 && !lite; }
+float mx[96]; bool mxValid = false;   // this frame's 'X' record (render thread)
+static void STDMETHODCALLTYPE I_VSSetCB(ID3D10Device* d, UINT start, UINT n, ID3D10Buffer* const* b) {
+    if (b) for (UINT i = 0; i < n && start + i < 16; ++i) cb[start + i] = b[i];
+    if (On()) { EnterCriticalSection(&cs); uint32_t h[2 + 16] = { start, n }; for (UINT i = 0; i < n && i < 16; ++i) h[2 + i] = (uint32_t)(uintptr_t)(b ? b[i] : nullptr); Put('S', h, 8 + 4 * (n < 16 ? n : 16)); LeaveCriticalSection(&cs); }
+    t_VSSetCB(d, start, n, b);
+}
+static void STDMETHODCALLTYPE I_VSSetShader(ID3D10Device* d, ID3D10VertexShader* vs) { curVS = vs; t_VSSetShader(d, vs); }
+static void BufData(ID3D10Buffer* b, const void* data) {
+    D3D10_BUFFER_DESC bd; b->GetDesc(&bd); if (!(bd.BindFlags & D3D10_BIND_CONSTANT_BUFFER) || bd.ByteWidth > 65536) return;
+    uint32_t h[2] = { (uint32_t)(uintptr_t)b, bd.ByteWidth }; EnterCriticalSection(&cs); Put('B', h, 8, data, bd.ByteWidth); LeaveCriticalSection(&cs);
+}
+static void STDMETHODCALLTYPE I_UpdSub(ID3D10Device* d, ID3D10Resource* r, UINT sub, const D3D10_BOX* box, const void* data, UINT rp, UINT dp) {
+    if (On() && !box && data && r) { D3D10_RESOURCE_DIMENSION dim; r->GetType(&dim); if (dim == D3D10_RESOURCE_DIMENSION_BUFFER) BufData((ID3D10Buffer*)r, data); }
+    t_UpdSub(d, r, sub, box, data, rp, dp);
+}
+static HRESULT STDMETHODCALLTYPE I_Map(ID3D10Buffer* b, D3D10_MAP t, UINT f, void** pp) {
+    HRESULT hr = t_Map(b, t, f, pp);
+    if (On() && SUCCEEDED(hr) && pp && *pp && t != D3D10_MAP_READ) { EnterCriticalSection(&cs); for (auto& m : maps) if (!m.b || m.b == b) { m.b = b; m.p = *pp; break; } LeaveCriticalSection(&cs); }
+    return hr;
+}
+static void STDMETHODCALLTYPE I_Unmap(ID3D10Buffer* b) {
+    if (On()) { void* p = nullptr; EnterCriticalSection(&cs); for (auto& m : maps) if (m.b == b) { p = m.p; m.b = nullptr; break; } LeaveCriticalSection(&cs); if (p) BufData(b, p); }
+    t_Unmap(b);
+}
+static HRESULT STDMETHODCALLTYPE H_CreateVS(ID3D10Device* d, const void* code, SIZE_T n, ID3D10VertexShader** out_) {
+    HRESULT hr = o_CreateVS(d, code, n, out_);
+    if (SUCCEEDED(hr) && out_ && *out_ && code && n < 262144) { if (!vsInit) { InitializeCriticalSection(&vsCs); vsInit = true; } EnterCriticalSection(&vsCs); vsCodes.push_back({ *out_, std::string((const char*)code, n) }); LeaveCriticalSection(&vsCs); }
+    return hr;
+}
+void NoteVP(const D3D10_VIEWPORT* vp, UINT n) {   // 'V': x, y, w, h of the first viewport
+    if (!On() || !vp || !n) return; int32_t h[4] = { vp[0].TopLeftX, vp[0].TopLeftY, (int32_t)vp[0].Width, (int32_t)vp[0].Height };
+    EnterCriticalSection(&cs); Put('V', h, 16); LeaveCriticalSection(&cs);
+}
+void NoteRT(ID3D10RenderTargetView* rtv) {   // 'T': view, its texture, width, height, format
+    if (!On()) return; uint32_t h[5] = { (uint32_t)(uintptr_t)rtv, 0, 0, 0, 0 };
+    if (rtv) { ID3D10Resource* r = nullptr; rtv->GetResource(&r); ID3D10Texture2D* t = nullptr;
+        if (r && SUCCEEDED(r->QueryInterface(__uuidof(ID3D10Texture2D), (void**)&t)) && t) { D3D10_TEXTURE2D_DESC d; t->GetDesc(&d); h[1] = (uint32_t)(uintptr_t)t; h[2] = d.Width; h[3] = d.Height; h[4] = d.Format; t->Release(); }
+        if (r) r->Release(); }
+    EnterCriticalSection(&cs); Put('T', h, 20); LeaveCriticalSection(&cs);
+}
+typedef void (STDMETHODCALLTYPE *RSSetSc_t)(ID3D10Device*, UINT, const D3D10_RECT*);
+static RSSetSc_t t_RSSetSc;
+static void STDMETHODCALLTYPE I_RSSetSc(ID3D10Device* d, UINT n, const D3D10_RECT* r) {   // 'R': scissor rect
+    if (On() && n && r) { int32_t h[4] = { r[0].left, r[0].top, r[0].right, r[0].bottom }; EnterCriticalSection(&cs); Put('R', h, 16); LeaveCriticalSection(&cs); }
+    t_RSSetSc(d, n, r);
+}
+void NoteBuffer(ID3D10Buffer* b) {   // first constant buffer created: hook Map/Unmap on the runtime implementation
+    static bool done = false; if (done || !b) return; done = true;
+    void** vt = *(void***)b;
+    InlineHookImpl(vt[10], (void*)&I_Map, (void**)&t_Map, "ID3D10Buffer::Map");
+    InlineHookImpl(vt[11], (void*)&I_Unmap, (void**)&t_Unmap, "ID3D10Buffer::Unmap");
+}
+void Install(void** vt) {
+    if (!csInit) { InitializeCriticalSection(&cs); csInit = true; }
+    if (!vsInit) { InitializeCriticalSection(&vsCs); vsInit = true; }
+    InlineHookImpl(vt[3], (void*)&I_VSSetCB, (void**)&t_VSSetCB, "VSSetConstantBuffers");
+    InlineHookImpl(vt[7], (void*)&I_VSSetShader, (void**)&t_VSSetShader, "VSSetShader");
+    InlineHookImpl(vt[34], (void*)&I_UpdSub, (void**)&t_UpdSub, "UpdateSubresource");
+    InlineHookImpl(vt[31], (void*)&I_RSSetSc, (void**)&t_RSSetSc, "RSSetScissorRects");
+}
+void HookCreateVS(void** vt) { DWORD o; VirtualProtect(&vt[79], 4, PAGE_EXECUTE_READWRITE, &o); o_CreateVS = (CreateVS_t)vt[79]; vt[79] = (void*)&H_CreateVS; VirtualProtect(&vt[79], 4, o, &o); }
+static long drawCalls[2];
+void OnDraw(uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t e, uint32_t f, void* rtv, int eye) {
+    if (!On()) return;
+    InterlockedIncrement(&drawCalls[(kind & 0x300) ? 1 : 0]);
+    uint32_t h[8 + 8] = { kind, a, b, c, e, f, (uint32_t)(uintptr_t)curVS, (uint32_t)(uintptr_t)rtv | ((uint32_t)(eye & 3) << 30) };
+    for (int i = 0; i < 8; ++i) h[8 + i] = (uint32_t)(uintptr_t)cb[i];
+    EnterCriticalSection(&cs); Put('D', h, sizeof h); LeaveCriticalSection(&cs);
+}
+void NoteBones(const float* W, const float* models, int n) {   // game thread, after the arm write
+    if (state != 2 && state != 1) return;
+    uint32_t h[2] = { GetCurrentThreadId(), (uint32_t)n }; EnterCriticalSection(&cs);
+    std::string buf((const char*)h, 8); buf.append((const char*)W, 64); buf.append((const char*)models, n * 64);
+    if (lite) { float p[3], fw[3]; uint64_t sq = 0; arms::DiagApplied(p, fw, &sq); double t = NowMs(); buf.append((const char*)&sq, 8); buf.append((const char*)p, 12); buf.append((const char*)fw, 12); buf.append((const char*)&t, 8); }
+    Put('K', buf.data(), (uint32_t)buf.size()); LeaveCriticalSection(&cs);
+}
+void Arm(bool mocap) { if (state == 0) { lite = mocap; state = 1; LOG(mocap ? "mocap: armed (540 frames)" : "cbcap: armed (6 frames)"); ShowToast(mocap ? "Motion capture: 6 s" : "GPU capture: 6 frames"); } }
+void Present(const char* iniDir) {   // render thread, each present
+    if (state == 1) { EnterCriticalSection(&cs); out.clear(); frames = 0; for (auto& m : maps) m.b = nullptr; LeaveCriticalSection(&cs); state = 2; }
+    if (state != 2) return;
+    double t = NowMs(); uint32_t h[3] = { (uint32_t)frames, 0, 0 }; memcpy(&h[1], &t, 8);
+    EnterCriticalSection(&cs); Put('F', h, 12); if (lite && mxValid) Put('X', mx, sizeof mx); mxValid = false; LeaveCriticalSection(&cs);
+    if (++frames <= (lite ? 540 : 6)) return;
+    state = 3;
+    // vertex shaders used
+    std::vector<void*> used; size_t i = 0;
+    while (i + 5 <= out.size()) { char ty = out[i]; uint32_t len; memcpy(&len, &out[i + 1], 4); if (ty == 'D' && len >= 28) { uint32_t vs; memcpy(&vs, &out[i + 5 + 24], 4); bool k = false; for (auto u : used) if (u == (void*)(uintptr_t)vs) k = true; if (!k) used.push_back((void*)(uintptr_t)vs); } i += 5 + len; }
+    EnterCriticalSection(&vsCs);
+    for (auto& v : vsCodes) for (auto u : used) if (u == v.vs) { uint32_t p = (uint32_t)(uintptr_t)v.vs; Put('C', &p, 4, v.code.data(), (uint32_t)v.code.size()); }
+    LeaveCriticalSection(&vsCs);
+    char path[MAX_PATH]; snprintf(path, sizeof path, lite ? "%sfc2vr_mocap.bin" : "%sfc2vr_cbcap.bin", iniDir);
+    FILE* fp = fopen(path, "wb"); if (fp) { fwrite(out.data(), 1, out.size(), fp); fclose(fp); }
+    LOG("cbcap: %u bytes written to %s (%u vertex shaders; draws seen: inline %ld, vtable/variant %ld)", (unsigned)out.size(), path, (unsigned)used.size(), drawCalls[0], drawCalls[1]); drawCalls[0] = drawCalls[1] = 0;
+    ShowToast(lite ? "Motion capture saved" : "GPU capture saved");
+    out.clear(); out.shrink_to_fit(); state = 0;
+}
+}
+
+// ---------------------------------------------------------------- v232 frame pacing
+// The game's frame timer (global timer object at 0x11606360, Update 0x1029B290) measures each frame's length from the
+// wall clock. In VR the frames are shown at a fixed rate, but when the game thread wakes varies by +-1 ms, so the player
+// (and every vehicle) moved by uneven steps: at 5 m/s +-3.5 mm per frame, in a taxi at 11 m/s +-6 mm - the world and
+// the car judder past the view. With FramePacing=1 the measured step is replaced by a whole number of display periods;
+// the difference is kept as a debt and paid back a little each frame so game time never drifts from real time.
+// Layout: +0x18 last real time, +0x28 game time, +0x30 unpaused time, +0x38 scaled dt, +0x40 dt, +0x48 paused,
+// +0x50 time scale, +0x60 fixed-step mode (left alone).
+typedef void (__fastcall *TimerUpdate_t)(uint8_t*, void*);
+static TimerUpdate_t o_TimerUpdate = nullptr;
+static int g_framePacing = 1; static double g_paceDebt = 0; static long g_paceFrames = 0, g_paceSkipped = 0;
+static void __fastcall Hook_TimerUpdate(uint8_t* t, void* edx) {
+    o_TimerUpdate(t, edx);
+    uintptr_t gp = A(0x11606360);
+    if (!g_framePacing || !gp || t != *(uint8_t**)gp || t[0x60]) return;
+    double P = xr::DisplayPeriod();
+    if (P < 0.004 || P > 0.05) return;
+    double& dtRaw = *(double*)(t + 0x40); double& dtScaled = *(double*)(t + 0x38);
+    double raw = dtRaw, n = floor(raw / P + 0.5); if (n < 1) n = 1;
+    if (raw <= 0 || raw > 0.25 || fabs(raw - n * P) > 0.3 * P) { g_paceDebt = 0; ++g_paceSkipped; return; }   // irregular frame: as measured
+    double dt = n * P; g_paceDebt += raw - dt;
+    double pay = g_paceDebt * 0.05; if (pay > 0.0003) pay = 0.0003; if (pay < -0.0003) pay = -0.0003;
+    if (fabs(g_paceDebt) > 0.03) pay = g_paceDebt;   // far off (a hitch): settle at once
+    dt += pay; g_paceDebt -= pay;
+    double scale = *(double*)(t + 0x50), ns = dt * scale, d = ns - dtScaled;
+    *(double*)(t + 0x28) += d; if (!t[0x48]) *(double*)(t + 0x30) += d;
+    dtScaled = ns; dtRaw = dt; ++g_paceFrames;
+    static double lastL = 0; double tn = NowMs();
+    if (tn - lastL > 30000.0) { lastL = tn; LOG("frame pacing: %ld frames paced, %ld left as measured, debt %.2f ms, period %.3f ms", g_paceFrames, g_paceSkipped, g_paceDebt * 1000.0, P * 1000.0); g_paceFrames = g_paceSkipped = 0; }
+}
+static void InstallFramePacing() {
+    static const uint8_t pro[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8 };
+    bool ok = PatchJmpN(A(0x1029B290), pro, 6, (void*)&Hook_TimerUpdate, (void**)&o_TimerUpdate);
+    LOG("frame pacing hook (game timer update): %s, FramePacing=%d", ok ? "ok" : "FAILED", g_framePacing);
+}
 static void InstallInlineDrawHooks() {
     static bool done = false; if (done) return; done = true;
     InlineHookImpl((void*)o_DrawIndexed, (void*)&I_DrawIndexed, (void**)&t_DrawIndexed, "DrawIndexed");
@@ -962,6 +1186,8 @@ static void InstallInlineDrawHooks() {
     InlineHookImpl((void*)o_DrawInst, (void*)&I_DrawInst, (void**)&t_DrawInst, "DrawInstanced");
     InlineHookImpl((void*)o_OMSetRT, (void*)&I_OMSetRT, (void**)&t_OMSetRT, "OMSetRenderTargets");
     if (o_RSSetVP) InlineHookImpl((void*)o_RSSetVP, (void*)&I_RSSetVP, (void**)&t_RSSetVP, "RSSetViewports");
+    if (g_vtDev) cbcap::Install(*(void***)g_vtDev);
+    arms::SetBoneSink(&cbcap::NoteBones);
 }
 // DLSS upscaling: the eyes render smaller than shown, so texture detail is picked one or more mip levels too blurry.
 // While an eye renders, every pixel-shader sampler is swapped for a copy with MipLODBias += log2(render / output)
@@ -1001,6 +1227,7 @@ static void HookDeviceVtable(ID3D10Device* dev) {
     void** vt = *(void***)dev;
     DWORD old; VirtualProtect(&vt[71], 6 * 4, PAGE_EXECUTE_READWRITE, &old);
     o_CreateBuffer = (CreateBuffer_t)vt[71]; vt[71] = (void*)&Hook_CreateBuffer;
+    cbcap::HookCreateVS(vt);
     { DWORD o2; VirtualProtect(&vt[8], 17 * 4, PAGE_EXECUTE_READWRITE, &o2);
       o_DrawIndexed = (DrawIndexed_t)vt[8]; vt[8] = (void*)&Hook_DrawIndexed;
       o_Draw = (Draw_t)vt[9]; vt[9] = (void*)&Hook_Draw;
@@ -1747,11 +1974,24 @@ static void Hotkeys(const XrPosef* head) {
     bool t = (GetAsyncKeyState(g_cfg.toggleKey) & 0x8000) != 0;
     if (r && !prevR && head) { DoRecenter(*head); g_refYTime = NowMs(); }
     if (t && !prevT) { g_stereoOn = !g_stereoOn; LOG("stereo %s", g_stereoOn ? "on" : "off"); }
-    { static bool prevF4 = false; bool f4 = (GetAsyncKeyState(VK_F4) & 0x8000) != 0 && !(GetAsyncKeyState(VK_MENU) & 0x8000);   // v231: 3 s motion trace
+    { static bool prevF4 = false; bool f4 = (DevKey(VK_F4) & 0x8000) != 0 && !(GetAsyncKeyState(VK_MENU) & 0x8000);   // v231: 3 s motion trace
       bool sh = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-      if (f4 && !prevF4 && sh) { g_motionTrace = 270; LOG("motion trace: 3 s started (Shift+F4)"); ShowToast("Recording motion (3 s)"); }
+      if (f4 && !prevF4 && sh && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) { g_framePacing = !g_framePacing; g_paceDebt = 0; LOG("frame pacing %d (Shift+F4)", g_framePacing); ShowToast(g_framePacing ? "Frame pacing: ON" : "Frame pacing: OFF"); }
+      if (f4 && !prevF4 && (GetAsyncKeyState(VK_CONTROL) & 0x8000)) cbcap::Arm(sh); else
+      if (f4 && !prevF4 && !sh && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) { bool on = arms::ClavFix(true); LOG("shoulder fix %d (F4)", on); ShowToast(on ? "Shoulder fix: ON" : "Shoulder fix: OFF (old arms)"); }
 
       prevF4 = f4; }
+    { static bool p7 = false; static float keep = 0.2f; bool k7 = (DevKey(VK_F7) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k7 && !p7) {   // cycle: seat (drawn update) -> seat (latest update) -> off
+        if (g_cfg.vehicleViewSmooth > 0 && g_cfg.vehicleViewPrev) g_cfg.vehicleViewPrev = 0;
+        else if (g_cfg.vehicleViewSmooth > 0) { keep = g_cfg.vehicleViewSmooth; g_cfg.vehicleViewSmooth = 0; }
+        else { g_cfg.vehicleViewSmooth = keep; g_cfg.vehicleViewPrev = 1; }
+        LOG("vehicle view smoothing %.2f previous %d (Ctrl+F7)", g_cfg.vehicleViewSmooth, g_cfg.vehicleViewPrev);
+        ShowToast(g_cfg.vehicleViewSmooth <= 0 ? "Vehicle view: 3 OFF (head bone)" : g_cfg.vehicleViewPrev ? "Vehicle view: 1 seat, drawn update" : "Vehicle view: 2 seat, latest update"); } p7 = k7; }
+    { static bool p6 = false; bool k6 = (DevKey(VK_F6) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k6 && !p6) { g_handSmooth = !g_handSmooth; LOG("hand smoothing %d (Ctrl+F6)", g_handSmooth); ShowToast(g_handSmooth ? "Hand stabiliser: ON" : "Hand stabiliser: OFF"); } p6 = k6; }
+    { static bool p5 = false; bool k5 = (DevKey(VK_F5) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k5 && !p5) { bool on = arms::LocalFrameToggle(); LOG("arm local frame %d (Ctrl+F5)", on); ShowToast(on ? "Arm precision fix: ON" : "Arm precision fix: OFF"); } p5 = k5; }
+    {   // v232 test keys (jitter A/B): Insert = DLSS on/off, Page Down = DLSS debug mode (1 = no sub-pixel jitter)
+        static bool pI = false, pN = false; bool i = (DevKey(VK_INSERT) & 0x8000) != 0, nx = (DevKey(VK_NEXT) & 0x8000) != 0;
+        if (i && !pI) dlssfc2::Toggle(); if (nx && !pN) dlssfc2::CycleDebug(); pI = i; pN = nx; }
     { static bool prevF10 = false; bool f10 = (DevKey(VK_F10) & 0x8000) != 0; if (f10 && !prevF10) g_traceLeft = 4; prevF10 = f10; }
     { static bool prevF3 = false; bool f3 = (DevKey(VK_F3) & 0x8000) != 0; if (f3 && !prevF3) { g_fovMode = (g_fovMode + 1) % 3; static const char* nm[3] = { "headset frustums", "symmetric", "symmetric + overscan" }; LOG("eye frustum mode %d: %s", g_fovMode, nm[g_fovMode]); } prevF3 = f3; }
     { static bool prevF5 = false; bool f5 = (DevKey(VK_F5) & 0x8000) != 0; if (f5 && !prevF5) { g_cfg.uiScope = (g_cfg.uiScope + 1) % 4; LOG("UI scope %d", g_cfg.uiScope); } prevF5 = f5; }
@@ -1877,6 +2117,57 @@ static float CentreLuma(ID3D10Texture2D* t) {
             sum += 0.2126 * r + 0.7152 * g + 0.0722 * bl; } }
     st->Unmap(0);
     return (float)(sum / 256.0);
+}
+// v232: the monocular window copies the scene kept before the UI. With the game's HDR post-processing that scene is
+// R11G11B10_FLOAT, which cannot be copied into the 8-bit screen texture (the copy is dropped: a black window).
+// A small shader pass converts it to the back buffer's format first.
+static ID3D10Texture2D* g_convTex = nullptr; static ID3D10RenderTargetView* g_convRtv = nullptr; static ID3D10ShaderResourceView* g_convSrv = nullptr; static ID3D10Texture2D* g_convSrc = nullptr;
+static ID3D10VertexShader* g_convVs = nullptr; static ID3D10PixelShader* g_convPs = nullptr; static ID3D10StateBlock* g_convSb = nullptr;
+static ID3D10DepthStencilState* g_convDss = nullptr; static ID3D10RasterizerState* g_convRs = nullptr; static ID3D10BlendState* g_convBs = nullptr; static bool g_convBad = false;
+static ID3D10Texture2D* ConvertScene(ID3D10Texture2D* src, DXGI_FORMAT outFmt) {
+    if (!src || g_convBad || !g_dev10) return nullptr;
+    D3D10_TEXTURE2D_DESC sd; src->GetDesc(&sd);
+    if (!g_convVs) {
+        g_convBad = true;
+        static const char k[] = "Texture2D t : register(t0);\n"
+            "void vs(uint id : SV_VertexID, out float4 p : SV_Position) { float2 u = float2((id << 1) & 2, id & 2); p = float4(u * float2(2, -2) + float2(-1, 1), 0, 1); }\n"
+            "float4 ps(float4 p : SV_Position) : SV_Target { return float4(saturate(t.Load(int3(p.xy, 0)).rgb), 1); }\n";
+        HMODULE dc = LoadLibraryW(L"d3dcompiler_47.dll");
+        typedef HRESULT (WINAPI* Comp_t)(const void*, SIZE_T, const char*, const void*, void*, const char*, const char*, UINT, UINT, ID3D10Blob**, ID3D10Blob**);
+        Comp_t comp = dc ? (Comp_t)GetProcAddress(dc, "D3DCompile") : nullptr;
+        ID3D10Blob *bv = nullptr, *bp = nullptr, *er = nullptr;
+        if (!comp || FAILED(comp(k, sizeof k - 1, "fc2vr_conv", nullptr, nullptr, "vs", "vs_4_0", 0, 0, &bv, &er)) || FAILED(comp(k, sizeof k - 1, "fc2vr_conv", nullptr, nullptr, "ps", "ps_4_0", 0, 0, &bp, &er))) {
+            LOG("monocular: scene conversion shader failed (%s)", er ? (const char*)er->GetBufferPointer() : "no d3dcompiler_47"); if (er) er->Release(); if (bv) bv->Release(); return nullptr; }
+        bool ok = SUCCEEDED(g_dev10->CreateVertexShader(bv->GetBufferPointer(), bv->GetBufferSize(), &g_convVs)) && SUCCEEDED(g_dev10->CreatePixelShader(bp->GetBufferPointer(), bp->GetBufferSize(), &g_convPs));
+        bv->Release(); bp->Release();
+        D3D10_DEPTH_STENCIL_DESC dd = {}; ok = ok && SUCCEEDED(g_dev10->CreateDepthStencilState(&dd, &g_convDss));
+        D3D10_RASTERIZER_DESC rd = {}; rd.FillMode = D3D10_FILL_SOLID; rd.CullMode = D3D10_CULL_NONE; rd.DepthClipEnable = TRUE; ok = ok && SUCCEEDED(g_dev10->CreateRasterizerState(&rd, &g_convRs));
+        D3D10_BLEND_DESC bl = {}; for (int i = 0; i < 8; ++i) bl.RenderTargetWriteMask[i] = D3D10_COLOR_WRITE_ENABLE_ALL; ok = ok && SUCCEEDED(g_dev10->CreateBlendState(&bl, &g_convBs));
+        typedef HRESULT (WINAPI* CreateSB_t)(ID3D10Device*, D3D10_STATE_BLOCK_MASK*, ID3D10StateBlock**); typedef HRESULT (WINAPI* MaskAll_t)(D3D10_STATE_BLOCK_MASK*);
+        HMODULE d10 = GetModuleHandleW(L"d3d10.dll"); if (!d10) d10 = LoadLibraryW(L"d3d10.dll");
+        CreateSB_t csb = d10 ? (CreateSB_t)GetProcAddress(d10, "D3D10CreateStateBlock") : nullptr; MaskAll_t mall = d10 ? (MaskAll_t)GetProcAddress(d10, "D3D10StateBlockMaskEnableAll") : nullptr;
+        if (ok && csb && mall) { D3D10_STATE_BLOCK_MASK mk; mall(&mk); ok = SUCCEEDED(csb(g_dev10, &mk, &g_convSb)); } else ok = false;
+        if (!ok) { LOG("monocular: scene conversion setup failed"); return nullptr; }
+        g_convBad = false; LOG("monocular: scene conversion ready (%d -> %d)", (int)sd.Format, (int)outFmt);
+    }
+    if (g_convTex) { D3D10_TEXTURE2D_DESC cd; g_convTex->GetDesc(&cd); if (cd.Width != sd.Width || cd.Height != sd.Height || cd.Format != outFmt) { g_convRtv->Release(); g_convTex->Release(); g_convRtv = nullptr; g_convTex = nullptr; } }
+    if (!g_convTex) {
+        D3D10_TEXTURE2D_DESC cd = sd; cd.Format = outFmt; cd.MipLevels = 1; cd.ArraySize = 1; cd.SampleDesc.Count = 1; cd.SampleDesc.Quality = 0; cd.Usage = D3D10_USAGE_DEFAULT; cd.BindFlags = D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE; cd.CPUAccessFlags = 0; cd.MiscFlags = 0;
+        if (FAILED(g_dev10->CreateTexture2D(&cd, nullptr, &g_convTex)) || FAILED(g_dev10->CreateRenderTargetView(g_convTex, nullptr, &g_convRtv))) { if (g_convTex) g_convTex->Release(); g_convTex = nullptr; g_convBad = true; LOG("monocular: conversion target failed"); return nullptr; }
+    }
+    if (g_convSrc != src) { if (g_convSrv) g_convSrv->Release(); g_convSrv = nullptr; g_convSrc = nullptr;
+        if (FAILED(g_dev10->CreateShaderResourceView(src, nullptr, &g_convSrv))) { g_convSrv = nullptr; return nullptr; } g_convSrc = src; }
+    g_convSb->Capture();
+    g_dev10->OMSetRenderTargets(1, &g_convRtv, nullptr);
+    D3D10_VIEWPORT vp = { 0, 0, sd.Width, sd.Height, 0, 1 }; g_dev10->RSSetViewports(1, &vp);
+    g_dev10->IASetInputLayout(nullptr); g_dev10->IASetPrimitiveTopology(D3D10_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    g_dev10->VSSetShader(g_convVs); g_dev10->GSSetShader(nullptr); g_dev10->PSSetShader(g_convPs);
+    g_dev10->PSSetShaderResources(0, 1, &g_convSrv);
+    g_dev10->OMSetDepthStencilState(g_convDss, 0); g_dev10->RSSetState(g_convRs); float bf[4] = {}; g_dev10->OMSetBlendState(g_convBs, bf, 0xFFFFFFFF);
+    o_Draw ? o_Draw(g_dev10, 3, 0) : g_dev10->Draw(3, 0);
+    ID3D10ShaderResourceView* nul = nullptr; g_dev10->PSSetShaderResources(0, 1, &nul);
+    g_convSb->Apply();
+    return g_convTex;
 }
 static ID3D10Texture2D* g_scopePre = nullptr; static bool g_scopePreValid = false; static ID3D10Texture2D* g_scopeComp = nullptr; static ID3D10Texture2D* g_scopeBbTmp = nullptr;
 static bool ScopeUiBegin() {
@@ -2315,12 +2606,54 @@ static void TurnMenu() {
     }
     prevH = h; prevL = kl; prevR = kr;
 }
+// v232 micro-stabilisation: a One Euro filter on the controller poses the arms and the weapon are built from.
+// Standing still the hand's tremor and tracking noise pass through (~0.2-0.4 mm per frame); slow movement is
+// filtered at HandSmoothCutoff Hz, fast movement opens the filter (HandSmoothBeta) so it never lags a swing.
+static float g_handCut = 8.0f, g_handBeta = 4.0f, g_handRotBeta = 0.06f;
+struct EuroPose { bool have = false; V3 p{}, dp{}; XrQuaternionf q{ 0, 0, 0, 1 }; float w = 0; };
+static float EuroAlpha(float fc, float dt) { float tau = 1.0f / (6.2831853f * fc); return 1.0f / (1.0f + tau / dt); }
+static void EuroUpdate(EuroPose& e, XrPosef& pose, float dt, bool valid) {
+    V3 x = ToV3(pose.position); XrQuaternionf q = pose.orientation;
+    if (!valid || !g_handSmooth || !e.have || dt <= 0 || dt > 0.1f) { e.have = valid; e.p = x; e.q = q; e.dp = { 0, 0, 0 }; e.w = 0; return; }
+    // position
+    V3 v = (x - e.p) * (1.0f / dt);
+    float ad = EuroAlpha(1.0f, dt); e.dp = e.dp + (v - e.dp) * ad;
+    float sp = sqrtf(Dot(e.dp, e.dp));
+    float a = EuroAlpha(g_handCut + g_handBeta * sp, dt); e.p = e.p + (x - e.p) * a;
+    // orientation (nlerp, cutoff opened by the angular speed in deg/s)
+    float d = e.q.x * q.x + e.q.y * q.y + e.q.z * q.z + e.q.w * q.w; if (d < 0) { q.x = -q.x; q.y = -q.y; q.z = -q.z; q.w = -q.w; d = -d; }
+    float ang = 2.0f * acosf(fminf(1.0f, d)) * 57.29578f / dt;
+    e.w += (ang - e.w) * ad;
+    float b = EuroAlpha(g_handCut + g_handRotBeta * e.w, dt);
+    XrQuaternionf r{ e.q.x + (q.x - e.q.x) * b, e.q.y + (q.y - e.q.y) * b, e.q.z + (q.z - e.q.z) * b, e.q.w + (q.w - e.q.w) * b };
+    float n = sqrtf(r.x * r.x + r.y * r.y + r.z * r.z + r.w * r.w); if (n > 1e-6f) { r.x /= n; r.y /= n; r.z /= n; r.w /= n; }
+    e.q = r;
+    pose.position = { e.p.x, e.p.y, e.p.z }; pose.orientation = e.q;
+}
+static xr::HandState SmoothHand(int side, XrTime t) {
+    static EuroPose eg[2], ea[2]; static XrTime last[2] = { 0, 0 };
+    xr::HandState h = xr::Hand(side);
+    float dt = last[side] ? (float)((double)(t - last[side]) * 1e-9) : 0; last[side] = t;
+    // the aim pose is rigid with the grip: filter the grip, carry the same correction to the aim
+    XrPosef g0 = h.grip; EuroUpdate(eg[side], h.grip, dt, h.gripValid);
+    if (h.gripValid && h.aimValid && g_handSmooth) {
+        // aim = grip * offset: offset in the grip frame from the raw poses, re-applied to the filtered grip
+        XrQuaternionf gi{ -g0.orientation.x, -g0.orientation.y, -g0.orientation.z, g0.orientation.w };
+        auto qm = [](XrQuaternionf a, XrQuaternionf b) { return XrQuaternionf{ a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x, a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z }; };
+        XrQuaternionf ro = qm(gi, h.aim.orientation);
+        V3 po = QRot(gi, ToV3(h.aim.position) - ToV3(g0.position));
+        h.aim.orientation = qm(h.grip.orientation, ro);
+        V3 p = ToV3(h.grip.position) + QRot(h.grip.orientation, po); h.aim.position = { p.x, p.y, p.z };
+        ea[side].have = false;
+    } else EuroUpdate(ea[side], h.aim, dt, h.aimValid);
+    return h;
+}
 static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFrame& frame) {
     const float s = frame.worldScale;
     TurnMenu();
     MacheteMenu(fv);
     {   // controller pose for the arms/weapon and shots (game thread reads it)
-        arms::Frame af; const xr::HandState& rh = xr::Hand(1);
+        arms::Frame af; const xr::HandState rh = SmoothHand(1, fv.displayTime);
         xr::HandState physical[2]; XrPosef inputHead; bool inputHeadValid = false;
         const bool inputCurrent = xr::InputSnapshot(physical,inputHead,inputHeadValid,&af.source);
         af.handAuthority = inputCurrent && physical[1].gripValid && physical[1].aimValid;
@@ -2331,6 +2664,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
         auto put = [](float* d, V3 v) { d[0] = v.x; d[1] = v.y; d[2] = v.z; };
         af.game = frame.game; af.frameSequence = frame.sequence;
         af.bonePubValid = arms::CamBonePos(af.bonePub);   // v231 body clock
+        if (g_vehViewUsed) { float cp[3], Wm[16]; if (arms::CamBoneRoot(cp, Wm, g_cfg.vehicleViewPrev != 0)) { af.bonePub[0] = Wm[12]; af.bonePub[1] = Wm[13]; af.bonePub[2] = Wm[14]; af.bonePubRoot = true; af.bonePubValid = true; } }
         if (g_motionDiag) {   // v231 diagnostic (MotionDiag=1): does the skeleton (as the renderer will read it) still hold the hand the mod wrote?
             static int frames = 0, differ = 0; static float worst = 0; static double lastL = 0;
             float aw[3], lw[3], hd3[3], tg[3], lh[3]; long ds = 0;
@@ -2385,7 +2719,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             put(af.aimB, frame.ReferenceDirection(QRot(rh.aim.orientation, { 0, 0, 1 })));
             put(af.gripO, frame.ReferencePosition(ToV3(rh.grip.position)));
         }
-        const xr::HandState& lh = xr::Hand(0);
+        const xr::HandState lh = SmoothHand(0, fv.displayTime);
         af.leftValid = lh.aimValid && lh.gripValid;
         af.lSqueeze = af.leftAuthority ? lh.squeeze : 0; af.rSqueeze = af.handAuthority ? rh.squeeze : 0;
         af.machete = controls::MacheteSelected(); af.map = controls::MapOpen();
@@ -2627,6 +2961,19 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     if (poseReady) {   // arms/weapon/shots follow the controllers on every frame, scoped or not
         uint8_t* rc0 = (uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam;
         SubmitArmsFrame(fv, rc0, frame);
+        {   // v232 mocap 'X' record: this frame's poses (eyes are added in the eye loop)
+            float* x = cbcap::mx; memset(x, 0, sizeof cbcap::mx);
+            double t = NowMs(); memcpy(x, &t, 8); uint32_t sq = (uint32_t)frame.sequence; memcpy(x + 2, &sq, 4); uint32_t fl = (uint32_t)controls::VehicleMode() | (g_riding ? 0x100u : 0u); memcpy(x + 3, &fl, 4);
+            auto p3 = [](float* d, fc2vr::tracking::Vec3 v) { d[0] = v.x; d[1] = v.y; d[2] = v.z; };
+            p3(x + 4, frame.raw.P); p3(x + 7, frame.raw.F); p3(x + 10, frame.game.P); p3(x + 13, frame.game.F);
+            float pl[3] = {}, hd = 0; arms::PlayerState(pl, &hd); memcpy(x + 16, pl, 12); x[19] = hd;
+            float bp[3] = {}; arms::CamBonePos(bp); memcpy(x + 20, bp, 12); x[23] = frame.worldScale;
+            auto pose = [](float* d, const XrPosef& p) { d[0] = p.position.x; d[1] = p.position.y; d[2] = p.position.z; d[3] = p.orientation.x; d[4] = p.orientation.y; d[5] = p.orientation.z; d[6] = p.orientation.w; };
+            pose(x + 50, fv.views[0].pose); pose(x + 57, fv.views[1].pose);
+            pose(x + 64, xr::Hand(1).grip); pose(x + 71, xr::Hand(1).aim); pose(x + 78, xr::Hand(0).grip);
+            uint64_t ds = (uint64_t)fv.displayTime; memcpy(x + 86, &ds, 8);
+            cbcap::mxValid = true;
+        }
         if (g_rsOn) {   // v231: the head's horizontal offset from the body (recenter point), game space
             V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
             fc2vr::tracking::Vec3 t = frame.reference.Position({ mid.x, mid.y, mid.z });
@@ -2813,6 +3160,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             V3 dir = frame.WorldDirection(QRot(v.pose.orientation, { 0, 0, -1 }));
             V3 up  = frame.WorldDirection(QRot(v.pose.orientation, { 0, 1, 0 }));
             PoseCamera(rc, pos, dir, up, rtan[e][0], rtan[e][1], rtan[e][2], rtan[e][3], true);
+            { float* x = cbcap::mx + 32 + e * 9; x[0] = pos.x; x[1] = pos.y; x[2] = pos.z; x[3] = dir.x; x[4] = dir.y; x[5] = dir.z; x[6] = up.x; x[7] = up.y; x[8] = up.z; }
             double vpCur[16]; bool havePrev = false;
             { const float* VP = &F<float>(rc, cam::ViewProj); for (int i = 0; i < 16; ++i) vpCur[i] = VP[i]; }
             if (afwSkip[e]) { memcpy(afwTarget[e], vpCur, sizeof vpCur); continue; }   // rebuilt after the loop
@@ -2829,7 +3177,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             perf::SetPhase(e ? perf::P_EYE1 : perf::P_EYE0);
             static bool s_census = true;
             if (e == 0 && (dlssOn || afw::Wanted()) && s_census) { g_eyeBindsOn = true; }
-            g_inEye = true; g_uiEye = e; g_renderEye = e; hang::Mark(e ? "eye1 render" : "eye0 render");
+            g_inEye = true; g_uiEye = e; g_renderEye = e; g_capEye = e; hang::Mark(e ? "eye1 render" : "eye0 render");
             if (g_capState == 2) TraceMark(e ? "eye1 dispatch begin" : "eye0 dispatch begin");
             if (g_eyeTex) {
                 // Off-screen at headset resolution, exactly like the engine's tiled-screenshot path:
@@ -3035,6 +3383,7 @@ static XrPosef MenuPose() {
 }
 static void __fastcall Hook_Present(void* self, void* edx, int a1) {
     hang::Beat(); hang::Mark("present");
+    cbcap::Present(g_dir);
     {
         static int logged = 0; static uintptr_t lastSc = 0; static int changes = 0;
         uint8_t* drv = (uint8_t*)self;
@@ -3108,7 +3457,13 @@ static void __fastcall Hook_Present(void* self, void* edx, int a1) {
             }
             g_scopePreValid = false;
             const bool monoView = controls::MonocularOut();   // v214: the monocular's own window (its targeting ring, no crosshair / ammo)
-            if (monoView && g_scopePre) { src = g_scopePre; resolved = true; }   // v215: the scene before the UI (no tutorial / button prompts); the ring is the monocular's own lens
+            if (monoView && g_scopePre) { src = g_scopePre; resolved = true;
+                D3D10_TEXTURE2D_DESC bd2{}, pd2{}; if (bb) bb->GetDesc(&bd2); g_scopePre->GetDesc(&pd2);
+                if (bb && TypelessFamily10(bd2.Format) != TypelessFamily10(pd2.Format)) {
+                    ID3D10Texture2D* c = ConvertScene(g_scopePre, bd2.Format);
+                    if (c) src = c; else src = bb;   // no conversion: at least the finished frame, not a black window
+                }
+            }   // v215: the scene before the UI (no tutorial / button prompts); the ring is the monocular's own lens
             xr::SetMonoTarget(monoView && arms::MonoTarget());
             {   static double nextDiag = 0; static int nDiag = 0;   // v231: is the kept scene black before it reaches the scope layer?
                 if (monoView && nDiag < 8 && NowMs() > nextDiag) { nextDiag = NowMs() + 3000.0; ++nDiag;
@@ -3451,6 +3806,7 @@ static void Install() {
     LOG("Dunia.dll base %08x", (unsigned)g_base);
     if (gameaddr::Detect() == gameaddr::GOG) LOG("GOG build: engine addresses translated from the Steam map");
     if (!g_cfg.enable) { LOG("disabled by config"); return; }
+    InstallFramePacing();
     bool ok1 = PatchJmp(A(eng::RenderViewport), eng::RenderViewportPrologue, (void*)&Hook_RenderViewport, (void**)&o_RenderViewport);
     bool ok2 = PatchJmp(A(eng::PresentWrapper), eng::PresentPrologue, (void*)&Hook_Present, (void**)&o_Present);
     static const uint8_t rfPrologue[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF0 };   // push ebp; mov ebp,esp; and esp,-16
@@ -3485,7 +3841,7 @@ static void Install() {
         ac.handOfs[0] = IniF("HandOffsetX", 0); ac.handOfs[1] = IniF("HandOffsetY", 0); ac.handOfs[2] = IniF("HandOffsetZ", 0);
         ac.leftHandRoll = IniF("LeftHandRoll", 45.0f); ac.macheteAngle = IniF("MacheteAngle", 60.0f);
         ac.leftHandYaw = IniF("LeftHandYaw", 30.0f); ac.leftForearmTwist = IniF("LeftForearmTwist", 1.0f); ac.armsIndependent = (int)IniF("ArmsIndependent", 1); ac.steadyHands = (int)IniF("SteadyHands", 1); ac.grabBoxShrink = IniF("GrabBoxShrink", 0.25f); ac.upperArmTwist = IniF("UpperArmTwist", 0.5f); ac.macheteYaw = IniF("MacheteYaw", 15.0f); ac.macheteRoll = IniF("MacheteRoll", 0.0f); ac.mapAngle = IniF("MapPitch", 0.0f); ac.mapYaw = IniF("MapYaw", 0.0f); ac.mapRoll = IniF("MapRoll", 0.0f); ac.freePitch = IniF("FreeHandPitch", 0.0f); ac.freeYaw = IniF("FreeHandYaw", 0.0f); ac.freeRoll = IniF("FreeHandRoll", 0.0f); ac.phonePitch = IniF("PhonePitch", ac.freePitch); ac.phoneYaw = IniF("PhoneYaw", ac.freeYaw); ac.phoneRoll = IniF("PhoneRoll", ac.freeRoll); ac.phoneDiag = (int)IniF("PhoneDiag", 0);
-        ac.handGrab = (int)IniF("HandGrab", 1); ac.grabRadius = IniF("GrabRadius", 0.35f); ac.grabReach = IniF("GrabReach", 0.06f); ac.pickupReach = IniF("PickupReach", 0.20f); ac.grabPhysics = (int)IniF("GrabPhysics", 1); ac.grabMaxMass = IniF("GrabMaxMass", 25.0f); ac.grabMaxSize = IniF("GrabMaxSize", 0.8f); ac.throwScale = IniF("ThrowScale", 1.3f); ac.bodyRadius = IniF("BodyRadius", 0.30f); ac.climbing = (int)IniF("Climbing", 0); ac.climbReach = IniF("ClimbReach", 0.10f); ac.climbMode = (int)IniF("ClimbMode", 1); ac.mantleBelowHead = IniF("MantleBelowHead", 0.55f); ac.climbGrace = IniF("ClimbGrace", 1.5f); ac.climbTurnSpeed = IniF("ClimbTurnSpeed", 120.0f); ac.watchStickSign = IniF("WatchStickSign", 1.0f); ac.throwSpeed = IniF("ThrowSpeed", 0.0f); ac.throwRange = IniF("ThrowRange", 1.5f); ac.npcGrab = (int)IniF("NpcGrab", 0); ac.bodyClock = (int)IniF("HandsOnBodyClock", 1); ac.armSmooth = IniF("ArmSmoothing", 0.0f); ac.twistFadeFrom = IniF("UpperArmTwistFadeFrom", -1.0f); ac.twistFadeTo = IniF("UpperArmTwistFadeTo", 0.0f); ac.twistSmooth = IniF("UpperArmTwistSmoothing", 0.0f); ac.softIk = IniF("SoftIkStart", 0.0f); ac.softIkMaxPull = IniF("SoftIkMaxShoulderPull", 0.12f); ac.elbowSmooth = IniF("ElbowSmoothing", 0.0f); g_camBodyClock = (int)IniF("CameraOnBodyClock", 1); g_motionDiag = (int)IniF("MotionDiag", 0); ac.roomScale = (int)IniF("RoomScale", 0); ac.roomLeash = IniF("RoomScaleLeash", 0.10f); ac.roomMaxSpeed = IniF("RoomScaleMaxSpeed", 4.0f); ac.roomRadius = IniF("RoomScaleWallDistance", 0.30f); g_rsDelay = (int)IniF("RoomScaleViewDelay", 1); g_rsOn = ac.roomScale != 0; ac.contactPush = (int)IniF("ContactPush", 1); ac.freezeReload = (int)IniF("FreezeReload", 1); ac.macheteHits = (int)IniF("MacheteHits", 1); ac.macheteSpeed = IniF("MacheteSwingSpeed", 2.5f); ac.macheteCooldown = IniF("MacheteCooldown", 0.5f); ac.macheteSound = (int)IniF("MacheteSwingSound", 1); ac.seatWeapon = (int)IniF("SeatWeapon", 1); ac.macheteSoundSpeed = IniF("MacheteSoundSpeed", 6.0f); ac.flashRange = IniF("FlashlightRange", 30.0f); ac.flashInner = IniF("FlashlightInnerAngle", 18.0f); ac.flashOuter = IniF("FlashlightOuterAngle", 32.0f); ac.flashBright = IniF("FlashlightBrightness", 1.0f); ac.noColorFilter = (int)IniF("NoColorFilter", 0); ac.noRimLight = (int)IniF("NoRimLight", 0);
+        ac.handGrab = (int)IniF("HandGrab", 1); ac.grabRadius = IniF("GrabRadius", 0.35f); ac.grabReach = IniF("GrabReach", 0.06f); ac.pickupReach = IniF("PickupReach", 0.20f); ac.grabPhysics = (int)IniF("GrabPhysics", 1); ac.grabMaxMass = IniF("GrabMaxMass", 25.0f); ac.grabMaxSize = IniF("GrabMaxSize", 0.8f); ac.throwScale = IniF("ThrowScale", 1.3f); ac.bodyRadius = IniF("BodyRadius", 0.30f); ac.climbing = (int)IniF("Climbing", 0); ac.climbReach = IniF("ClimbReach", 0.10f); ac.climbMode = (int)IniF("ClimbMode", 1); ac.mantleBelowHead = IniF("MantleBelowHead", 0.55f); ac.climbGrace = IniF("ClimbGrace", 1.5f); ac.climbTurnSpeed = IniF("ClimbTurnSpeed", 120.0f); ac.watchStickSign = IniF("WatchStickSign", 1.0f); ac.throwSpeed = IniF("ThrowSpeed", 0.0f); ac.throwRange = IniF("ThrowRange", 1.5f); ac.npcGrab = (int)IniF("NpcGrab", 0); ac.bodyClock = (int)IniF("HandsOnBodyClock", 1); ac.armSmooth = IniF("ArmSmoothing", 0.0f); ac.clavSmooth = IniF("ClavicleSmoothing", 0.5f); g_handSmooth = IniF("HandSmoothing", 1) != 0; g_handCut = IniF("HandSmoothCutoff", 8.0f); g_handBeta = IniF("HandSmoothBeta", 4.0f); g_handRotBeta = IniF("HandSmoothRotBeta", 0.06f); ac.localFrame = (int)IniF("ArmLocalFrame", 1); g_framePacing = (int)IniF("FramePacing", 1); ac.foregripSmooth = IniF("ForegripSmoothing", 0.3f); ac.twistFadeFrom = IniF("UpperArmTwistFadeFrom", -1.0f); ac.twistFadeTo = IniF("UpperArmTwistFadeTo", 0.0f); ac.twistSmooth = IniF("UpperArmTwistSmoothing", 0.0f); ac.softIk = IniF("SoftIkStart", 0.0f); ac.softIkMaxPull = IniF("SoftIkMaxShoulderPull", 0.12f); ac.elbowSmooth = IniF("ElbowSmoothing", 0.0f); g_camBodyClock = (int)IniF("CameraOnBodyClock", 1); g_motionDiag = (int)IniF("MotionDiag", 0); ac.roomScale = (int)IniF("RoomScale", 0); ac.roomLeash = IniF("RoomScaleLeash", 0.10f); ac.roomMaxSpeed = IniF("RoomScaleMaxSpeed", 4.0f); ac.roomRadius = IniF("RoomScaleWallDistance", 0.30f); g_rsDelay = (int)IniF("RoomScaleViewDelay", 1); g_rsOn = ac.roomScale != 0; ac.contactPush = (int)IniF("ContactPush", 1); ac.freezeReload = (int)IniF("FreezeReload", 1); ac.macheteHits = (int)IniF("MacheteHits", 1); ac.macheteSpeed = IniF("MacheteSwingSpeed", 2.5f); ac.macheteCooldown = IniF("MacheteCooldown", 0.5f); ac.macheteSound = (int)IniF("MacheteSwingSound", 1); ac.seatWeapon = (int)IniF("SeatWeapon", 1); ac.macheteSoundSpeed = IniF("MacheteSoundSpeed", 6.0f); ac.flashRange = IniF("FlashlightRange", 30.0f); ac.flashInner = IniF("FlashlightInnerAngle", 18.0f); ac.flashOuter = IniF("FlashlightOuterAngle", 32.0f); ac.flashBright = IniF("FlashlightBrightness", 1.0f); ac.noColorFilter = (int)IniF("NoColorFilter", 0); ac.noRimLight = (int)IniF("NoRimLight", 0);
         { char b[64], ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "MacheteSoundIds", "", b, sizeof b, ip); unsigned a1 = 0, a2 = 0; int n = b[0] ? sscanf(b, "%x,%x", &a1, &a2) : 0;
           if (n >= 1) { ac.macheteSnd[0] = a1; ac.macheteSnd[1] = n >= 2 ? a2 : 0; } } ac.bladeLen = IniF("MacheteBladeLength", 0.55f); ac.pushMinSpeed = IniF("PushMinSpeed", 0.3f); ac.pushRadius = IniF("PushRadius", 0.06f); ac.pushScale = IniF("PushScale", 1.0f); ac.pushMass = IniF("PushMass", 40.0f); ac.pushWeaponLen = IniF("PushWeaponLen", 0.7f); ac.npcReach = IniF("NpcReach", 0.25f); ac.npcGain = IniF("NpcPullGain", 0.6f); ac.npcMaxSpeed = IniF("NpcMaxSpeed", 10.0f); ac.npcRagdollTime = IniF("NpcRagdollTime", 2.5f); ac.npcActive = (int)IniF("NpcActive", 1); ac.npcActiveWeight = IniF("NpcActiveWeight", 1.0f); ac.npcStiffness = IniF("NpcStiffness", 1.0f); ac.npcKnockPull = IniF("NpcKnockPull", 1.12f); ac.npcKnockDown = IniF("NpcKnockDown", 0.35f); ac.npcLeadGain = IniF("NpcLeadGain", 8.0f); ac.npcLeadSpeed = IniF("NpcLeadSpeed", 4.5f); ac.npcKnockSpeed = IniF("NpcKnockSpeed", 2.1f); ac.weaponRollFix = (int)IniF("WeaponRollFix", 0); ac.climbHolster = (int)IniF("ClimbHolster", 1); ac.gripInteract = (int)IniF("GripInteract", 0); ac.throwMaxSpeed = IniF("ThrowMaxSpeed", 25.0f); ac.useReach = IniF("UseReach", 0.9f); ac.mouthReach = IniF("MouthReach", 0.18f);
         ac.backpackFwd = IniF("BackpackZoneFwd", 0.0f); ac.backpackUp = IniF("BackpackZoneUp", -0.25f);
@@ -3535,7 +3891,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v231 = 1.0.2 incl. contribution input-authority-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v233 = 1.0.3: frame pacing, arm precision / shoulder / hand stabiliser, vehicle view on the seat, monocular HDR fix, HUD strip fix; build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

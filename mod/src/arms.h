@@ -13,6 +13,9 @@ struct Config {
     float softIk = 0.0f;         // SoftIkStart (v231): share of the arm length where the shoulder starts easing toward the hand (0 = off)
     float softIkMaxPull = 0.12f;  // SoftIkMaxShoulderPull (v231): m, for the free left hand
     float elbowSmooth = 0.0f;    // ElbowSmoothing (v231): seconds    // UpperArmTwistSmoothing (v231): seconds
+    int localFrame = 1;          // ArmLocalFrame (v232): arm maths in a frame near the player (float precision)
+    float clavSmooth = 0.5f;     // ClavicleSmoothing (v232): seconds; the animated clavicles are low-pass filtered (0 = off)
+    float foregripSmooth = 0.3f; // ForegripSmoothing (v232): seconds; the animation's support-hand place on the weapon (0 = off)
     float armSmooth = 0.0f;      // ArmSmoothing (v231): seconds; the animated arm bones the solve starts from are smoothed (0 = off)
     int bodyClock = 1;            // HandsOnBodyClock (v231): hands follow the body's movement since the frame was published
     int roomScale = 0;            // RoomScale (v231): real steps move the player (the body follows the head)
@@ -110,7 +113,7 @@ struct Frame {
     void* weapon = nullptr;   // instance identity, not a model/cache generation lease
     fc2vr::tracking::GameBasis game{};
     uint64_t frameSequence = 0;   // diagnostic application-frame stamp, not a freshness lease
-    float bonePub[3] = {}; bool bonePubValid = false;   // v231: the Camera bone when this frame was published (body clock)
+    float bonePub[3] = {}; bool bonePubValid = false; bool bonePubRoot = false;   // v232: bonePub is the seat (skeleton world position) of the drawn update   // v231: the Camera bone when this frame was published (body clock)
     float camRows[3][3];          // RAW native camera rows (incl. pitch): bone-axis calibration only
     float aimO[3], aimR[3], aimU[3], aimB[3];   // right controller aim pose (ref)
     float gripO[3];               // right controller grip position (ref)
@@ -133,13 +136,19 @@ struct FrameUsage {
 };
 bool ReadFrameUsage(FrameUsage& out);
 bool CamBonePos(float out[3]);
+bool CamBoneRoot(float cam[3], float W[16], bool previous = false);   // v232: Camera bone and the skeleton's world matrix from the same update
 bool BodyClock(); void SetBodyClock(bool on);
 long CamBoneSeq();
 bool DiagArmLive(int* differ, int* worstBone, float* worstMm);   // v231
 float DiagForeStep();
 void DiagArm(float pos[10], float rot[10]);   // v231: per-frame change of R/L forearm, R/L upper arm, R/L forearm twist (mm, deg)   // v231: largest per-frame turn of the animated forearms (deg)
 float ArmSmooth(); void SetArmSmooth(float s);
-bool ArmStability(); void SetArmStability(bool on);   // v231 F4 A/B
+bool ArmStability(); void SetArmStability(bool on);
+bool LocalFrameToggle();   // v232 Ctrl+F5 A/B
+bool ClavFix(bool toggle);   // v232 F4 A/B: clavicle + foregrip smoothing on/off
+void DiagApplied(float p[3], float fw[3], uint64_t* seq);   // v232 mocap
+void SetBoneSink(void (*fn)(const float* W, const float* models, int n));   // v232: skeleton as written, each frame (GPU capture)
+int RigidArmTest(); void SetRigidArmTest(int mode);   // v232 F4: 0 off, 1 arm chains held rigid on the hands, 2 whole skeleton (jitter A/B)   // v231 F4 A/B
 bool DiagLiveHand(float out[3]);
 bool DiagHand(float applyW[3], float liveW[3], float hand[3], float target[3], long* seq);   // v231 jitter diagnostic                                  // v231: skeleton updates so far (diagnostic)   // v231 (F4 test toggle)
 void SetMonoCams(const float game[16], const float posed[16]);

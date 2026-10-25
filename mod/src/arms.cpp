@@ -58,12 +58,15 @@ static CRITICAL_SECTION g_cs; static bool g_csInit = false;
 static Frame g_frame;                               // latest from the render thread
 static FrameUsage g_frameUsage;
 static volatile uint8_t* g_playerSkel = nullptr;    // player's skeleton object (bone array +0x20, count +0x2C)
+static void (*g_boneSink)(const float*, const float*, int) = nullptr;
+static float g_dbgApplyP[3], g_dbgApplyF[3]; static uint64_t g_dbgApplySeq;   // v232 mocap: the effective frame the hands were placed with
+static volatile bool g_rigidTest = false; static volatile long g_rigidGen = 0; static volatile int g_rigidMode = 0;   // v232 F4 A/B
 static float g_dgW[3], g_dgHand[3], g_dgTarget[3]; static long g_dgSeq = 0; static float g_dgForeStep = 0; static float g_dgBend[2] = {}; static float g_dgModel[512][16]; static bool g_dgWritten[512]; static int g_dgN = 0; static uint8_t* g_dgSkel = nullptr; static float g_dgArmPos[10], g_dgArmRot[10];   // v231 jitter diagnostic
 static volatile uint8_t* g_playerGfx = nullptr;     // its graphic component (world matrix at +0x170)
 static int g_slot[21];                              // bone-helper slot -> bone index (Camera 0, R Hand 12, R Clavicle 15, L Clavicle 19)
 struct PhoneDiag { volatile LONG calls, player, applied, noFrame, noHand, camUpd; void* other[4]; int otherN[4]; LONG otherCalls[4]; };
 static PhoneDiag g_pd = {};
-static float g_camBoneRot[3][3]; static float g_camBonePos[3]; static volatile LONG g_camBoneSeq = 0;
+static float g_camBoneRot[3][3]; static float g_camBonePos[3]; static float g_rootW[16]; static float g_camBonePosLast[3]; static float g_prevCam[3], g_prevRootW[16]; static bool g_havePrevRoot = false; static volatile LONG g_camBoneSeq = 0;
 static float g_perm[3][3] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }; static bool g_permOk = false;   // camera-bone axes -> game camera rows
 static bool g_dumped = false;
 static uint8_t g_armMask[512]; static int g_maskCount = -1; static uint8_t* g_maskSkel = nullptr;
@@ -85,6 +88,7 @@ static fc2vr::authority::Stamp g_shotSource; static void* g_shotWeapon = nullptr
 
 
 // v231 rotation helpers (row-vector matrices: rows 0..2 are the basis vectors)
+static double QpcSec() { static LARGE_INTEGER f{}; if (!f.QuadPart) QueryPerformanceFrequency(&f); LARGE_INTEGER c; QueryPerformanceCounter(&c); return (double)c.QuadPart / (double)f.QuadPart; }
 static void MatQuat(const M4& M, float* q) {
     float r[3][3];
     for (int i = 0; i < 3; ++i) { float l = sqrtf(M.m[i][0] * M.m[i][0] + M.m[i][1] * M.m[i][1] + M.m[i][2] * M.m[i][2]); if (l < 1e-8f) l = 1; for (int j = 0; j < 3; ++j) r[i][j] = M.m[i][j] / l; }
@@ -725,6 +729,8 @@ static void Apply(uint8_t* skel) {
     {
         Lock();
         for (int i = 0; i < 3; ++i) { for (int k = 0; k < 3; ++k) g_camBoneRot[i][k] = camW.m[i][k]; g_camBonePos[i] = camW.m[3][i]; }
+        if (g_camBoneSeq > 0) { memcpy(g_prevRootW, g_rootW, 64); memcpy(g_prevCam, g_camBonePosLast, 12); g_havePrevRoot = true; }
+        memcpy(g_rootW, W.m, 64); memcpy(g_camBonePosLast, g_camBonePos, 12);
         Unlock();
         InterlockedIncrement(&g_camBoneSeq);
     }
@@ -733,6 +739,23 @@ static void Apply(uint8_t* skel) {
     Frame f; Lock(); f = g_frame; Unlock();
     if (!f.valid) { InterlockedIncrement(&g_pd.noFrame); return; }
     if (!f.handValid) { InterlockedIncrement(&g_pd.noHand); return; }
+    // v232 precision: the world is ~3 km across and floats hold ~0.24 mm there. Every arm matrix product in world
+    // coordinates rounded to that grid and the errors added up to 1-2 mm of noise per frame on the free hand and the
+    // forearms (seen as the arms "shivering"). The arm work below runs in a local frame centred near the player
+    // (moved in 64 m steps); world outputs add the origin back.
+    float O[3];
+    {   static float o[3]; static bool have = false;
+        float t[3] = { W.m[3][0], W.m[3][1], W.m[3][2] };
+        if (!have || fabsf(t[0] - o[0]) > 200 || fabsf(t[1] - o[1]) > 200 || fabsf(t[2] - o[2]) > 200) {
+            for (int k = 0; k < 3; ++k) o[k] = floorf(t[k] / 64.0f + 0.5f) * 64.0f; have = true; }
+        memcpy(O, o, 12);
+        if (!g_c.localFrame) O[0] = O[1] = O[2] = 0;
+    }
+    for (int k = 0; k < 3; ++k) { W.m[3][k] -= O[k]; camW.m[3][k] -= O[k]; }
+    if (!Inv(W, Winv)) return;
+    camW = Mul(camM, W);
+    f.game.P.x -= O[0]; f.game.P.y -= O[1]; f.game.P.z -= O[2];
+    if (f.bonePubValid) for (int k = 0; k < 3; ++k) f.bonePub[k] -= O[k];
     {   // diagnostic: the hands as animated, relative to the camera bone (which one moves during a phone call)
         static ULONGLONG lastD = 0; ULONGLONG tn = GetTickCount64();
         if (g_c.phoneDiag && !controls::NormalControls() && tn - lastD > 700) {
@@ -760,13 +783,16 @@ static void Apply(uint8_t* skel) {
     // before the render thread publishes this frame's sample). Move the published origin by how far the Camera bone
     // has moved since, so the hands keep pace with walking, vehicles and the body (no lag-dependent jitter).
     if (g_c.bodyClock && f.bonePubValid) {
-        float d[3] = { co[0] - f.bonePub[0], co[1] - f.bonePub[1], co[2] - f.bonePub[2] };
+        const float* now = f.bonePubRoot ? W.m[3] : co;   // v232 vehicles: the seat moved since the drawn update the view was placed from
+        float d[3] = { now[0] - f.bonePub[0], now[1] - f.bonePub[1], now[2] - f.bonePub[2] };
         float dl = sqrtf(Dot3(d, d));
         static double sum = 0; static int cnt = 0, nLog = 0; static ULONGLONG lastL = 0;
         if (std::isfinite(dl) && dl < 1.5f) { f.game.P.x += d[0]; f.game.P.y += d[1]; f.game.P.z += d[2]; sum += dl; ++cnt; }
         ULONGLONG tn = GetTickCount64();
         if (nLog < 30 && tn - lastL > 10000 && cnt) { ++nLog; lastL = tn; LOG("body clock: hands moved with the body by %.1f mm per frame on average (%d frames)", sum / cnt * 1000.0, cnt); sum = 0; cnt = 0; }
     }
+    g_dbgApplyP[0] = f.game.P.x + O[0]; g_dbgApplyP[1] = f.game.P.y + O[1]; g_dbgApplyP[2] = f.game.P.z + O[2]; g_dbgApplySeq = f.frameSequence;
+    g_dbgApplyF[0] = f.game.F.x; g_dbgApplyF[1] = f.game.F.y; g_dbgApplyF[2] = f.game.F.z;
     auto toWorld = [&](const float* ref, float* out, bool point) {
         Put3(out, point ? f.game.Position(Read3(ref)) : f.game.Direction(Read3(ref)));
     };
@@ -1026,7 +1052,22 @@ static void Apply(uint8_t* skel) {
         float span = sqrtf(Dot3(dd, dd));
         oneHanded = span > g_c.twoHandMaxSpan;
         g_lastSpan = span;
-        if (!oneHanded) XformPt(Map, l0, fg);
+        if (!oneHanded) {
+            // v232: the animation's support hand slides on the weapon while running (and pops where the cycle loops):
+            // its place relative to the right hand is low-pass filtered (ForegripSmoothing, seconds)
+            if (g_c.foregripSmooth > 0.0f) {
+                static float sm[3]; static bool have = false; static double lt = 0; static void* lw = nullptr;
+                M4 ih; float loc[3];
+                if (Inv(Bw[rh], ih)) {
+                    XformPt(ih, l0, loc);
+                    double tn = QpcSec(); float dt = lt > 0 ? (float)(tn - lt) : 1.0f; lt = tn;
+                    if (!have || lw != g_curWeapon || dt > 0.25f) { memcpy(sm, loc, 12); have = true; lw = g_curWeapon; }
+                    else { float k = 1.0f - expf(-dt / g_c.foregripSmooth); for (int q = 0; q < 3; ++q) sm[q] += (loc[q] - sm[q]) * k; }
+                    XformPt(Bw[rh], sm, l0);
+                }
+            }
+            XformPt(Map, l0, fg);
+        }
         else for (int k = 0; k < 3; ++k) fg[k] = tgt[k] - ar[k] * 0.02f - au[k] * 0.07f - ab[k] * 0.02f;   // support hand under the grip
     }
     { float r[3]; toRef(fg, r); Lock(); memcpy(g_foregripRef, r, 12); g_foregripValid = true; g_oneHanded = oneHanded; Unlock(); }
@@ -1063,6 +1104,7 @@ static void Apply(uint8_t* skel) {
       const bool authority = f.handAuthority && f.weapon && f.weapon == g_curWeapon && xr::InputCurrent(f.source,1);
       Lock(); if (g_shotWeapon != f.weapon) g_scopeTick = 0;
       g_shotSource = f.source; g_shotWeapon = f.weapon;
+      for (int k = 0; k < 3; ++k) so[k] += O[k];
       memcpy(g_shotO, so, 12); memcpy(g_shotF, sf, 12); memcpy(g_camFwdNow, cf, 12); g_shotValid = authority; memcpy(g_rayRefO, sr, 12); memcpy(g_rayRefD, sfr, 12);
       memcpy(g_camRefO, cro, 12); memcpy(g_camRefD, crd, 12); g_rayTick = GetTickCount(); Unlock(); }
     // rigid re-pose of both arm chains
@@ -1282,6 +1324,30 @@ static void Apply(uint8_t* skel) {
                     if (g_armMask[i] && i != hand && i != fore && bones[i].parent == fore) Bw[i] = Mul(Bw[i], R);
             }
             Bw[upa] = newU; Bw[fore] = newF;
+            if (g_c.clavSmooth > 0.0f) {
+                // v232: the clavicles kept the animation's orientation, which swings ~12 cm with the running cycle and
+                // pops where it loops, while the shoulder is held on the view: the shoulders and upper arms twitched.
+                // The animated clavicle (relative to the camera bone) is low-pass filtered (ClavicleSmoothing, seconds)
+                // and placed so that it ends at the shoulder.
+                static float sq[2][4]; static float sc[2][3]; static bool have[2] = { false, false }; static double lt[2] = { 0, 0 };
+                M4 icw; float lp[3]; M4 ica;
+                if (Inv(camW, icw) && Inv(Banim[clav], ica)) {
+                    float up0[3] = { Banim[upa].m[3][0], Banim[upa].m[3][1], Banim[upa].m[3][2] }; XformPt(ica, up0, lp);   // shoulder in the clavicle's frame
+                    M4 rel = Mul(Banim[clav], icw); float q[4]; MatQuat(rel, q);
+                    float scl[3]; for (int c = 0; c < 3; ++c) scl[c] = sqrtf(rel.m[c][0] * rel.m[c][0] + rel.m[c][1] * rel.m[c][1] + rel.m[c][2] * rel.m[c][2]);
+                    double tn = QpcSec(); float dt = lt[side] > 0 ? (float)(tn - lt[side]) : 1.0f; lt[side] = tn;
+                    if (!have[side] || dt > 0.25f) { memcpy(sq[side], q, 16); have[side] = true; }
+                    else { float o[4]; QuatNlerp(sq[side], q, 1.0f - expf(-dt / g_c.clavSmooth), o); memcpy(sq[side], o, 16); }
+                    memcpy(sc[side], scl, 12);
+                    M4 r = QuatMat(sq[side]); for (int c = 0; c < 3; ++c) for (int j = 0; j < 3; ++j) r.m[c][j] *= sc[side][c];
+                    M4 nc = Mul(r, camW);
+                    float e[3]; nc.m[3][0] = nc.m[3][1] = nc.m[3][2] = 0; XformPt(nc, lp, e);
+                    for (int k = 0; k < 3; ++k) nc.m[3][k] = S[k] - e[k];
+                    M4 io; if (Inv(Bw[clav], io)) { M4 D = Mul(io, nc);
+                        for (int i = 0; i < n && i < 512; ++i) if (g_armMask[i] && i != upa && bones[i].parent == clav) Bw[i] = Mul(Bw[i], D); }
+                    Bw[clav] = nc;
+                } else for (int k = 0; k < 3; ++k) Bw[clav].m[3][k] += S[k] - P0[k];
+            } else
             for (int k = 0; k < 3; ++k) Bw[clav].m[3][k] += S[k] - P0[k];       // clavicle follows the shoulder
         }
     }
@@ -1314,7 +1380,7 @@ static void Apply(uint8_t* skel) {
         }
         Bw[i] = r;
     }
-    g_prevFinalRh = Bw[rh]; g_havePrevFinal = true; InterlockedIncrement(&g_pd.applied);
+    g_prevFinalRh = Bw[rh]; for (int k = 0; k < 3; ++k) g_prevFinalRh.m[3][k] += O[k]; g_havePrevFinal = true; InterlockedIncrement(&g_pd.applied);
     {   // diagnostic: which player bone the weapon model is attached to - during a reload (or 3 s after a projectile
         // shot), the weapon's place relative to each bone (last frame's final pose) is tracked; the bones it stays
         // fixed to are logged when the window ends.
@@ -1325,6 +1391,7 @@ static void Apply(uint8_t* skel) {
         M4 ww;
         if (want && !on) { on = true; have0 = false; for (int i = 0; i < 512; ++i) dev[i] = 0; devAH = devAbs = devAbsRot = 0; frames = changed = 0; }
         if (on && pn == n && g_curWeapon && WeaponWorld(g_curWeapon, ww)) {
+            for (int k = 0; k < 3; ++k) ww.m[3][k] -= O[k];
             for (int i = 0; i < n && i < 512; ++i) {
                 M4 ib; if (!Inv(prevW[i], ib)) continue;
                 M4 rel = Mul(ww, ib);
@@ -1367,9 +1434,29 @@ static void Apply(uint8_t* skel) {
         }
         pn = n; prevAH = Banim[rh];
     }
+    // v232 jitter A/B test (F4): each arm chain held rigid on its hand (shoulder end detached from the body). If the
+    // forearms still twitch like this, the cause is after the skeleton (skinning / rendering); if they go steady, it is
+    // the shoulder end of the arm (body / animation / timing relative to the view).
+    static bool s_allRigid = false; s_allRigid = false;
+    if (g_rigidTest) {
+        static M4 rel[512]; static bool have = false; static int hn = 0; static long gen = -1;
+        const bool all = g_rigidMode == 2; s_allRigid = all;
+        int hands[2] = { g_slot[20], g_slot[12] }, roots[2] = { g_slot[19], g_slot[15] };
+        auto sideOf = [&](int i) { if (g_follow[i] >= 0) i = g_follow[i];
+            for (int q = i, g = 0; q >= 0 && q < n && g < 64; q = bones[q].parent, ++g) { if (q == roots[0]) return 0; if (q == roots[1]) return 1; } return -1; };
+        auto worldOf = [&](int i) { if (g_armMask[i] || g_follow[i] >= 0) return Bw[i]; M4 b; memcpy(b.m, bones[i].model, 64); b.m[0][3] = b.m[1][3] = b.m[2][3] = 0; b.m[3][3] = 1; return Mul(b, W); };
+        auto handFor = [&](int i) { int sd = sideOf(i); if (sd >= 0) return hands[sd]; return all ? hands[1] : -1; };   // mode 2: the rest of the body rides on the right hand
+        if (!have || hn != n || gen != g_rigidGen) {
+            for (int i = 0; i < n && i < 512; ++i) { if (i == cam) continue; if (!all && !g_armMask[i] && g_follow[i] < 0) continue; int h = handFor(i); if (h < 0) continue;
+                M4 ih; if (Inv(Bw[h], ih)) rel[i] = Mul(worldOf(i), ih); }
+            have = true; hn = n; gen = g_rigidGen; LOG("arms: rigid test on (%s held on the hands)", all ? "the whole skeleton" : "arm chains");
+        }
+        for (int i = 0; i < n && i < 512; ++i) { if (i == cam) continue; if (!all && !g_armMask[i] && g_follow[i] < 0) continue; int h = handFor(i); if (h < 0 || i == h) continue;
+            Bw[i] = Mul(rel[i], Bw[h]); }
+    }
     // write back (model space)
     for (int i = 0; i < n && i < 512; ++i) {
-        if (!g_armMask[i] && g_follow[i] < 0) continue;
+        if (!g_armMask[i] && g_follow[i] < 0 && !(s_allRigid && i != cam)) continue;
         M4 r = Mul(Bw[i], Winv);
         float* dst = bones[i].model;
         float w3[4] = { dst[3], dst[7], dst[11], dst[15] };
@@ -1377,11 +1464,12 @@ static void Apply(uint8_t* skel) {
         dst[3] = w3[0]; dst[7] = w3[1]; dst[11] = w3[2]; dst[15] = w3[3];
     }
     InterlockedIncrement(&g_applied);
+    if (g_boneSink) { static float mods[512 * 16]; int m = n < 512 ? n : 512; for (int i = 0; i < m; ++i) memcpy(mods + i * 16, bones[i].model, 64); float w[16]; memcpy(w, W.m, 64); g_boneSink(w, mods, m); }
     {   // v231: keep what was written to every arm / helper bone (model space) for the render-time comparison
         Lock(); g_dgN = n < 512 ? n : 512; for (int i = 0; i < g_dgN; ++i) { g_dgWritten[i] = (g_armMask[i] || g_follow[i] >= 0); if (g_dgWritten[i]) memcpy(g_dgModel[i], bones[i].model, 64); } g_dgSkel = skel; Unlock();
     }
     {   // v231 diagnostic: world matrix used, drawn right hand and its controller target (world)
-        Lock(); for (int k = 0; k < 3; ++k) { g_dgW[k] = W.m[3][k]; g_dgHand[k] = Bw[rh].m[3][k]; g_dgTarget[k] = grip[k]; } ++g_dgSeq; Unlock();
+        Lock(); for (int k = 0; k < 3; ++k) { g_dgW[k] = W.m[3][k] + O[k]; g_dgHand[k] = Bw[rh].m[3][k] + O[k]; g_dgTarget[k] = grip[k] + O[k]; } ++g_dgSeq; Unlock();
         // v231: the arm bones as written, relative to the Camera bone: per-frame change (position mm, rotation deg)
         M4 icw; if (Inv(camW, icw)) {
             static M4 prevRel[512]; static bool havePrev = false; static int prevN = 0;
@@ -3327,6 +3415,13 @@ bool DiagLiveHand(float out[3]) {   // v231: the right hand bone as it is in the
 float DiagForeStep() { return g_dgForeStep; }
 void DiagArm(float pos[10], float rot[10]) { memcpy(pos, g_dgArmPos, 40); memcpy(rot, g_dgArmRot, 40); }
 static bool g_armStab = true; static float g_stabKeep[5];
+bool LocalFrameToggle() { g_c.localFrame = !g_c.localFrame; return g_c.localFrame != 0; }
+bool ClavFix(bool toggle) { static float c0 = -1, f0 = -1; if (c0 < 0) { c0 = g_c.clavSmooth > 0 ? g_c.clavSmooth : 0.5f; f0 = g_c.foregripSmooth > 0 ? g_c.foregripSmooth : 0.3f; }
+    if (toggle) { bool on = g_c.clavSmooth > 0; g_c.clavSmooth = on ? 0 : c0; g_c.foregripSmooth = on ? 0 : f0; } return g_c.clavSmooth > 0; }
+void SetBoneSink(void (*fn)(const float*, const float*, int)) { g_boneSink = fn; }
+void DiagApplied(float p[3], float fw[3], uint64_t* seq) { memcpy(p, g_dbgApplyP, 12); memcpy(fw, g_dbgApplyF, 12); *seq = g_dbgApplySeq; }
+int RigidArmTest() { return g_rigidMode; }
+void SetRigidArmTest(int mode) { InterlockedIncrement(&g_rigidGen); g_rigidMode = mode; g_rigidTest = mode != 0; LOG("arms: rigid test mode %d (%s)", mode, mode == 0 ? "off" : mode == 1 ? "arm chains" : "whole skeleton"); }
 bool ArmStability() { return g_armStab; }
 void SetArmStability(bool on) {
     if (on == g_armStab) return;
@@ -3355,6 +3450,7 @@ bool DiagArmLive(int* differ, int* worstBone, float* worstMm) {
 long CamBoneSeq() { return g_camBoneSeq; }
 bool BodyClock() { return g_c.bodyClock != 0; }
 void SetBodyClock(bool on) { g_c.bodyClock = on ? 1 : 0; }
+bool CamBoneRoot(float cam[3], float W[16], bool previous) { if (!g_csInit || g_camBoneSeq == 0 || (previous && !g_havePrevRoot)) return false; Lock(); if (previous) { memcpy(cam, g_prevCam, 12); memcpy(W, g_prevRootW, 64); } else { memcpy(cam, g_camBonePos, 12); memcpy(W, g_rootW, 64); } Unlock(); return true; }
 bool CamBonePos(float out[3]) { if (!g_csInit || g_camBoneSeq == 0) return false; Lock(); memcpy(out, g_camBonePos, 12); Unlock(); return true; }
 void Stats(LONG& applied, LONG& shots) { applied = InterlockedExchange(&g_applied, 0); shots = g_shots; }
 
