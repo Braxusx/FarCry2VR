@@ -431,7 +431,10 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
         float spd = dt > 0.0005f && dt < 0.1f ? sqrtf(dx * dx + dy * dy) / dt : 0;
         const xr::HandState& L = xr::Hand(0); bool stick = fabsf(L.stick.x) > 0.2f || fabsf(L.stick.y) > 0.2f;
         if (!havePlayer) spd = 0;
-        if (!stick && spd > 2.5f && spd < 60.0f) still += dt * 1000.0; else if (stick || spd < 1.0f) still = 0;
+        static double slow = 0;   // a single odd frame (a hitch, a skipped position update) doesn't end a ride
+        if (!stick && spd > 2.5f && spd < 60.0f) { still += dt * 1000.0; slow = 0; }
+        else if (stick) still = slow = 0;
+        else if (spd < 1.0f) { slow += dt * 1000.0; if (slow > 500.0) still = 0; }
         bool r = still > 400.0;
         if (r != riding) { riding = r; LOG("steady camera: %s", r ? "riding (off)" : "on foot"); }
         g_riding = riding;
@@ -1094,13 +1097,13 @@ void NoteBones(const float* W, const float* models, int n) {   // game thread, a
     if (lite) { float p[3], fw[3]; uint64_t sq = 0; arms::DiagApplied(p, fw, &sq); double t = NowMs(); buf.append((const char*)&sq, 8); buf.append((const char*)p, 12); buf.append((const char*)fw, 12); buf.append((const char*)&t, 8); }
     Put('K', buf.data(), (uint32_t)buf.size()); LeaveCriticalSection(&cs);
 }
-void Arm(bool mocap) { if (state == 0) { lite = mocap; state = 1; LOG(mocap ? "mocap: armed (540 frames)" : "cbcap: armed (3 frames)"); ShowToast(mocap ? "Motion capture: 6 s" : "GPU capture: 3 frames"); } }
+void Arm(bool mocap) { if (state == 0) { lite = mocap; state = 1; LOG(mocap ? "mocap: armed (540 frames)" : "cbcap: armed (6 frames)"); ShowToast(mocap ? "Motion capture: 6 s" : "GPU capture: 6 frames"); } }
 void Present(const char* iniDir) {   // render thread, each present
     if (state == 1) { EnterCriticalSection(&cs); out.clear(); frames = 0; for (auto& m : maps) m.b = nullptr; LeaveCriticalSection(&cs); state = 2; }
     if (state != 2) return;
     double t = NowMs(); uint32_t h[3] = { (uint32_t)frames, 0, 0 }; memcpy(&h[1], &t, 8);
     EnterCriticalSection(&cs); Put('F', h, 12); if (lite && mxValid) Put('X', mx, sizeof mx); mxValid = false; LeaveCriticalSection(&cs);
-    if (++frames <= (lite ? 540 : 3)) return;
+    if (++frames <= (lite ? 540 : 6)) return;
     state = 3;
     // vertex shaders used
     std::vector<void*> used; size_t i = 0;
@@ -3801,7 +3804,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v232 test 13 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Insert/PgDn DLSS A/B, local arm frame (Ctrl+F5), hand stabiliser (Ctrl+F6), vehicle view on the seat (Ctrl+F7), Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v232 test 14 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Insert/PgDn DLSS A/B, local arm frame (Ctrl+F5), hand stabiliser (Ctrl+F6), vehicle view on the seat (Ctrl+F7), Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
