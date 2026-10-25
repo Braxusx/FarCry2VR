@@ -1750,6 +1750,7 @@ static void Hotkeys(const XrPosef* head) {
     { static bool prevF4 = false; bool f4 = (GetAsyncKeyState(VK_F4) & 0x8000) != 0 && !(GetAsyncKeyState(VK_MENU) & 0x8000);   // v231: 3 s motion trace
       bool sh = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
       if (f4 && !prevF4 && sh) { g_motionTrace = 270; LOG("motion trace: 3 s started (Shift+F4)"); ShowToast("Recording motion (3 s)"); }
+      if (f4 && !prevF4 && !sh) { bool on = !arms::RigidArmTest(); arms::SetRigidArmTest(on); ShowToast(on ? "Arm test: arms rigid on the hands" : "Arm test: off (normal arms)"); }
 
       prevF4 = f4; }
     { static bool prevF10 = false; bool f10 = (DevKey(VK_F10) & 0x8000) != 0; if (f10 && !prevF10) g_traceLeft = 4; prevF10 = f10; }
@@ -3535,7 +3536,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v231 = 1.0.2 incl. contribution input-authority-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v232 test 1 = 1.0.2 + rigid-arm jitter A/B on F4, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

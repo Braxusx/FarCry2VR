@@ -58,6 +58,7 @@ static CRITICAL_SECTION g_cs; static bool g_csInit = false;
 static Frame g_frame;                               // latest from the render thread
 static FrameUsage g_frameUsage;
 static volatile uint8_t* g_playerSkel = nullptr;    // player's skeleton object (bone array +0x20, count +0x2C)
+static volatile bool g_rigidTest = false; static volatile long g_rigidGen = 0;   // v232 F4 A/B
 static float g_dgW[3], g_dgHand[3], g_dgTarget[3]; static long g_dgSeq = 0; static float g_dgForeStep = 0; static float g_dgBend[2] = {}; static float g_dgModel[512][16]; static bool g_dgWritten[512]; static int g_dgN = 0; static uint8_t* g_dgSkel = nullptr; static float g_dgArmPos[10], g_dgArmRot[10];   // v231 jitter diagnostic
 static volatile uint8_t* g_playerGfx = nullptr;     // its graphic component (world matrix at +0x170)
 static int g_slot[21];                              // bone-helper slot -> bone index (Camera 0, R Hand 12, R Clavicle 15, L Clavicle 19)
@@ -1366,6 +1367,22 @@ static void Apply(uint8_t* skel) {
             else { M4 b; memcpy(b.m, bones[i].model, 64); b.m[0][3] = b.m[1][3] = b.m[2][3] = 0; b.m[3][3] = 1; prevW[i] = Mul(b, W); }
         }
         pn = n; prevAH = Banim[rh];
+    }
+    // v232 jitter A/B test (F4): each arm chain held rigid on its hand (shoulder end detached from the body). If the
+    // forearms still twitch like this, the cause is after the skeleton (skinning / rendering); if they go steady, it is
+    // the shoulder end of the arm (body / animation / timing relative to the view).
+    if (g_rigidTest) {
+        static M4 rel[512]; static bool have = false; static int hn = 0; static long gen = -1;
+        int hands[2] = { g_slot[20], g_slot[12] }, roots[2] = { g_slot[19], g_slot[15] };
+        auto sideOf = [&](int i) { if (g_follow[i] >= 0) i = g_follow[i];
+            for (int q = i, g = 0; q >= 0 && q < n && g < 64; q = bones[q].parent, ++g) { if (q == roots[0]) return 0; if (q == roots[1]) return 1; } return -1; };
+        if (!have || hn != n || gen != g_rigidGen) {
+            for (int i = 0; i < n && i < 512; ++i) { if (!g_armMask[i] && g_follow[i] < 0) continue; int sd = sideOf(i); if (sd < 0 || hands[sd] < 0) continue;
+                M4 ih; if (Inv(Bw[hands[sd]], ih)) rel[i] = Mul(Bw[i], ih); }
+            have = true; hn = n; gen = g_rigidGen; LOG("arms: rigid-arm test on (arm chains held on the hands)");
+        }
+        for (int i = 0; i < n && i < 512; ++i) { if (!g_armMask[i] && g_follow[i] < 0) continue; int sd = sideOf(i); if (sd < 0 || hands[sd] < 0 || i == hands[sd]) continue;
+            Bw[i] = Mul(rel[i], Bw[hands[sd]]); }
     }
     // write back (model space)
     for (int i = 0; i < n && i < 512; ++i) {
@@ -3327,6 +3344,8 @@ bool DiagLiveHand(float out[3]) {   // v231: the right hand bone as it is in the
 float DiagForeStep() { return g_dgForeStep; }
 void DiagArm(float pos[10], float rot[10]) { memcpy(pos, g_dgArmPos, 40); memcpy(rot, g_dgArmRot, 40); }
 static bool g_armStab = true; static float g_stabKeep[5];
+bool RigidArmTest() { return g_rigidTest; }
+void SetRigidArmTest(bool on) { if (on && !g_rigidTest) InterlockedIncrement(&g_rigidGen); g_rigidTest = on; LOG("arms: rigid-arm test %s", on ? "ON" : "off"); }
 bool ArmStability() { return g_armStab; }
 void SetArmStability(bool on) {
     if (on == g_armStab) return;
