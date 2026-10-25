@@ -66,7 +66,7 @@ static volatile uint8_t* g_playerGfx = nullptr;     // its graphic component (wo
 static int g_slot[21];                              // bone-helper slot -> bone index (Camera 0, R Hand 12, R Clavicle 15, L Clavicle 19)
 struct PhoneDiag { volatile LONG calls, player, applied, noFrame, noHand, camUpd; void* other[4]; int otherN[4]; LONG otherCalls[4]; };
 static PhoneDiag g_pd = {};
-static float g_camBoneRot[3][3]; static float g_camBonePos[3]; static volatile LONG g_camBoneSeq = 0;
+static float g_camBoneRot[3][3]; static float g_camBonePos[3]; static float g_rootW[16]; static volatile LONG g_camBoneSeq = 0;
 static float g_perm[3][3] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }; static bool g_permOk = false;   // camera-bone axes -> game camera rows
 static bool g_dumped = false;
 static uint8_t g_armMask[512]; static int g_maskCount = -1; static uint8_t* g_maskSkel = nullptr;
@@ -729,6 +729,7 @@ static void Apply(uint8_t* skel) {
     {
         Lock();
         for (int i = 0; i < 3; ++i) { for (int k = 0; k < 3; ++k) g_camBoneRot[i][k] = camW.m[i][k]; g_camBonePos[i] = camW.m[3][i]; }
+        memcpy(g_rootW, W.m, 64);
         Unlock();
         InterlockedIncrement(&g_camBoneSeq);
     }
@@ -3447,6 +3448,7 @@ bool DiagArmLive(int* differ, int* worstBone, float* worstMm) {
 long CamBoneSeq() { return g_camBoneSeq; }
 bool BodyClock() { return g_c.bodyClock != 0; }
 void SetBodyClock(bool on) { g_c.bodyClock = on ? 1 : 0; }
+bool CamBoneRoot(float cam[3], float W[16]) { if (!g_csInit || g_camBoneSeq == 0) return false; Lock(); memcpy(cam, g_camBonePos, 12); memcpy(W, g_rootW, 64); Unlock(); return true; }
 bool CamBonePos(float out[3]) { if (!g_csInit || g_camBoneSeq == 0) return false; Lock(); memcpy(out, g_camBonePos, 12); Unlock(); return true; }
 void Stats(LONG& applied, LONG& shots) { applied = InterlockedExchange(&g_applied, 0); shots = g_shots; }
 
