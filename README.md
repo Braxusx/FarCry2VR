@@ -4,7 +4,7 @@ A native stereo VR mod for **Far Cry 2** (Dunia engine) with full motion control
 
 The game renders each eye itself through its own engine, with the headset's per-eye projection, so the image has correct depth and scale. It is not a 3D re-projection. Output goes through **OpenXR**. Development and testing used a Meta Quest 3 through Virtual Desktop (VDXR), but any OpenXR runtime should work.
 
-**Version 1.0.3**, mod build v233. Supports the **Steam** and **GOG** versions with the same DLL.
+**Version 1.0.3.1**, mod build v233. Supports the **Steam** and **GOG** versions with the same DLL.
 
 ## Features
 
@@ -78,8 +78,8 @@ Then send the launcher's **Collect logs** zip: it now includes the frame pacing,
 
 ## Install
 
-1. Download `FarCry2VR-1.0.3.zip` from the [Releases](../../releases) page and unzip it.
-2. Run `FarCry2VR-Launcher_1.0.3.exe`, pick your Far Cry 2 folder (Steam or GOG), and press **Install**.
+1. Download `FarCry2VR-1.0.3.1.zip` from the [Releases](../../releases) page and unzip it.
+2. Run `FarCry2VR-Launcher_1.0.3.1.exe`, pick your Far Cry 2 folder (Steam or GOG), and press **Install**.
 3. Make sure the game is set to **DirectX 10** (see above).
 4. Start your OpenXR runtime (for example Virtual Desktop), then start the game from the launcher.
 

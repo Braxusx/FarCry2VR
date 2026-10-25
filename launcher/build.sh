@@ -19,7 +19,7 @@ for f in imgui_impl_win32 imgui_impl_dx11; do
 done
 $CXX -std=c++17 -O2 -Wall -Wno-unused-function -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -DNOMINMAX -I $IM -I $IM/backends -I src \
   src/app.cpp src/bindings.cpp src/game.cpp src/theme.cpp src/zip.cpp src/sysreport.cpp build/obj/LzmaDec.o build/obj/imgui*.o build/obj/launcher.res \
-  -mwindows -municode -static -static-libgcc -static-libstdc++ \
+  -s -mwindows -municode -static -static-libgcc -static-libstdc++ \
   -ld3d11 -ldxgi -ld3dcompiler -ldwmapi -lshcore -lole32 -loleaut32 -luuid -lshell32 -ladvapi32 -lgdi32 -luser32 -lpowrprof -lversion \
   -o build/FarCry2VR-Launcher.exe
 ls -la build/FarCry2VR-Launcher.exe
