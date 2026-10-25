@@ -3323,14 +3323,18 @@ static void HookExport(const char* mod, const char* fn, void* hook, void** orig)
 
 // ============================================================ install / proxy
 static bool g_installed = false;
+static bool g_startupApproved=false;
 static void Install() {
+    if(!g_startupApproved) { LOG("image-gate-1: startup was not approved; native install remains disabled"); return; }
     if (g_installed) return;
     g_installed = true;
     HMODULE dunia = GetModuleHandleA("Dunia.dll");
     if (!dunia) { LOG("Dunia.dll not loaded"); g_installed = false; return; }
     g_base = (uintptr_t)dunia;
     LOG("Dunia.dll base %08x", (unsigned)g_base);
-    if (gameaddr::Detect() == gameaddr::GOG) LOG("GOG build: engine addresses translated from the Steam map");
+    const int build=gameaddr::Detect();
+    if(build==gameaddr::Unknown) { g_base=0; LOG("image-gate-1: unsupported/unmeasured Dunia; native hooks disabled, dinput8 remains a passthrough"); return; }
+    if (build == gameaddr::GOG) LOG("GOG build: engine addresses translated from the Steam map");
     if (!g_cfg.enable) { LOG("disabled by config"); return; }
     bool ok1 = PatchJmp(A(eng::RenderViewport), eng::RenderViewportPrologue, (void*)&Hook_RenderViewport, (void**)&o_RenderViewport);
     bool ok2 = PatchJmp(A(eng::PresentWrapper), eng::PresentPrologue, (void*)&Hook_Present, (void**)&o_Present);
@@ -3417,8 +3421,15 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (contribution arm-rig-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (contribution owner-gate-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
+        { LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_qpcToMs=1000.0/(double)f.QuadPart; }
+        LoadConfig(); g_cullMode=g_cfg.cullMode; g_fovMode=g_cfg.symmetricFov?((g_cfg.overscanH>0 || g_cfg.overscanV>0)?2:1):0;
+        if(gameaddr::Detect()==gameaddr::Unknown) {
+            LOG("image-gate-1: proxy-only startup; no affinity/DPI changes, exception/OS hooks, watchdog or engine hooks on this image");
+            return TRUE;
+        }
+        g_startupApproved=true;
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
             char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir);
@@ -3431,9 +3442,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
                 else LOG("core limit: %d logical processors in use (limit %d)", all, lim);
             }
         }
-        { LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_qpcToMs = 1000.0 / (double)f.QuadPart; }
         { char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); diag::Startup(ip); }   // v230
-        LoadConfig(); g_cullMode = g_cfg.cullMode; g_fovMode = g_cfg.symmetricFov ? ((g_cfg.overscanH > 0 || g_cfg.overscanV > 0) ? 2 : 1) : 0;
         LOG("tracking frame height-direction-1: HeightOffset=%.4f (positions only; directions untranslated)", g_cfg.heightOffset);
         // Windows display scaling makes this DPI-unaware game see a small virtual desktop. Its 1920x1080 window
         // then cannot fit, the size check fails every frame and fires the window-resized event each frame, which

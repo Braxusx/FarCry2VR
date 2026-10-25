@@ -3123,6 +3123,7 @@ static void __fastcall Hook_EnvLight(void* env, void* edx, float t, uint8_t* out
 }
 // ---------------------------------------------------------------- install
 void Install(uintptr_t base, const Config& c, PatchFn patch) {
+    if(gameaddr::Detect()==gameaddr::Unknown) { LOG("arms: image-gate-1 refused unsupported image"); return; }
     g_base = base; g_c = c;
     LOG("arms: arm-rig-1 enabled=%d namedRequired=1 wristLimit=%.1f defaultOff=1",c.rigFix,c.wristTwistLimit);
     if (!g_csInit) { InitializeCriticalSection(&g_cs); g_csInit = true; }

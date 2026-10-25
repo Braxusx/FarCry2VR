@@ -463,6 +463,7 @@ static DWORD WINAPI Hook_SetState(DWORD idx, XINPUT_VIBRATION* v) {
 }
 
 void Install(HMODULE dunia, const Config& c) {
+    if(gameaddr::Detect()==gameaddr::Unknown) { LOG("controls: image-gate-1 refused unsupported image"); return; }
     g_c = c; g_base = (uintptr_t)dunia;
     if (!c.enable) { LOG("controls: motion controls off"); return; }
     bool a = PatchIat(dunia, "XINPUT1_3.dll", 2, (void*)&Hook_GetState, (void**)&o_GetState);
