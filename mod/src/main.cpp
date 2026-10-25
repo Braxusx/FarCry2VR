@@ -417,8 +417,9 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
     fc2vr::tracking::SteadyInput input;
     input.nowMs = NowMs();
     float pos[3]{}, heading = 0;
+    const bool havePlayer = arms::PlayerState(pos, &heading);   // v232: always read (the ride check needs it in every mode)
     input.eligible = stabilize && g_cfg.steadyCam && controls::NormalControls() && controls::VehicleMode() == 0
-        && !controls::MountedWeapon() && arms::PlayerState(pos, &heading);
+        && !controls::MountedWeapon() && havePlayer;
     input.playerPosition = {pos[0],pos[1],pos[2]};
     input.turning = fabsf(xr::Hand(1).stick.x) > 0.15f;
     {   // v232: riding (the intro taxi, a bus, any vehicle the controls don't report): the player moves without the stick.
@@ -429,6 +430,7 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
         float dx = pos[0] - lp[0], dy = pos[1] - lp[1]; lp[0] = pos[0]; lp[1] = pos[1]; lp[2] = pos[2];
         float spd = dt > 0.0005f && dt < 0.1f ? sqrtf(dx * dx + dy * dy) / dt : 0;
         const xr::HandState& L = xr::Hand(0); bool stick = fabsf(L.stick.x) > 0.2f || fabsf(L.stick.y) > 0.2f;
+        if (!havePlayer) spd = 0;
         if (!stick && spd > 2.5f && spd < 60.0f) still += dt * 1000.0; else if (stick || spd < 1.0f) still = 0;
         bool r = still > 400.0;
         if (r != riding) { riding = r; LOG("steady camera: %s", r ? "riding (off)" : "on foot"); }
@@ -3799,7 +3801,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v232 test 12 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Insert/PgDn DLSS A/B, local arm frame (Ctrl+F5), hand stabiliser (Ctrl+F6), vehicle view on the seat (Ctrl+F7), Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v232 test 13 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Insert/PgDn DLSS A/B, local arm frame (Ctrl+F5), hand stabiliser (Ctrl+F6), vehicle view on the seat (Ctrl+F7), Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
