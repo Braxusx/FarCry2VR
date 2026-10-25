@@ -6,7 +6,7 @@ Local source and GitHub main matched when this plan was written. Rebase the plan
 source locations against newer work before implementation. The plan is checkpointed
 on `codex/tracking-arms-physical-steering`. R5's position/direction boundary and
 R1's shared effective camera frame, the first R4 safety slice and the R2/R3/R8
-motion-pose mechanisms are now built and desk-tested (latest: 2026-10-25).
+motion-pose mechanisms are now built and desk-tested (latest: 2026-10-26).
 An experimental named/staged wrist-and-elbow path is also built and desk-tested;
 `ArmRigFix=0` remains default pending native/visual acceptance.
 Runtime acceptance has not started. See [contribution status](CONTRIBUTION_STATUS.md).
@@ -38,7 +38,7 @@ Runtime acceptance has not started. See [contribution status](CONTRIBUTION_STATU
   a separate elbow-cap hinge-frame policy. This opt-in path stages 25 records per
   arm, rejects unsupported maps and is not native-procedural or visual acceptance.
   See [arm-rig checkpoint](ARM_RIG_2026-10-25.md).
-- Thirty-nine CTest groups pass with MSVC x86: 81,977 numeric checks plus four
+- Forty-eight CTest groups pass with MSVC x86: 83,935 numeric checks plus five
   source-wiring guards. Numeric groups have passed MinGW GCC x86 as well. A frozen
   original SteadyCam oracle verifies extraction; bob/yaw/bone negative controls
   exercise the old split. Rebuilt expiry/rearm and twist/socket/spread mutants
@@ -47,13 +47,22 @@ Runtime acceptance has not started. See [contribution status](CONTRIBUTION_STATU
   exports checked, no added warnings. The documented llvm-mingw toolchain is not
   installed, so that build route remains unverified. Nothing deployed or packaged.
 - This is a partial PR 0 / PR 1 foundation and first PR 2 slice, not completion of
-  any of those PRs. R1 runtime scheduling/latency and HMD acceptance, unknown-image
-  refusal and full native session/pawn/model/palette/cache ownership remain open.
+  any of those PRs. R1 runtime scheduling/latency and HMD acceptance and full
+  native session/pawn/model/palette/cache ownership remain open.
   If hierarchy hooks apply the previous sample before viewport publication, resolve
   the clock with a proved presentation seam; do not mask it with bone-origin drift.
   R2/R3/R8 runtime and visual acceptance, R6/R7 native/weighted-mesh acceptance and R10 saved-hold
-  provenance remain open. No manual-reload, physical-steering or DQS feature is
-  claimed. The October 25 changes remain local; published branch ends at `5fdfaa4`.
+  provenance remain open. The October 26 owner-gate-1 checkpoint supersedes the
+  original R9 gap: exact-image refusal is implemented for verified Steam;
+  GOG needs an exact image/table binding. Observation now precedes model discovery,
+  and expiring full-cohort snapshots fence pose/weapon presentation. Pointer-only
+  hold/rest caches and retained reload-state completion reads were removed.
+  All 48 CTest groups pass (83,935 numeric assertions plus five source guards),
+  with a full x86 DLL and rebuilt negative controls. This still does not prove
+  native lifetime/jobs, saved-hold provenance or reload acknowledgement; see
+  [owner/image checkpoint](OWNER_GATE_2026-10-26.md).
+  No manual-reload, physical-steering or DQS feature is
+  claimed. The October 25–26 changes remain local; published branch ends at `5fdfaa4`.
 
 ## Contribution branch and upstream review
 

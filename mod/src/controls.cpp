@@ -3,6 +3,7 @@
 // (ordinal 3). Both imports are redirected here: while VR controllers are active, pad 0 is synthesised from them,
 // so the game's gamepad bindings, hints and menus all work unchanged.
 #include "controls.h"
+#include "arms.h"
 #include "xr.h"
 #include "log.h"
 #include "gameaddr.h"
@@ -191,6 +192,8 @@ void SetWatchActive() { g_watchTick = GetTickCount(); }
 bool WatchActive() { return GetTickCount() - g_watchTick < 250; }
 void SetMenuMode(bool on) { g_menuMode = on; }
 struct MappingHistory {
+    std::uint64_t fireEpoch=0;
+    fc2vr::authority::RearmGate fireGate;
     ULONGLONG recenterAt = 0, gadgetAt = 0, mapPress = 0, notMapSince = 0;
     bool recenterFired = false, driverMap = false, gadgetHeld = false, gadgetDelayed = false, mapPrev = false;
     int lastMap = -1, turnDir = 0, snapDir = 0;
@@ -224,7 +227,10 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
       else downAt = 0; }
     WORD b = 0;
     UpdateVehicleMode();
-    const bool poseFire = g_vehMode != 0 || g_mounted || g_menuMap || (R.gripValid && R.aimValid);
+    const auto owner=arms::CurrentOwner();
+    if(g_history.fireEpoch!=owner.epoch) { g_history.fireEpoch=owner.epoch; g_history.fireGate.Clear(); }
+    const bool fireReady=g_history.fireGate.Update(owner.valid,R.trigger<=0.15f);
+    const bool poseFire = g_vehMode != 0 || g_mounted || g_menuMap || (R.gripValid && R.aimValid && fireReady);
     g_rtValue = poseFire ? R.trigger : 0;
     if (g_vehMode == 1 && !g_menuMode) {   // driver seat (VEHICLE_CONTROLS): the game's pad driving map, Config\InputActionMap.xml
         // steering = right stick left/right (or the left stick), RT gas, LT brake/reverse, left grip handbrake (pad B),
@@ -450,6 +456,11 @@ static DWORD WINAPI Hook_GetState(DWORD idx, XINPUT_STATE* st) {
     if (g_inputCursor.Take(stamp)) {
         XINPUT_GAMEPAD g; Build(g,h,head,headValid);
         if (memcmp(&g,&g_last,sizeof g) != 0) { g_last = g; ++g_packet; }
+    }
+    // An owner can expire between XR samples; cached pad state must release too.
+    if(g_vehMode==0 && !g_mounted && !g_menuMap && !arms::CurrentOwner().valid) {
+        if(g_last.bRightTrigger) { g_last.bRightTrigger=0; ++g_packet; }
+        g_rtValue=0; g_history.fireGate.Clear();
     }
     st->dwPacketNumber = g_packet; st->Gamepad = g_last;
     return ERROR_SUCCESS;

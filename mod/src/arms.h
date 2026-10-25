@@ -5,6 +5,7 @@
 #include <cstddef>
 #include "common/pose_frame.h"
 #include "common/pose_authority.h"
+#include "common/owner_lease.h"
 
 namespace arms {
 struct Config {
@@ -99,6 +100,7 @@ struct Frame {
     bool handAuthority = false, leftAuthority = false, headAuthority = false;
     fc2vr::authority::Stamp source{};
     void* weapon = nullptr;   // instance identity, not a model/cache generation lease
+    fc2vr::owner::Snapshot owner{};
     fc2vr::tracking::GameBasis game{};
     uint64_t frameSequence = 0;   // diagnostic application-frame stamp, not a freshness lease
     float camRows[3][3];          // RAW native camera rows (incl. pitch): bone-axis calibration only
@@ -136,7 +138,7 @@ int GetThrowArc(float (*pts)[3], int maxPts, bool& land, float normal[3], bool& 
 // where the left hand grips the weapon (ref frame); oneHanded = pistol-style weapon
 bool Foregrip(const Frame& f,float out[3],bool& oneHanded,uint64_t& token); // current ref placement of an owner-bound socket
 float LastHandSpan();
-struct RayContext { fc2vr::authority::Stamp source{}; void* weapon = nullptr; };
+struct RayContext { fc2vr::authority::Stamp source{}; void* weapon = nullptr; fc2vr::owner::Snapshot owner{}; };
 void SetScopeRay(const float o[3],const float d[3],const RayContext& context,const float right[3],const float up[3]); // world; original source age/owner and actual rendered scope basis
 void SetUseCallback(void (*cb)());
 void SetMachete(float angle, float yaw, float roll);
@@ -148,6 +150,7 @@ void GetFreeHands(float& angle, float& yaw, float& roll);
 void SetPhoneHands(float angle, float yaw, float roll);
 void GetPhoneHands(float& angle, float& yaw, float& roll);
 void* CurrentWeapon();   // the player's current weapon object (identity only)                     // called (game thread) when a hand uses the interaction target
+fc2vr::owner::Snapshot CurrentOwner(); // atomic observed pawn/rig/weapon/model cohort, independent of HandGrab
 // the weapon's sight line (ref frame: origin, unit direction); false if not updated recently
 bool SightRay(float o[3], float d[3], RayContext* context = nullptr);
 float AimDistance();

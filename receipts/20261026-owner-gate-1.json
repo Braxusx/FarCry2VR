@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "project": "FarCry2VR-Braxusx",
+  "run_id": "20261026-owner-gate-1",
+  "recorded_at": "2026-10-25T21:59:51.5006357Z",
+  "target": {
+    "name": "Braxusx/FarCry2VR contribution baseline; updated source identified by artifact hashes",
+    "identity_kind": "git_commit",
+    "identity": "8f0d63b501c3320098159273572f3ca82f90d42d"
+  },
+  "question": "Can the source mix the previous weapon model with the next weapon, and which bounded offline checks prevent reuse across an observed cohort change or unknown image?",
+  "claim": "Baseline source queries the previous weapon's model before observing the current weapon, inside HandGrab's gate. The local changes observe in producer order, independently of interactions, and fence selected pose products with an expiring observed cohort. Native integration now refuses unmeasured or nonmatching images rather than defaulting to Steam. These are source mechanisms and offline regression results, not native lifetime or headset acceptance.",
+  "evidence_grade": "SOURCE",
+  "environment": "source",
+  "method": "Inspected git show 8f0d63b501c3320098159273572f3ca82f90d42d:mod/src/arms.cpp HandInteract and current producer/consumer adapters. CMake 48-group MSVC Win32 Release suite (83,935 assertions and five wiring guards), GCC 16.2.0 x86 / -Wall -Wextra -Werror for the eight new groups, five isolated rebuilt mutants, and a complete x86 DLL build with no new warnings. Production InspectFile read the installed Steam Dunia file without loading it and matched PowerShell SHA-256. Commands, exact image/build hash and limits are in the checkpoint. Initialized the fleet receipt template under ignored build, then used donor identity for standalone validation; no fleet submission because this checkout is unregistered and the user requested local-only work.",
+  "validity": "VALID",
+  "mutation": "persistent",
+  "gates": {
+    "identity": {
+      "status": "PASS",
+      "reason": "Full baseline commit and current production/test artifact hashes identify the inspected donor source; exact enabled Steam image and output DLL hashes are recorded in the checkpoint."
+    },
+    "instrument": {
+      "status": "PASS",
+      "reason": "Compiler/test success, 48 nonempty groups, production file-measurement positive control and assertion-failing mutants were inspected. Validators and compilation were not game execution."
+    },
+    "control": {
+      "status": "PASS",
+      "reason": "Continuous same-owner and complete-palette controls pass; removed epoch/heartbeat/coverage/digest/refusal protections each cause the intended assertion failures."
+    },
+    "scene": {
+      "status": "NA",
+      "reason": "Source/offline task only; no game scene, process attachment or headset use authorized or required."
+    },
+    "restore": {
+      "status": "NA",
+      "reason": "Persistent contribution-branch source changes; broken variants remained isolated in ignored build and were never injected, deployed or linked into the production DLL."
+    }
+  },
+  "fact_verdict": "CONFIRM",
+  "baseline": {
+    "verdict": "PASS",
+    "reason": "The changed source passes all 48 offline groups and the complete x86 DLL build. This is an offline regression baseline only; runtime and headset baseline health were not measured."
+  },
+  "limits": "Observed metadata is not a native object reference, worker lease or allocator ABA proof. Existing native calls/offsets were reordered, not newly ABI-proved. No GOG exact image/table binding, native reload ticket/weapon acknowledgement, definitive saved-hold asset identity, NPC target/driver or monocular visibility lifetime proof, or runtime acceptance. Full-file identity does not establish in-memory integrity. ArmRigFix remains default-off; no manual reload, physical steering or DQS was added.",
+  "artifacts": [
+    {
+      "path": "docs/OWNER_GATE_2026-10-26.md",
+      "sha256": "9a62fa81fc9fa6f5566410b166196669523c759c509f4a389effd9564b1eb0ba",
+      "role": "Inspected source finding, changes, exact image/DLL identity, reproduction and acceptance limits"
+    },
+    {
+      "path": "docs/evidence/owner-gate-1/ctest.log",
+      "sha256": "fb1c813afc3fa87bafd8e1b3ddd11428a590995578104da9912732c0cf899d96",
+      "role": "Full 48-group production harness and source-guard output"
+    },
+    {
+      "path": "docs/evidence/owner-gate-1/image-file-steam.log",
+      "sha256": "d834ad4d7182fda7c3fb5d007203b52cfe9055dbc5b1a9a55c467c0c2e9f082f",
+      "role": "Read-only production InspectFile positive control on actual installed file"
+    },
+    {
+      "path": "docs/evidence/owner-gate-1/owner_epoch.log",
+      "sha256": "6ce137ed85805f8631a09920cb20a078e84de3be14b72d6724d1bb45d69d30de",
+      "role": "Expected failure after omitting epoch matching"
+    },
+    {
+      "path": "docs/evidence/owner-gate-1/owner_time.log",
+      "sha256": "d0ec96d59faceb40421914e823d32aada5be152adc371a0765ab488c1fc2cc34",
+      "role": "Expected failure after removing owner expiry"
+    },
+    {
+      "path": "docs/evidence/owner-gate-1/owner_map.log",
+      "sha256": "36413d22bafddc72d6d7f4075e5c13a56d2ec6abd309c93cf2c426dce25b6983",
+      "role": "Expected failure after allowing partial frozen palette coverage"
+    },
+    {
+      "path": "docs/evidence/owner-gate-1/image_profile.log",
+      "sha256": "0015216315639dad4707c79e5f834340dd8fc53aed550592274bdaacf1562bdf",
+      "role": "Expected failure after ignoring image digest"
+    },
+    {
+      "path": "docs/evidence/owner-gate-1/image_translate.log",
+      "sha256": "2cd4e288beea1483f4ba752d0dde130269f76e89da5b4ce93e2c8bccb2e2ab88",
+      "role": "Expected failure after allowing unknown images to use Steam addresses"
+    },
+    {
+      "path": "mod/src/common/owner_lease.h",
+      "sha256": "4fe31f988232ec3c20ec46fec5425660d39a231ebda677ed845f18dcd00aa23a",
+      "role": "Portable observed owner identity, heartbeat and complete map checks"
+    },
+    {
+      "path": "mod/src/common/image_identity.h",
+      "sha256": "b3a1815730018e77e2bb3dd188ca60d108d64cbfcc155b332aff9dfe9afb7bd3",
+      "role": "Exact profile, PE bounds, SHA-256 and translation mechanism"
+    },
+    {
+      "path": "mod/src/gameaddr.cpp",
+      "sha256": "af2ca0599db828162f881851dcdb028ef54ed9213c04ce25f21776aa96308728",
+      "role": "Production file measurement and mapped/file image gate"
+    },
+    {
+      "path": "mod/src/arms.cpp",
+      "sha256": "e94a896b266f3469f3d3b78dd4c71d14679b29e719b22742dd4e26ab109a1e50",
+      "role": "Native producer order and selected pose/weapon consumers"
+    },
+    {
+      "path": "mod/src/controls.cpp",
+      "sha256": "840b7904ba7e4a8b7303fc2f2ce12c8da30d5967a910ce70dddc1c934bc73cfc",
+      "role": "Owner-aware pose fire and cached trigger expiry"
+    },
+    {
+      "path": "mod/src/main.cpp",
+      "sha256": "9de04bef21b05f6f1157d733b71af9849bffb8fceaf25d7f73014395f2b28376",
+      "role": "Proxy-only refusal and shared owner snapshots"
+    },
+    {
+      "path": "mod/tests/test_owner_lease.cpp",
+      "sha256": "201fe38035f48efc1839a74bd0ec9ab40ce28615c99721e7622faf222e48938e",
+      "role": "473 bounded owner assertions"
+    },
+    {
+      "path": "mod/tests/test_image_identity.cpp",
+      "sha256": "45dc70f24ad557c6793d9f452e2f7f10fc1ccc29838b4e5a103ae5e374be9ea4",
+      "role": "1,485 exact-image assertions"
+    },
+    {
+      "path": "mod/tests/check_owner_wiring.cmake",
+      "sha256": "2acce9bec45804391e2d17ea0d33e550007467cfba4d2eafb00d84ca7b90d5f1",
+      "role": "Source-only production adapter/order guards"
+    }
+  ],
+  "routes": [],
+  "do_not_repeat": [
+    {
+      "approach": "Treat timestamp/size or a weapon pointer alone as a native access/pose lease",
+      "reason": "Same-header image variants and same-pointer model/palette or A-B-A changes defeat those shortcuts in the inspected code and controls.",
+      "reopen_when": "An exact image-to-profile binding or target-proved lifetime/generation mechanism supersedes the observed-cohort gate."
+    }
+  ],
+  "next_action": "Keep local. Verify the exact GOG image/table binding statically, then separately authorize and accept startup proxy refusal, owner transitions, draw/reload/throw and native palette scheduling. Confirm headset wrists/elbows with the opt-in rig only after native ownership acceptance; do not clear native lifetime or manual reload milestones from these harness results. Fleet intake requires registration/review and is deferred."
+}

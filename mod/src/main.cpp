@@ -2284,7 +2284,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
         af.handAuthority = inputCurrent && physical[1].gripValid && physical[1].aimValid;
         af.leftAuthority = inputCurrent && physical[0].gripValid && physical[0].aimValid;
         af.headAuthority = inputCurrent && inputHeadValid;
-        af.weapon = arms::CurrentWeapon();
+        af.owner=arms::CurrentOwner(); af.weapon=(void*)af.owner.key.weapon;
         af.valid = true; af.handValid = rh.aimValid && rh.gripValid;
         auto put = [](float* d, V3 v) { d[0] = v.x; d[1] = v.y; d[2] = v.z; };
         af.game = frame.game; af.frameSequence = frame.sequence;
@@ -2509,7 +2509,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     const bool monoScope = poseReady && g_scopeOn && controls::MonocularAtFace();
     const bool weaponScope = poseReady && g_scopeOn && !monoScope && g_cfg.scopeFromWeapon
         && controls::Active() && arms::SightRay(scopeO, scopeD, &scopeContext);
-    if (monoScope) scopeContext = {xr::CurrentInputStamp(),arms::CurrentWeapon()};
+    if (monoScope) { const auto owner=arms::CurrentOwner(); scopeContext={xr::CurrentInputStamp(),(void*)owner.key.weapon,owner}; }
     const bool renderScope = monoScope || weaponScope;
     const bool renderStereo = poseReady && !g_scopeOn && fv.shouldRender && g_stereoOn && sizeOk;
     // A native flat fallback still uses its native camera: keep its hands raw too.
@@ -2550,6 +2550,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             static V3 sm{ 0, 0, 0 }; static double tPrev = 0;
             static arms::RayContext previousScope;
             const bool scopeReset = previousScope.weapon != scopeContext.weapon
+                || !fc2vr::owner::Matches(previousScope.owner,scopeContext.owner)
                 || !fc2vr::authority::SameContext(previousScope.source,scopeContext.source,0)
                 || !fc2vr::authority::SameContext(previousScope.source,scopeContext.source,1);
             previousScope = scopeContext;

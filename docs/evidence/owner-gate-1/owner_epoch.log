@@ -1,0 +1,13 @@
+epochs: 33 checks, 12 failures
+FAIL: A to B to A does not revive old lease
+FAIL: A to B to A does not revive old lease
+FAIL: A to B to A does not revive old lease
+FAIL: A to B to A does not revive old lease
+FAIL: A to B to A does not revive old lease
+FAIL: A to B to A does not revive old lease
+FAIL: A to B to A does not revive old lease
+FAIL: A to B to A does not revive old lease
+FAIL: A to B to A does not revive old lease
+FAIL: A to B to A does not revive old lease
+FAIL: A to B to A does not revive old lease
+FAIL: return after missing owner gets new epoch

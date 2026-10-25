@@ -1,9 +1,30 @@
 # Contributor status — tracking frame fixes
 
-Date: 2026-10-25. Branch: `codex/tracking-arms-physical-steering`.
+Date: 2026-10-26. Branch: `codex/tracking-arms-physical-steering`.
 Base: `92a29c5b1e28a652d067262aacc59b421ed044c1` (upstream 1.0.1).
 
-## Latest checkpoint: arm-rig-1 (local only, deformation default-off)
+## Latest checkpoint: owner-gate-1 (local only)
+
+R9 now refuses native initialization/addresses without an exact full-file identity
+and matching mapped PE headers (`1a5bc7a`). Only the measured Steam/Definitive
+image is enabled; GOG remains gated until its exact image/table binding is verified.
+The system DirectInput proxy continues forwarding on refusal.
+
+The next local slice moves current-weapon observation ahead of model discovery,
+independently of hand grabbing, and publishes an expiring observed owner cohort.
+Palms/aim/scope, support, reload/attachment presentation, pending throws and cached
+NPC drive reject owner changes. Pointer-only hold/rest caches were removed; pose
+fire releases/rearms across owner loss. This is not native lifetime/worker proof
+or authoritative reload acknowledgement; saved-hold provenance remains open.
+
+All 48 MSVC x86 CTest groups pass: 83,935 numeric assertions plus five wiring
+guards. The eight new image/owner groups pass GCC x86. Five rebuilt negative
+controls fail as expected. Full x86 DLL builds with no added warnings; development
+artifact, acceptance boundaries and rollback are in the
+[owner/image checkpoint](OWNER_GATE_2026-10-26.md). Nothing launched, deployed,
+packaged, pushed or submitted as a PR. `ArmRigFix=0` remains default.
+
+## Prior checkpoint: arm-rig-1 (local only, deformation default-off)
 
 Adds a named, staged 25-record-per-arm path for wrist-roll distribution and elbow
 alignment/correctives. It validates CRC names, topology and native helper anchors;

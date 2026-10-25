@@ -1,0 +1,4 @@
+FAIL: future, stale and invalid observation rejected
+FAIL: same pointer after producer gap cannot revive lease
+FAIL: backward clock starts a new cohort
+heartbeat: 10 checks, 3 failures
