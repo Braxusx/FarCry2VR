@@ -3,7 +3,26 @@
 Date: 2026-10-25. Branch: `codex/tracking-arms-physical-steering`.
 Base: `92a29c5b1e28a652d067262aacc59b421ed044c1` (upstream 1.0.1).
 
-## Latest checkpoint: motion-pose-1 (local only)
+## Latest checkpoint: arm-rig-1 (local only, deformation default-off)
+
+Adds a named, staged 25-record-per-arm path for wrist-roll distribution and elbow
+alignment/correctives. It validates CRC names, topology and native helper anchors;
+does not guess helper ownership by position; solves finite hinge/reach geometry;
+keeps pole history body-local; and preserves palm/weapon orientation while
+distributing axial roll by helper position. The cap follows an explicit hinge-frame
+policy rather than wrist roll. `ArmRigFix=0` remains the default; no live INI change.
+
+All 39 MSVC x86 CTest groups pass: 81,977 numeric checks plus four source-wiring
+guards. New groups also pass GCC x86; rebuilt broken controls fail. All nine audited
+avatar rigs map both arms and pass 36 offline staging cases. The full x86 GCC DLL
+builds without added warnings. The synthetic weighted-ring improvement is not an
+actual-mesh/headset result. See [arm-rig checkpoint](ARM_RIG_2026-10-25.md).
+
+Everything remains local. No runtime, deployment, packaging, push or PR. New
+deformation still needs native palette/worker and visual acceptance; saved-hold
+provenance, unknown-image refusal and steering remain open.
+
+## Prior checkpoint: motion-pose-1 (`c657d9f`, local only)
 
 R2 fractional twist now unwraps continuously once per physical source sample,
 with observed rig/owner/context resets and degenerate-measurement rejection.

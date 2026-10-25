@@ -7,6 +7,8 @@ source locations against newer work before implementation. The plan is checkpoin
 on `codex/tracking-arms-physical-steering`. R5's position/direction boundary and
 R1's shared effective camera frame, the first R4 safety slice and the R2/R3/R8
 motion-pose mechanisms are now built and desk-tested (latest: 2026-10-25).
+An experimental named/staged wrist-and-elbow path is also built and desk-tested;
+`ArmRigFix=0` remains default pending native/visual acceptance.
 Runtime acceptance has not started. See [contribution status](CONTRIBUTION_STATUS.md).
 
 ## Current checkpoint
@@ -31,7 +33,12 @@ Runtime acceptance has not started. See [contribution status](CONTRIBUTION_STATU
   held-through-token changes. R8 transports full native hitscan spread into the
   accepted weapon/rendered scope basis. These are mechanism fixes, not full PR 3/4
   or headset acceptance; see [motion pose checkpoint](MOTION_POSE_2026-10-25.md).
-- Twenty-nine CTest groups pass with MSVC x86: 62,986 numeric checks plus three
+- R6/R7 offline work now includes name/topology/anchor validation, body-frame
+  shoulders/pole history, robust hinges, position-weighted wrist-roll helpers and
+  a separate elbow-cap hinge-frame policy. This opt-in path stages 25 records per
+  arm, rejects unsupported maps and is not native-procedural or visual acceptance.
+  See [arm-rig checkpoint](ARM_RIG_2026-10-25.md).
+- Thirty-nine CTest groups pass with MSVC x86: 81,977 numeric checks plus four
   source-wiring guards. Numeric groups have passed MinGW GCC x86 as well. A frozen
   original SteadyCam oracle verifies extraction; bob/yaw/bone negative controls
   exercise the old split. Rebuilt expiry/rearm and twist/socket/spread mutants
@@ -44,7 +51,7 @@ Runtime acceptance has not started. See [contribution status](CONTRIBUTION_STATU
   refusal and full native session/pawn/model/palette/cache ownership remain open.
   If hierarchy hooks apply the previous sample before viewport publication, resolve
   the clock with a proved presentation seam; do not mask it with bone-origin drift.
-  R2/R3/R8 runtime and visual acceptance, R6/R7 rig/IK robustness and R10 saved-hold
+  R2/R3/R8 runtime and visual acceptance, R6/R7 native/weighted-mesh acceptance and R10 saved-hold
   provenance remain open. No manual-reload, physical-steering or DQS feature is
   claimed. The October 25 changes remain local; published branch ends at `5fdfaa4`.
 

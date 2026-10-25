@@ -14,6 +14,7 @@
 #include "controls.h"
 #include "common/arm_pose.h"
 #include "common/weapon_pose.h"
+#include "common/arm_rig.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -69,7 +70,7 @@ static PhoneDiag g_pd = {};
 static float g_camBoneRot[3][3]; static float g_camBonePos[3]; static volatile LONG g_camBoneSeq = 0;
 static float g_perm[3][3] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }; static bool g_permOk = false;   // camera-bone axes -> game camera rows
 static bool g_dumped = false;
-static uint8_t g_armMask[512]; static int g_maskCount = -1; static uint8_t* g_maskSkel = nullptr;
+static uint8_t g_armMask[512]; static int g_maskCount = -1; static uint8_t* g_maskSkel = nullptr; static void* g_maskBones=nullptr;
 static volatile LONG g_applied = 0, g_shots = 0;
 static float g_scopeO[3], g_scopeD[3]; static DWORD g_scopeTick = 0;
 static fc2vr::authority::Stamp g_scopeSource; static void* g_scopeWeapon = nullptr;
@@ -90,6 +91,8 @@ static float g_shotO[3], g_shotF[3], g_camRefO[3], g_camRefD[3]; static bool g_s
 static fc2vr::authority::Stamp g_shotSource; static void* g_shotWeapon = nullptr;
 static fc2vr::arm::TwistHistory g_twist[2]; // protected by g_cs; one update per source sample
 static uint64_t g_twistReport[2]{};
+static fc2vr::rig::State g_rigState[2];
+static unsigned g_rigCommits[2]{},g_rigRejects[2]{};
 
 struct Bone { uint32_t hash; uint8_t pad0[12]; float local[16]; float model[16]; int parent; uint8_t locked; uint8_t pad1[11]; };
 static_assert(sizeof(Bone) == 0xA0, "bone stride");
@@ -165,9 +168,10 @@ static void BuildMask(uint8_t* skel, Bone* bones, int n) {
             if (j == roots[0] || j == roots[1]) { g_armMask[i] = 1; break; }
     }
     if (g_slot[0] >= 0 && g_slot[0] < 512) g_armMask[g_slot[0]] = 0;   // never move the camera
-    g_maskCount = n; g_maskSkel = skel;
+    g_maskCount = n; g_maskSkel = skel; g_maskBones=bones;
     int c = 0; for (int i = 0; i < n && i < 512; ++i) c += g_armMask[i];
     LOG("arms: %d of %d bones belong to the arm chains", c, n);
+    if(g_c.rigFix) return; // named caps are staged separately; no proximity guesses in this mode
     // helper bones outside the arm chains that sit on an arm joint (e.g. elbow/sleeve deformers parented to the root)
     for (int i = 0; i < n && i < 512; ++i) {
         if (g_armMask[i] || i == g_slot[0]) continue;
@@ -199,18 +203,9 @@ static M4 RotMat(const float* ax, float ang) {
 }
 // bone frame `oldM` whose segment ran p0->p1 is turned (shortest arc) to run q0->q1, with its origin moved to q0
 static M4 AimSegment(const M4& oldM, const float* p0, const float* p1, const float* q0, const float* q1) {
-    float u[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] }, v[3] = { q1[0] - q0[0], q1[1] - q0[1], q1[2] - q0[2] };
-    Normalize(u); Normalize(v);
-    float ax[3] = { u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0] };
-    float sn = sqrtf(Dot3(ax, ax)), cs = Dot3(u, v);
-    M4 r = oldM;
-    if (sn > 1e-6f) {
-        for (int k = 0; k < 3; ++k) ax[k] /= sn;
-        M4 R = RotMat(ax, atan2f(sn, cs));
-        for (int i = 0; i < 3; ++i) { float row[3] = { oldM.m[i][0], oldM.m[i][1], oldM.m[i][2] }, o[3]; XformDir(R, row, o); r.m[i][0] = o[0]; r.m[i][1] = o[1]; r.m[i][2] = o[2]; }
-    }
-    r.m[3][0] = q0[0]; r.m[3][1] = q0[1]; r.m[3][2] = q0[2];
-    return r;
+    fc2vr::weapon::Pose posed;
+    if(fc2vr::rig::Swing(PoseOf(oldM),Read3(p0),Read3(p1),Read3(q0),Read3(q1),Read3(oldM.m[2]),posed)) return MatrixOf(posed);
+    return oldM; // unavailable geometry is not a fabricated endpoint rotation
 }
 // apply D (world, row-vector) to bone `root` and all its descendants
 static void SubtreeXform(M4* Bw, Bone* bones, int n, int root, const M4& D) {
@@ -702,9 +697,10 @@ static void Apply(uint8_t* skel) {
     int cam = g_slot[0], rh = g_slot[12];
     if (cam < 0 || cam >= n || rh < 0 || rh >= n) return;
     uint8_t* gfx = (uint8_t*)g_playerGfx; if (!gfx) return;
-    if (skel != g_maskSkel || n != g_maskCount) BuildMask(skel, bones, n);
+    if (skel != g_maskSkel || bones!=g_maskBones || n != g_maskCount) BuildMask(skel, bones, n);
     // world matrix of the skeleton
     M4 W; memcpy(W.m, gfx + 0x170, 64); W.m[0][3] = W.m[1][3] = W.m[2][3] = 0; W.m[3][3] = 1;
+    if(g_c.rigFix && !fc2vr::weapon::Rigid(PoseOf(W))) return;
     M4 Winv; if (!Inv(W, Winv)) return;
     // camera bone in world
     M4 camM; memcpy(camM.m, bones[cam].model, 64); camM.m[0][3] = camM.m[1][3] = camM.m[2][3] = 0; camM.m[3][3] = 1;
@@ -720,6 +716,28 @@ static void Apply(uint8_t* skel) {
     Frame f; Lock(); f = g_frame; Unlock();
     if (!f.valid) { InterlockedIncrement(&g_pd.noFrame); return; }
     if (!f.handValid) { InterlockedIncrement(&g_pd.noHand); return; }
+    if(g_c.rigFix && (!g_c.ik || !f.headAuthority || !xr::HeadCurrent(f.source))) {
+        Lock(); g_shotValid=false; g_support.Clear(); for(auto& state:g_rigState) state.Clear(); Unlock(); return;
+    }
+    fc2vr::rig::Roles named[2]; uint8_t namedMember[512]{},namedWritten[512]{};
+    if(g_c.rigFix) {
+        fc2vr::rig::Identity identities[512];
+        for(int i=0;i<n;++i) identities[i]={bones[i].hash,bones[i].parent};
+        const bool mapped=fc2vr::rig::Resolve(identities,n,0,named[0]) && fc2vr::rig::Resolve(identities,n,1,named[1])
+            && identities[cam].name==fc2vr::rig::NameId("Camera")
+            && named[0].clavicle==g_slot[19] && named[1].clavicle==g_slot[15]
+            && named[0].upper[0]==g_slot[18] && named[1].upper[0]==g_slot[14]
+            && named[0].fore[0]==g_slot[17] && named[1].fore[0]==g_slot[13]
+            && named[0].hand[0]==g_slot[20] && named[1].hand[0]==rh;
+        static void* previousPalette=nullptr; static int previousMap=-1;
+        if(previousPalette!=bones || previousMap!=(int)mapped) {
+            previousPalette=bones; previousMap=(int)mapped;
+            LOG("arms: arm-rig-1 map=%d skel=%p palette=%p count=%d defaultOff=1",mapped,skel,bones,n);
+            if(mapped) LOG("arms: arm-rig-1 L shoulder=%d elbow=%d wrist=%d cap=%d R shoulder=%d elbow=%d wrist=%d cap=%d",named[0].upper[0],named[0].fore[0],named[0].hand[0],named[0].cap,named[1].upper[0],named[1].fore[0],named[1].hand[0],named[1].cap);
+        }
+        if(!mapped) { Lock(); g_shotValid=false; g_support.Clear(); for(auto& state:g_rigState) state.Clear(); Unlock(); return; }
+        for(const auto& roles:named) for(int index:roles.Indices()) namedMember[index]=1;
+    }
     {   // diagnostic: the hands as animated, relative to the camera bone (which one moves during a phone call)
         static ULONGLONG lastD = 0; ULONGLONG tn = GetTickCount64();
         if (g_c.phoneDiag && !controls::NormalControls() && tn - lastD > 700) {
@@ -757,7 +775,7 @@ static void Apply(uint8_t* skel) {
     // world matrices of the arm bones as animated
     static M4 Bw[512];
     static M4 Banim[512];
-    for (int i = 0; i < n && i < 512; ++i) if (g_armMask[i]) { M4 b; memcpy(b.m, bones[i].model, 64); b.m[0][3] = b.m[1][3] = b.m[2][3] = 0; b.m[3][3] = 1; Bw[i] = Mul(b, W); Banim[i] = Bw[i]; }
+    for (int i = 0; i < n && i < 512; ++i) if (g_armMask[i] || namedMember[i]) { M4 b; memcpy(b.m, bones[i].model, 64); b.m[0][3] = b.m[1][3] = b.m[2][3] = 0; b.m[3][3] = 1; Bw[i] = Mul(b, W); Banim[i] = Bw[i]; }
     {   // reload: the arm bones keep their pose (relative to the camera bone) from just before the reload
         // (the helper bones that follow an arm bone too - the left one stretched the sleeve when only the arm was held)
         static M4 relArm[512]; static bool haveRel = false; static void* relWeapon = nullptr;
@@ -766,9 +784,9 @@ static void Apply(uint8_t* skel) {
         M4 icw;
         if (Inv(camW, icw)) {
             if (rl && haveRel && relWeapon == g_curWeapon) {
-                for (int i = 0; i < n && i < 512; ++i) if (g_armMask[i] || g_follow[i] >= 0) { M4 v = Mul(relArm[i], camW); if (g_armMask[i]) { Bw[i] = v; Banim[i] = v; } else g_folAnim[i] = v; }
+                for (int i = 0; i < n && i < 512; ++i) if (g_armMask[i] || namedMember[i] || g_follow[i] >= 0) { M4 v = Mul(relArm[i], camW); if (g_armMask[i] || namedMember[i]) { Bw[i] = v; Banim[i] = v; } else g_folAnim[i] = v; }
             } else if (!rl && g_curWeapon && controls::NormalControls()) {
-                for (int i = 0; i < n && i < 512; ++i) { if (g_armMask[i]) relArm[i] = Mul(Bw[i], icw); else if (g_follow[i] >= 0) relArm[i] = Mul(g_folAnim[i], icw); }
+                for (int i = 0; i < n && i < 512; ++i) { if (g_armMask[i] || namedMember[i]) relArm[i] = Mul(Bw[i], icw); else if (g_follow[i] >= 0) relArm[i] = Mul(g_folAnim[i], icw); }
                 haveRel = true; relWeapon = g_curWeapon;
             }
         }
@@ -1047,13 +1065,21 @@ static void Apply(uint8_t* skel) {
         else grabbing=twoHand=false;
     }
     // ---- IK: shoulders from the head, elbows solved, hands on their targets
+    bool namedAbort=false;
     if (g_c.ik && f.headValid) {
         float hp[3], hf[3], hr[3], up[3] = { f.game.U.x, f.game.U.y, f.game.U.z };
         toWorld(f.headO, hp, true); toWorld(f.headF, hf, false);
-        float d = Dot3(hf, up); for (int k = 0; k < 3; ++k) hf[k] -= up[k] * d; Normalize(hf);
-        hr[0] = hf[1] * up[2] - hf[2] * up[1]; hr[1] = hf[2] * up[0] - hf[0] * up[2]; hr[2] = hf[0] * up[1] - hf[1] * up[0]; Normalize(hr);
-        if (Dot3(hr, f.game.R) < 0) for (int k = 0; k < 3; ++k) hr[k] = -hr[k];
+        fc2vr::weapon::Pose torso;
+        const bool torsoValid=fc2vr::rig::Torso(g_c.rigFix?f.game.F:Read3(hf),Read3(up),f.game.R,torso);
+        if(torsoValid) {
+            Put3(hf,fc2vr::tracking::Scale(torso.b,-1)); Put3(hr,torso.r);
+            if(!g_c.rigFix && Dot3(hr,f.game.R)<0) for(float& component:hr) component=-component;
+        }
         for (int side = 0; side < 2; ++side) {
+            if(!torsoValid) { namedAbort=g_c.rigFix!=0; break; }
+            if(g_c.rigFix && !side && (!f.leftAuthority || !xr::InputCurrent(f.source,0))) {
+                Lock(); g_rigState[0].Clear(); Unlock(); continue;
+            }
             int clav = g_slot[side ? 15 : 19], upa = g_slot[side ? 14 : 18], fore = g_slot[side ? 13 : 17], hand = g_slot[side ? 12 : 20];
             if (clav < 0 || upa < 0 || fore < 0 || hand < 0 || clav >= n || upa >= n || fore >= n || hand >= n) continue;
             float sg = side ? 1.0f : -1.0f;
@@ -1113,6 +1139,33 @@ static void Apply(uint8_t* skel) {
                 }
                 leftFree = true;
                 SubtreeXform(Bw, bones, n, hand, D);
+            }
+            if(g_c.rigFix) {
+                const auto& roles=named[side]; fc2vr::rig::Arm rest,staged; fc2vr::weapon::Pose targets[16];
+                for(int i=0;i<3;++i) rest.upper[i]=PoseOf(Banim[roles.upper[i]]);
+                for(int i=0;i<5;++i) rest.fore[i]=PoseOf(Banim[roles.fore[i]]);
+                for(int i=0;i<16;++i) { rest.hand[i]=PoseOf(Banim[roles.hand[i]]); targets[i]=PoseOf(Bw[roles.hand[i]]); }
+                rest.cap=PoseOf(Banim[roles.cap]);
+                float shoulder[3],pole[3];
+                for(int k=0;k<3;++k) { shoulder[k]=hp[k]+hr[k]*(sg*g_c.shoulderSide)-up[k]*g_c.shoulderDown-hf[k]*g_c.shoulderBack; pole[k]=-up[k]+hr[k]*sg*0.6f-hf[k]*0.3f; }
+                const fc2vr::arm::RigKey key{(uintptr_t)g_pawn,(uintptr_t)skel,(uintptr_t)bones,(uintptr_t)f.weapon,n,upa,fore,hand,
+                    (unsigned)(0x100 | f.map | (phoneMode<<1) | (f.twoHand<<2) | (controls::NormalControls()<<3))};
+                const bool physical=f.headAuthority && (side?f.handAuthority:f.leftAuthority) && xr::InputCurrent(f.source,side) && xr::HeadCurrent(f.source);
+                fc2vr::rig::Hinge joints; bool solved=false;
+                Lock();
+                if(physical) solved=fc2vr::rig::Deform(rest,targets,Read3(shoulder),Read3(pole),fc2vr::tracking::Subtract(rest.hand[0].p,rest.upper[0].p),side || grabbing,key,f.source,side,g_c.wristTwistLimit*0.01745329252f,g_rigState[side],staged,joints,torso);
+                else g_rigState[side].Clear();
+                const unsigned count=solved?++g_rigCommits[side]:++g_rigRejects[side];
+                Unlock();
+                if(count==1 || count%900==0) LOG("arms: arm-rig-1 side=%d staged=%d count=%u seq=%llu wristLimit=%.1f",side,solved,count,(unsigned long long)f.source.sequence,g_c.wristTwistLimit);
+                if(solved) {
+                    for(int i=0;i<3;++i) Bw[roles.upper[i]]=MatrixOf(staged.upper[i]);
+                    for(int i=0;i<5;++i) Bw[roles.fore[i]]=MatrixOf(staged.fore[i]);
+                    for(int i=0;i<16;++i) Bw[roles.hand[i]]=MatrixOf(staged.hand[i]);
+                    Bw[roles.cap]=MatrixOf(staged.cap);
+                    for(int index:roles.Indices()) namedWritten[index]=1;
+                } else namedAbort=true;
+                continue;
             }
             // Each arm turns with its own controller only: the clavicle and upper arm keep the body's (animated) orientation
             // instead of the right controller's, and the free left forearm takes the left controller's orientation, so
@@ -1229,12 +1282,13 @@ static void Apply(uint8_t* skel) {
             for (int k = 0; k < 3; ++k) Bw[clav].m[3][k] += S[k] - P0[k];       // clavicle follows the shoulder
         }
     }
+    if(namedAbort) { Lock(); g_shotValid=false; g_support.Clear(); Unlock(); return; } // no palette writes on a failed stage
     // helper bones follow their arm bone: new = old * inv(leaderAnim) * leaderNew
     // The right arm's helper (bone 105, on the forearm; parented to the root) carries the weapon. Its animated place
     // relative to the hand changes in reloads (the crossbow turned on its side to load a bolt), weapon jams etc. -
     // with FreezeReload it is held where it sat in the hand once the weapon had settled after being drawn.
     for (int i = 0; i < n && i < 512; ++i) {
-        int j = g_follow[i]; if (j < 0) continue;
+        int j = g_follow[i]; if (j < 0 || namedWritten[i]) continue;
         M4 inv; if (!Inv(Banim[j], inv)) continue;
         M4 bw = g_folAnim[i];
         M4 r = Mul(Mul(bw, inv), Bw[j]);
@@ -1313,7 +1367,8 @@ static void Apply(uint8_t* skel) {
     }
     // write back (model space)
     for (int i = 0; i < n && i < 512; ++i) {
-        if (!g_armMask[i] && g_follow[i] < 0) continue;
+        if(g_c.rigFix && !namedWritten[i]) continue; // only the explicitly staged named records, never clavicles/unknown helpers
+        if (!g_armMask[i] && g_follow[i] < 0 && !namedWritten[i]) continue;
         M4 r = Mul(Bw[i], Winv);
         float* dst = bones[i].model;
         float w3[4] = { dst[3], dst[7], dst[11], dst[15] };
@@ -3069,6 +3124,7 @@ static void __fastcall Hook_EnvLight(void* env, void* edx, float t, uint8_t* out
 // ---------------------------------------------------------------- install
 void Install(uintptr_t base, const Config& c, PatchFn patch) {
     g_base = base; g_c = c;
+    LOG("arms: arm-rig-1 enabled=%d namedRequired=1 wristLimit=%.1f defaultOff=1",c.rigFix,c.wristTwistLimit);
     if (!g_csInit) { InitializeCriticalSection(&g_cs); g_csInit = true; }
     for (int i = 0; i < 21; ++i) g_slot[i] = -1;
     if (!c.weaponInHand && !c.aimFromController && !c.dump) { LOG("arms: off"); return; }

@@ -13,6 +13,8 @@ struct Config {
     int dump = 1;                 // DumpSkeleton: log the player skeleton's bone list once
     float handOfs[3] = { 0, 0, 0 };   // HandOffsetX/Y/Z: right-hand position relative to the controller grip (m; right, up, back)
     int ik = 1;                   // ArmIK: shoulders from the head, elbows solved
+    int rigFix = 0;               // ArmRigFix: experimental named, staged wrist/hinge/corrective path (default off)
+    float wristTwistLimit = 90;   // ArmWristTwistLimit: bounded helper-only axial deformation, degrees
     int freeLeftHand = 1;         // FreeLeftHand: left hand follows the left controller when not holding the weapon
     float shoulderSide = 0.17f, shoulderDown = 0.22f, shoulderBack = 0.06f;   // ShoulderSide/Down/Back (m from the eyes)
     int noIdleBreak = 1;          // NoIdleAnimation: never play the idle weapon-inspect animation

@@ -68,3 +68,17 @@ foreach(group socket ownership latch arc spread invalid_spread)
 endforeach()
 add_test(NAME motion_source_wiring COMMAND ${CMAKE_COMMAND}
     -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../src -P ${CMAKE_CURRENT_SOURCE_DIR}/check_motion_wiring.cmake)
+
+add_executable(arm_rig_tests test_arm_rig.cpp)
+target_compile_features(arm_rig_tests PRIVATE cxx_std_17)
+target_include_directories(arm_rig_tests PRIVATE ../src)
+if(MSVC)
+    target_compile_options(arm_rig_tests PRIVATE /W4 /WX)
+else()
+    target_compile_options(arm_rig_tests PRIVATE -Wall -Wextra -Werror)
+endif()
+foreach(group mapping joints singular wrist cap mesh staging history torso)
+    add_test(NAME rig_${group} COMMAND arm_rig_tests ${group})
+endforeach()
+add_test(NAME rig_source_wiring COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../src -P ${CMAKE_CURRENT_SOURCE_DIR}/check_rig_wiring.cmake)
