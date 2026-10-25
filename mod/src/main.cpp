@@ -742,6 +742,7 @@ static int g_drawPolicy(uintptr_t* sp, int slot);
 static volatile LONG g_drawSkipFlag = 0;
 extern "C" int __cdecl OnDrawThunk(uintptr_t* sp, int slot) {
     NoteDraw(sp, g_vtDev);
+    cbcap::OnDraw(0x200 | slot, (uint32_t)sp[2], (uint32_t)sp[3], slot == 9 ? 0 : (uint32_t)sp[4], slot >= 14 ? (uint32_t)sp[5] : 0, slot == 14 ? (uint32_t)sp[6] : 0, g_capRTV0, g_inEye ? g_capEye : 3);
     int skip = g_drawPolicy(sp, slot);
     g_drawSkipFlag = skip;
     return skip;
@@ -1031,7 +1032,7 @@ void HookCreateVS(void** vt) { DWORD o; VirtualProtect(&vt[79], 4, PAGE_EXECUTE_
 static long drawCalls[2];
 void OnDraw(uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t e, uint32_t f, void* rtv, int eye) {
     if (!On()) return;
-    InterlockedIncrement(&drawCalls[(kind & 0x100) ? 1 : 0]);
+    InterlockedIncrement(&drawCalls[(kind & 0x300) ? 1 : 0]);
     uint32_t h[8 + 8] = { kind, a, b, c, e, f, (uint32_t)(uintptr_t)curVS, (uint32_t)(uintptr_t)rtv | ((uint32_t)(eye & 3) << 30) };
     for (int i = 0; i < 8; ++i) h[8 + i] = (uint32_t)(uintptr_t)cb[i];
     EnterCriticalSection(&cs); Put('D', h, sizeof h); LeaveCriticalSection(&cs);
@@ -1058,7 +1059,7 @@ void Present(const char* iniDir) {   // render thread, each present
     LeaveCriticalSection(&vsCs);
     char path[MAX_PATH]; snprintf(path, sizeof path, "%sfc2vr_cbcap.bin", iniDir);
     FILE* fp = fopen(path, "wb"); if (fp) { fwrite(out.data(), 1, out.size(), fp); fclose(fp); }
-    LOG("cbcap: %u bytes written to %s (%u vertex shaders; draws seen: inline %ld, vtable %ld)", (unsigned)out.size(), path, (unsigned)used.size(), drawCalls[0], drawCalls[1]); drawCalls[0] = drawCalls[1] = 0;
+    LOG("cbcap: %u bytes written to %s (%u vertex shaders; draws seen: inline %ld, vtable/variant %ld)", (unsigned)out.size(), path, (unsigned)used.size(), drawCalls[0], drawCalls[1]); drawCalls[0] = drawCalls[1] = 0;
     ShowToast("GPU capture saved");
     out.clear(); out.shrink_to_fit(); state = 0;
 }
@@ -3650,7 +3651,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v232 test 4 = 1.0.2 + F4 rigid A/B, Ctrl+F4 GPU constant capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v232 test 5 = 1.0.2 + F4 rigid A/B, Ctrl+F4 GPU constant capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
