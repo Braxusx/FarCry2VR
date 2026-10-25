@@ -408,6 +408,7 @@ static GameBasis BasisFromGameCam(uint8_t* c) {
 // sprint yaw sway at stick rest; follow forward motion and deliberate turns.
 // Bypass in vehicles, mounted guns and special controls. Prepare once, then share.
 static inline double NowMs();
+static bool g_riding = false;
 static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize) {
     static fc2vr::tracking::PoseFrameBuilder builder;
     fc2vr::tracking::SteadyInput input;
@@ -417,6 +418,20 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
         && !controls::MountedWeapon() && arms::PlayerState(pos, &heading);
     input.playerPosition = {pos[0],pos[1],pos[2]};
     input.turning = fabsf(xr::Hand(1).stick.x) > 0.15f;
+    {   // v232: riding (the intro taxi, a bus, any vehicle the controls don't report): the player moves without the stick.
+        // SteadyCamera would smooth the view while the body and the car interior move with the vehicle - they judder
+        // in the view. Not eligible while riding.
+        static float lp[3]; static double lt = 0, still = 0; static bool riding = false;
+        double tn = input.nowMs; float dt = lt > 0 ? (float)((tn - lt) * 0.001) : 0; lt = tn;
+        float dx = pos[0] - lp[0], dy = pos[1] - lp[1]; lp[0] = pos[0]; lp[1] = pos[1]; lp[2] = pos[2];
+        float spd = dt > 0.0005f && dt < 0.1f ? sqrtf(dx * dx + dy * dy) / dt : 0;
+        const xr::HandState& L = xr::Hand(0); bool stick = fabsf(L.stick.x) > 0.2f || fabsf(L.stick.y) > 0.2f;
+        if (!stick && spd > 2.5f && spd < 60.0f) still += dt * 1000.0; else if (stick || spd < 1.0f) still = 0;
+        bool r = still > 400.0;
+        if (r != riding) { riding = r; LOG("steady camera: %s", r ? "riding (off)" : "on foot"); }
+        g_riding = riding;
+        if (riding) input.eligible = false;
+    }
     GameBasis gb = BasisFromGameCam(rc);
     {   // v231 camera on the body clock: the game's camera is one game frame behind the player's body (it moves by the
         // body's previous step), so the body, arms and weapon jitter by the frame-to-frame step difference. The body's
@@ -429,7 +444,19 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
         }
         lastSeq = seq;
     }
-    const PoseFrame frame = builder.Build(sequence, gb, TrackingReference(), g_cfg.worldScale, input);
+    PoseFrame frame = builder.Build(sequence, gb, TrackingReference(), g_cfg.worldScale, input);
+    {   // v232: when SteadyCamera stops applying (riding, a vehicle), its offset fades out instead of jumping
+        static V3 carry{ 0, 0, 0 }, lastOff{ 0, 0, 0 }; static bool wasSmoothed = false; static double lt = 0; static uint64_t lastSeq = ~0ull;
+        if (sequence != lastSeq) {
+            lastSeq = sequence; double tn = input.nowMs; float dt = lt > 0 ? (float)((tn - lt) * 0.001) : 1; lt = tn;
+            V3 off = frame.game.P - frame.raw.P;
+            bool smoothed = input.eligible;
+            if (wasSmoothed && !smoothed && Dot(lastOff, lastOff) < 0.25f) carry = lastOff;
+            wasSmoothed = smoothed; lastOff = off;
+            if (!smoothed) { carry = carry * (dt < 1 ? expf(-dt / 0.3f) : 0.0f); frame.game.P = frame.raw.P + carry; }
+            else carry = { 0, 0, 0 };
+        } else if (!input.eligible) frame.game.P = frame.raw.P + carry;
+    }
     if (sequence % 900 == 0) LOG("pose frame shared-camera-1 seq=%llu steadyEligible=%d rawP=%.3f,%.3f,%.3f effectiveP=%.3f,%.3f,%.3f rawF=%.4f,%.4f effectiveF=%.4f,%.4f",
         (unsigned long long)frame.sequence, input.eligible, frame.raw.P.x, frame.raw.P.y, frame.raw.P.z,
         frame.game.P.x, frame.game.P.y, frame.game.P.z, frame.raw.F.x, frame.raw.F.y, frame.game.F.x, frame.game.F.y);
@@ -2783,7 +2810,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         SubmitArmsFrame(fv, rc0, frame);
         {   // v232 mocap 'X' record: this frame's poses (eyes are added in the eye loop)
             float* x = cbcap::mx; memset(x, 0, sizeof cbcap::mx);
-            double t = NowMs(); memcpy(x, &t, 8); uint32_t sq = (uint32_t)frame.sequence; memcpy(x + 2, &sq, 4); uint32_t fl = (uint32_t)controls::VehicleMode(); memcpy(x + 3, &fl, 4);
+            double t = NowMs(); memcpy(x, &t, 8); uint32_t sq = (uint32_t)frame.sequence; memcpy(x + 2, &sq, 4); uint32_t fl = (uint32_t)controls::VehicleMode() | (g_riding ? 0x100u : 0u); memcpy(x + 3, &fl, 4);
             auto p3 = [](float* d, fc2vr::tracking::Vec3 v) { d[0] = v.x; d[1] = v.y; d[2] = v.z; };
             p3(x + 4, frame.raw.P); p3(x + 7, frame.raw.F); p3(x + 10, frame.game.P); p3(x + 13, frame.game.F);
             float pl[3] = {}, hd = 0; arms::PlayerState(pl, &hd); memcpy(x + 16, pl, 12); x[19] = hd;
@@ -3705,7 +3732,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v232 test 8 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4), Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v232 test 9 = 1.0.2 + clavicle/foregrip smoothing (F4) + frame pacing (Shift+F4) + no steady camera while riding, Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
