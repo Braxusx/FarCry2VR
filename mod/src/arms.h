@@ -103,6 +103,7 @@ struct Frame {
     float aimO[3], aimR[3], aimU[3], aimB[3];   // right controller aim pose (ref)
     float gripO[3];               // right controller grip position (ref)
     bool leftValid = false, twoHand = false, headValid = false;
+    uint64_t supportToken = 0;    // accepted binding; a later model/hold change cannot inherit an old grip
     float lSqueeze = 0, rSqueeze = 0;
     bool machete = false, map = false;   // machete in hand; map/GPS out
     float laimO[3], laimR[3], laimU[3], laimB[3], lgripO[3];   // left controller (ref)
@@ -131,7 +132,7 @@ void RequestGiveThrowables();   // test: fill grenades and molotovs to the maxim
 // throwing arc for display: points in the ref frame (game units), landing surface normal (ref), ok = a throwable is ready
 int GetThrowArc(float (*pts)[3], int maxPts, bool& land, float normal[3], bool& ok);
 // where the left hand grips the weapon (ref frame); oneHanded = pistol-style weapon
-bool Foregrip(float out[3], bool& oneHanded);
+bool Foregrip(const Frame& f,float out[3],bool& oneHanded,uint64_t& token); // current ref placement of an owner-bound socket
 float LastHandSpan();
 struct RayContext { fc2vr::authority::Stamp source{}; void* weapon = nullptr; };
 void SetScopeRay(const float o[3], const float d[3], const RayContext& context);   // world; retains original source age/owner

@@ -13,6 +13,7 @@
 #include "xr.h"
 #include "controls.h"
 #include "common/arm_pose.h"
+#include "common/weapon_pose.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -53,6 +54,8 @@ static float Dot3(const float* a, const float* b) { return a[0] * b[0] + a[1] * 
 static float Dot3(const float* a, fc2vr::tracking::Vec3 b) { return a[0]*b.x + a[1]*b.y + a[2]*b.z; }
 static fc2vr::tracking::Vec3 Read3(const float* a) { return {a[0],a[1],a[2]}; }
 static void Put3(float* out, fc2vr::tracking::Vec3 v) { out[0] = v.x; out[1] = v.y; out[2] = v.z; }
+static fc2vr::weapon::Pose PoseOf(const M4& m) { return {Read3(m.m[0]),Read3(m.m[1]),Read3(m.m[2]),Read3(m.m[3])}; }
+static M4 MatrixOf(const fc2vr::weapon::Pose& p) { float r[3],u[3],b[3],o[3]; Put3(r,p.r); Put3(u,p.u); Put3(b,p.b); Put3(o,p.p); return FromRows(r,u,b,o); }
 
 // ---------------------------------------------------------------- shared state
 static CRITICAL_SECTION g_cs; static bool g_csInit = false;
@@ -79,7 +82,9 @@ static uint8_t* volatile g_wGfx = nullptr; static uint8_t* volatile g_wSkel = nu
 static void* volatile g_reloadState = nullptr; static volatile DWORD g_reloadT = 0;
 
 static float g_lastSpan = 0; static float g_rayRefO[3], g_rayRefD[3]; static DWORD g_rayTick = 0;
-static float g_foregripRef[3]; static bool g_foregripValid = false, g_oneHanded = true;
+static fc2vr::weapon::SupportBinding g_support; // g_cs protects descriptor/token publication
+static M4 g_supportHoldR{},g_supportHoldL{}; static uint64_t g_supportHoldSerial=0;
+static uint64_t g_supportReported=0;
 static float g_shotO[3], g_shotF[3], g_camFwdNow[3], g_camRefO[3], g_camRefD[3]; static bool g_shotValid = false;
 static fc2vr::authority::Stamp g_shotSource; static void* g_shotWeapon = nullptr;
 static fc2vr::arm::TwistHistory g_twist[2]; // protected by g_cs; one update per source sample
@@ -952,37 +957,61 @@ static void Apply(uint8_t* skel) {
         float axu[3] = { au[0], au[1], au[2] }; Normalize(axu);
         Map = Mul(Mul(Mul(Map, Translate(-tgt[0], -tgt[1], -tgt[2])), RotMat(axu, g_c.macheteYaw * 0.0174533f)), Translate(tgt[0], tgt[1], tgt[2]));
     }
-    // foregrip: where the animation puts the left hand on this weapon (rifles); pistols/one-handed: next to the right hand
+    // Freeze a weapon/rig-bound socket from the accepted hold, not the current
+    // animated left wrist. The right controller remains the physical root.
     int lh = g_slot[20];
     bool lhOk = lh >= 0 && lh < n && g_armMask[lh];
+    fc2vr::weapon::SupportKey supportKey;
+    supportKey.rig = {(uintptr_t)g_pawn,(uintptr_t)skel,(uintptr_t)bones,(uintptr_t)f.weapon,n,rh,lh,cam,
+        (unsigned)(f.map | (phoneMode<<1) | (controls::NormalControls()<<2))};
+    uint8_t* model=g_wSkel;
+    if (model && !IsBadReadPtr(model+0x20,16)) {
+        supportKey.model=(uintptr_t)model; supportKey.palette=(uintptr_t)*(Bone**)(model+0x20);
+        supportKey.modelCount=*(int*)(model+0x2C);
+    }
+    supportKey.definition=g_typeKey;
+    const bool supportAllowed=lhOk && g_c.steadyHands && g_relHave && f.weapon && f.weapon==g_curWeapon
+        && supportKey.palette && supportKey.modelCount>0 && supportKey.modelCount<=512
+        && !f.map && !f.machete && controls::NormalControls() && controls::VehicleMode()==0
+        && f.handAuthority && f.leftAuthority && xr::InputCurrent(f.source,0) && xr::InputCurrent(f.source,1);
+    const auto rightHold=PoseOf(g_relR), leftHold=PoseOf(g_relL);
+    const auto rightNow=PoseOf(Mul(Bw[rh],Map));
+    fc2vr::weapon::Pose supportLocal, rightInAim;
+    uint64_t supportToken=0; bool supportReady=false;
+    Lock();
+    if (memcmp(&g_supportHoldR,&g_relR,sizeof(M4)) || memcmp(&g_supportHoldL,&g_relL,sizeof(M4))) {
+        ++g_supportHoldSerial; g_supportHoldR=g_relR; g_supportHoldL=g_relL;
+    }
+    supportKey.hold=g_supportHoldSerial;
+    const bool holdRigid=fc2vr::weapon::Rigid(rightHold) && fc2vr::weapon::Rigid(leftHold) && fc2vr::weapon::Rigid(PoseOf(Am));
+    g_support.Publish(supportKey,f.source,fc2vr::weapon::Relative(leftHold,rightHold),fc2vr::weapon::Relative(rightNow,PoseOf(Am)),supportAllowed && holdRigid);
+    supportReady=g_support.Read(supportKey,f.source,GetTickCount64(),supportLocal,rightInAim,supportToken);
+    const bool reportSupport=supportReady && supportToken!=g_supportReported;
+    if (reportSupport) g_supportReported=supportToken;
+    Unlock();
+    if (reportSupport) LOG("arms: support-socket-1 bound token=%llu weapon=%p rig=%p model=%p hold=%llu",(unsigned long long)supportToken,f.weapon,skel,model,(unsigned long long)supportKey.hold);
     float fg[3] = { tgt[0], tgt[1], tgt[2] };
     bool oneHanded = true;
-    if (lhOk) {
-        float l0[3] = { Bw[lh].m[3][0], Bw[lh].m[3][1], Bw[lh].m[3][2] };
-        float dd[3] = { l0[0] - h0[0], l0[1] - h0[1], l0[2] - h0[2] };
-        float span = sqrtf(Dot3(dd, dd));
+    if (supportReady) {
+        const float span=std::sqrt(fc2vr::tracking::DotProduct(supportLocal.p,supportLocal.p));
         oneHanded = span > g_c.twoHandMaxSpan;
         g_lastSpan = span;
-        if (!oneHanded) XformPt(Map, l0, fg);
+        if (!oneHanded) Put3(fg,fc2vr::weapon::Compose(supportLocal,rightNow).p);
         else for (int k = 0; k < 3; ++k) fg[k] = tgt[k] - ar[k] * 0.02f - au[k] * 0.07f - ab[k] * 0.02f;   // support hand under the grip
     }
-    { float r[3]; toRef(fg, r); Lock(); memcpy(g_foregripRef, r, 12); g_foregripValid = true; g_oneHanded = oneHanded; Unlock(); }
     // two-handed: the weapon turns about the right hand so that it points at the left controller like the animation does
-    bool grabbing = f.twoHand && f.leftValid;
+    bool grabbing = f.twoHand && f.leftValid && supportReady && f.supportToken==supportToken;
     bool twoHand = grabbing && !oneHanded;
     float lgrip[3]; if (f.leftValid) toWorld(f.lgripO, lgrip, true);
     if (twoHand) {
         float vr[3] = { fg[0] - tgt[0], fg[1] - tgt[1], fg[2] - tgt[2] }, vc[3] = { lgrip[0] - tgt[0], lgrip[1] - tgt[1], lgrip[2] - tgt[2] };
-        Normalize(vr); Normalize(vc);
-        float ax[3] = { vr[1] * vc[2] - vr[2] * vc[1], vr[2] * vc[0] - vr[0] * vc[2], vr[0] * vc[1] - vr[1] * vc[0] };
-        float sn = sqrtf(Dot3(ax, ax)), cs = Dot3(vr, vc);
-        if (sn > 1e-5f) {
-            for (int k = 0; k < 3; ++k) ax[k] /= sn;
-            float ang = atan2f(sn, cs);
+        fc2vr::tracking::Vec3 axis; float ang=0;
+        if (fc2vr::weapon::FromTo(Read3(vr),Read3(vc),rightNow.u,axis,ang)) {
+            float ax[3]; Put3(ax,axis);
             M4 Rm = RotMat(ax, ang);   // row-vector rotation
             M4 T1 = Translate(-tgt[0], -tgt[1], -tgt[2]), T2 = Translate(tgt[0], tgt[1], tgt[2]);
             Map = Mul(Mul(Mul(Map, T1), Rm), T2);
-        }
+        } else grabbing=twoHand=false;
     }
     // shots follow the sight line of the re-posed weapon
     // (steady hands: from the camera as it sat on the hand when the hold was taken, carried by the re-pose - not
@@ -1004,6 +1033,13 @@ static void Apply(uint8_t* skel) {
       memcpy(g_camRefO, cro, 12); memcpy(g_camRefD, crd, 12); g_rayTick = GetTickCount(); Unlock(); }
     // rigid re-pose of both arm chains
     for (int i = 0; i < n && i < 512; ++i) if (g_armMask[i]) Bw[i] = Mul(Bw[i], Map);
+    if (grabbing) {
+        auto wrist=fc2vr::weapon::Compose(supportLocal,PoseOf(Bw[rh]));
+        if (oneHanded) wrist.p=Read3(fg);
+        M4 inverse;
+        if (fc2vr::weapon::Rigid(wrist) && Inv(Bw[lh],inverse)) SubtreeXform(Bw,bones,n,lh,Mul(inverse,MatrixOf(wrist)));
+        else grabbing=twoHand=false;
+    }
     // ---- IK: shoulders from the head, elbows solved, hands on their targets
     if (g_c.ik && f.headValid) {
         float hp[3], hf[3], hr[3], up[3] = { f.game.U.x, f.game.U.y, f.game.U.z };
@@ -3116,7 +3152,25 @@ void SetIniPath(const char* p) {
     snprintf(g_ini, sizeof g_ini, "%s", p);
 }
 float LastHandSpan() { return g_lastSpan; }
-bool Foregrip(float out[3], bool& oneHanded) { if (!g_csInit) return false; Lock(); bool v = g_foregripValid; memcpy(out, g_foregripRef, 12); oneHanded = g_oneHanded; Unlock(); return v; }
+bool Foregrip(const Frame& f,float out[3],bool& oneHanded,uint64_t& token) {
+    if (!g_csInit || !f.handAuthority || !f.leftAuthority || f.map || f.machete || !controls::NormalControls() || controls::VehicleMode()!=0) return false;
+    fc2vr::weapon::Pose socket,right; fc2vr::weapon::SupportKey key;
+    Lock(); key=g_support.Key(); const bool ready=g_support.Read(key,f.source,GetTickCount64(),socket,right,token); Unlock();
+    if (!ready || !f.weapon || (uintptr_t)f.weapon!=key.rig.weapon || f.weapon!=g_curWeapon
+        || key.rig.pawn!=(uintptr_t)g_pawn || key.rig.skeleton!=(uintptr_t)g_playerSkel || key.model!=(uintptr_t)g_wSkel
+        || !xr::InputCurrent(f.source,0) || !xr::InputCurrent(f.source,1)) return false;
+    const auto* sk=(const uint8_t*)key.rig.skeleton; const auto* model=(const uint8_t*)key.model;
+    if (!sk || !model || IsBadReadPtr(sk+0x20,16) || IsBadReadPtr(model+0x20,16)
+        || (uintptr_t)*(Bone* const*)(sk+0x20)!=key.rig.palette || *(const int*)(sk+0x2C)!=key.rig.count
+        || (uintptr_t)*(Bone* const*)(model+0x20)!=key.palette || *(const int*)(model+0x2C)!=key.modelCount) return false;
+    const fc2vr::weapon::Pose aim{Read3(f.aimR),Read3(f.aimU),Read3(f.aimB),Read3(f.aimO)};
+    auto hand=fc2vr::weapon::Compose(right,aim);
+    hand.p=fc2vr::tracking::Add(Read3(f.gripO),aim.Direction(Read3(g_c.handOfs)));
+    if (!fc2vr::weapon::Rigid(hand)) return false;
+    oneHanded=std::sqrt(fc2vr::tracking::DotProduct(socket.p,socket.p))>g_c.twoHandMaxSpan;
+    const auto p=oneHanded ? fc2vr::tracking::Add(hand.p,aim.Direction({-0.02f,-0.07f,-0.02f})) : fc2vr::weapon::Compose(socket,hand).p;
+    Put3(out,p); return true;
+}
 // v209 steady camera: the player entity's position (its world matrix translation, +0x60) and the game's own
 // effective heading (pawn data +0x310, radians) - read without calling into the game (any thread)
 bool PlayerState(float pos[3], float* heading) {

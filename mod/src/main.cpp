@@ -19,6 +19,7 @@
 #include "xr.h"
 #include "controls.h"
 #include "arms.h"
+#include "common/weapon_pose.h"
 #include "log.h"
 #include "diag.h"
 #include "gameaddr.h"
@@ -2336,24 +2337,21 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
         }
         // two-handed grip: left grip pressed with the left hand near the weapon's foregrip (or the pistol grip)
         {
-            static bool gripDown = false, grabbing = false;
-            static void* gripWeapon = nullptr; static xr::InputStamp gripSource;
-            bool g = lh.squeeze > (gripDown ? 0.35f : 0.6f);
-            if (gripWeapon != af.weapon || gripSource.generation != af.source.generation
-                || gripSource.handGeneration[0] != af.source.handGeneration[0] || gripSource.handGeneration[1] != af.source.handGeneration[1]) {
-                grabbing = false; gripDown = g; gripWeapon = af.weapon; gripSource = af.source;
-            }
-            if (!af.handAuthority || !af.leftAuthority) grabbing = false;
-            float fg[3]; bool oneH = true;
-            if (g && !gripDown && af.handAuthority && af.leftAuthority && arms::Foregrip(fg, oneH)) {
+            static fc2vr::weapon::SupportLatch latch;
+            const bool g = lh.squeeze > (latch.Down() ? 0.35f : 0.6f);
+            float fg[3]{}; bool oneH = true; uint64_t token=0;
+            const bool ready=arms::Foregrip(af,fg,oneH,token);
+            bool inRange=false;
+            if (ready) {
                 V3 d = V3{ af.lgripO[0] - fg[0], af.lgripO[1] - fg[1], af.lgripO[2] - fg[2] };
                 float dist = sqrtf(Dot(d, d));
-                if (dist < g_cfg.grabDistance * s) { grabbing = true; xr::Haptic(0, 0.5f, 0.05f); LOG("arms: two-handed grip (%s, %.2f m, hand span %.2f)", oneH ? "pistol" : "rifle", dist / s, arms::LastHandSpan()); }
-                else LOG("arms: left grip %.2f m from the weapon (span %.2f, %s): not grabbing", dist / s, arms::LastHandSpan(), oneH ? "pistol" : "rifle");
+                inRange=dist < g_cfg.grabDistance*s;
             }
-            if (!g) grabbing = false;
-            gripDown = g;
+            const bool was=g_twoHandGrip;
+            const bool grabbing=latch.Update(g,inRange,ready,token,af.source);
+            if (grabbing && !was) { xr::Haptic(0,0.5f,0.05f); LOG("arms: support-socket-1 acquired token=%llu (%s)",(unsigned long long)token,oneH?"pistol":"rifle"); }
             af.twoHand = grabbing;
+            af.supportToken=grabbing ? token : 0;
             controls::SetLeftGripClaimed(grabbing); g_twoHandGrip = grabbing;
         }
         arms::SubmitFrame(af);
@@ -3417,7 +3415,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (contribution arm-twist-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (contribution support-socket-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
