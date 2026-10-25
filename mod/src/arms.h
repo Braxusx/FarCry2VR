@@ -140,6 +140,7 @@ float DiagForeStep();
 void DiagArm(float pos[10], float rot[10]);   // v231: per-frame change of R/L forearm, R/L upper arm, R/L forearm twist (mm, deg)   // v231: largest per-frame turn of the animated forearms (deg)
 float ArmSmooth(); void SetArmSmooth(float s);
 bool ArmStability(); void SetArmStability(bool on);
+void DiagApplied(float p[3], float fw[3], uint64_t* seq);   // v232 mocap
 void SetBoneSink(void (*fn)(const float* W, const float* models, int n));   // v232: skeleton as written, each frame (GPU capture)
 int RigidArmTest(); void SetRigidArmTest(int mode);   // v232 F4: 0 off, 1 arm chains held rigid on the hands, 2 whole skeleton (jitter A/B)   // v231 F4 A/B
 bool DiagLiveHand(float out[3]);

@@ -59,6 +59,7 @@ static Frame g_frame;                               // latest from the render th
 static FrameUsage g_frameUsage;
 static volatile uint8_t* g_playerSkel = nullptr;    // player's skeleton object (bone array +0x20, count +0x2C)
 static void (*g_boneSink)(const float*, const float*, int) = nullptr;
+static float g_dbgApplyP[3], g_dbgApplyF[3]; static uint64_t g_dbgApplySeq;   // v232 mocap: the effective frame the hands were placed with
 static volatile bool g_rigidTest = false; static volatile long g_rigidGen = 0; static volatile int g_rigidMode = 0;   // v232 F4 A/B
 static float g_dgW[3], g_dgHand[3], g_dgTarget[3]; static long g_dgSeq = 0; static float g_dgForeStep = 0; static float g_dgBend[2] = {}; static float g_dgModel[512][16]; static bool g_dgWritten[512]; static int g_dgN = 0; static uint8_t* g_dgSkel = nullptr; static float g_dgArmPos[10], g_dgArmRot[10];   // v231 jitter diagnostic
 static volatile uint8_t* g_playerGfx = nullptr;     // its graphic component (world matrix at +0x170)
@@ -769,6 +770,8 @@ static void Apply(uint8_t* skel) {
         ULONGLONG tn = GetTickCount64();
         if (nLog < 30 && tn - lastL > 10000 && cnt) { ++nLog; lastL = tn; LOG("body clock: hands moved with the body by %.1f mm per frame on average (%d frames)", sum / cnt * 1000.0, cnt); sum = 0; cnt = 0; }
     }
+    g_dbgApplyP[0] = f.game.P.x; g_dbgApplyP[1] = f.game.P.y; g_dbgApplyP[2] = f.game.P.z; g_dbgApplySeq = f.frameSequence;
+    g_dbgApplyF[0] = f.game.F.x; g_dbgApplyF[1] = f.game.F.y; g_dbgApplyF[2] = f.game.F.z;
     auto toWorld = [&](const float* ref, float* out, bool point) {
         Put3(out, point ? f.game.Position(Read3(ref)) : f.game.Direction(Read3(ref)));
     };
@@ -3351,6 +3354,7 @@ float DiagForeStep() { return g_dgForeStep; }
 void DiagArm(float pos[10], float rot[10]) { memcpy(pos, g_dgArmPos, 40); memcpy(rot, g_dgArmRot, 40); }
 static bool g_armStab = true; static float g_stabKeep[5];
 void SetBoneSink(void (*fn)(const float*, const float*, int)) { g_boneSink = fn; }
+void DiagApplied(float p[3], float fw[3], uint64_t* seq) { memcpy(p, g_dbgApplyP, 12); memcpy(fw, g_dbgApplyF, 12); *seq = g_dbgApplySeq; }
 int RigidArmTest() { return g_rigidMode; }
 void SetRigidArmTest(int mode) { InterlockedIncrement(&g_rigidGen); g_rigidMode = mode; g_rigidTest = mode != 0; LOG("arms: rigid test mode %d (%s)", mode, mode == 0 ? "off" : mode == 1 ? "arm chains" : "whole skeleton"); }
 bool ArmStability() { return g_armStab; }

@@ -986,7 +986,9 @@ static void Put(char type, const void* a, uint32_t na, const void* b = nullptr, 
     if (out.size() > (64u << 20)) return;
     uint32_t len = na + nb; out.push_back(type); out.append((const char*)&len, 4); out.append((const char*)a, na); if (b && nb) out.append((const char*)b, nb);
 }
-static bool On() { return state == 2; }
+static bool lite = false;   // Ctrl+Shift+F4 motion capture: per-frame poses + skeleton only (540 frames)
+static bool On() { return state == 2 && !lite; }
+float mx[96]; bool mxValid = false;   // this frame's 'X' record (render thread)
 static void STDMETHODCALLTYPE I_VSSetCB(ID3D10Device* d, UINT start, UINT n, ID3D10Buffer* const* b) {
     if (b) for (UINT i = 0; i < n && start + i < 16; ++i) cb[start + i] = b[i];
     if (On()) { EnterCriticalSection(&cs); uint32_t h[2 + 16] = { start, n }; for (UINT i = 0; i < n && i < 16; ++i) h[2 + i] = (uint32_t)(uintptr_t)(b ? b[i] : nullptr); Put('S', h, 8 + 4 * (n < 16 ? n : 16)); LeaveCriticalSection(&cs); }
@@ -1041,15 +1043,16 @@ void NoteBones(const float* W, const float* models, int n) {   // game thread, a
     if (state != 2 && state != 1) return;
     uint32_t h[2] = { GetCurrentThreadId(), (uint32_t)n }; EnterCriticalSection(&cs);
     std::string buf((const char*)h, 8); buf.append((const char*)W, 64); buf.append((const char*)models, n * 64);
+    if (lite) { float p[3], fw[3]; uint64_t sq = 0; arms::DiagApplied(p, fw, &sq); double t = NowMs(); buf.append((const char*)&sq, 8); buf.append((const char*)p, 12); buf.append((const char*)fw, 12); buf.append((const char*)&t, 8); }
     Put('K', buf.data(), (uint32_t)buf.size()); LeaveCriticalSection(&cs);
 }
-void Arm() { if (state == 0) { state = 1; LOG("cbcap: armed (3 frames)"); ShowToast("GPU capture: 3 frames"); } }
+void Arm(bool mocap) { if (state == 0) { lite = mocap; state = 1; LOG(mocap ? "mocap: armed (540 frames)" : "cbcap: armed (3 frames)"); ShowToast(mocap ? "Motion capture: 6 s" : "GPU capture: 3 frames"); } }
 void Present(const char* iniDir) {   // render thread, each present
     if (state == 1) { EnterCriticalSection(&cs); out.clear(); frames = 0; for (auto& m : maps) m.b = nullptr; LeaveCriticalSection(&cs); state = 2; }
     if (state != 2) return;
     double t = NowMs(); uint32_t h[3] = { (uint32_t)frames, 0, 0 }; memcpy(&h[1], &t, 8);
-    EnterCriticalSection(&cs); Put('F', h, 12); LeaveCriticalSection(&cs);
-    if (++frames <= 3) return;
+    EnterCriticalSection(&cs); Put('F', h, 12); if (lite && mxValid) Put('X', mx, sizeof mx); mxValid = false; LeaveCriticalSection(&cs);
+    if (++frames <= (lite ? 540 : 3)) return;
     state = 3;
     // vertex shaders used
     std::vector<void*> used; size_t i = 0;
@@ -1057,10 +1060,10 @@ void Present(const char* iniDir) {   // render thread, each present
     EnterCriticalSection(&vsCs);
     for (auto& v : vsCodes) for (auto u : used) if (u == v.vs) { uint32_t p = (uint32_t)(uintptr_t)v.vs; Put('C', &p, 4, v.code.data(), (uint32_t)v.code.size()); }
     LeaveCriticalSection(&vsCs);
-    char path[MAX_PATH]; snprintf(path, sizeof path, "%sfc2vr_cbcap.bin", iniDir);
+    char path[MAX_PATH]; snprintf(path, sizeof path, lite ? "%sfc2vr_mocap.bin" : "%sfc2vr_cbcap.bin", iniDir);
     FILE* fp = fopen(path, "wb"); if (fp) { fwrite(out.data(), 1, out.size(), fp); fclose(fp); }
     LOG("cbcap: %u bytes written to %s (%u vertex shaders; draws seen: inline %ld, vtable/variant %ld)", (unsigned)out.size(), path, (unsigned)used.size(), drawCalls[0], drawCalls[1]); drawCalls[0] = drawCalls[1] = 0;
-    ShowToast("GPU capture saved");
+    ShowToast(lite ? "Motion capture saved" : "GPU capture saved");
     out.clear(); out.shrink_to_fit(); state = 0;
 }
 }
@@ -1862,9 +1865,9 @@ static void Hotkeys(const XrPosef* head) {
     if (t && !prevT) { g_stereoOn = !g_stereoOn; LOG("stereo %s", g_stereoOn ? "on" : "off"); }
     { static bool prevF4 = false; bool f4 = (GetAsyncKeyState(VK_F4) & 0x8000) != 0 && !(GetAsyncKeyState(VK_MENU) & 0x8000);   // v231: 3 s motion trace
       bool sh = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-      if (f4 && !prevF4 && sh) { g_motionTrace = 270; LOG("motion trace: 3 s started (Shift+F4)"); ShowToast("Recording motion (3 s)"); }
-      if (f4 && !prevF4 && (GetAsyncKeyState(VK_CONTROL) & 0x8000)) cbcap::Arm(); else
-      if (f4 && !prevF4 && !sh) { int m = (arms::RigidArmTest() + 1) % 3; arms::SetRigidArmTest(m); ShowToast(m == 0 ? "Arm test: off (normal arms)" : m == 1 ? "Arm test 1: arms rigid on the hands" : "Arm test 2: whole body rigid on the hands"); }
+      if (f4 && !prevF4 && sh && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) { g_motionTrace = 270; LOG("motion trace: 3 s started (Shift+F4)"); ShowToast("Recording motion (3 s)"); }
+      if (f4 && !prevF4 && (GetAsyncKeyState(VK_CONTROL) & 0x8000)) cbcap::Arm(sh); else
+      if (f4 && !prevF4 && !sh && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) { g_cfg.steadyCam = !g_cfg.steadyCam; LOG("SteadyCamera %d (F4)", g_cfg.steadyCam); ShowToast(g_cfg.steadyCam ? "Steady camera: ON" : "Steady camera: OFF"); }
 
       prevF4 = f4; }
     { static bool prevF10 = false; bool f10 = (DevKey(VK_F10) & 0x8000) != 0; if (f10 && !prevF10) g_traceLeft = 4; prevF10 = f10; }
@@ -2742,6 +2745,19 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     if (poseReady) {   // arms/weapon/shots follow the controllers on every frame, scoped or not
         uint8_t* rc0 = (uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam;
         SubmitArmsFrame(fv, rc0, frame);
+        {   // v232 mocap 'X' record: this frame's poses (eyes are added in the eye loop)
+            float* x = cbcap::mx; memset(x, 0, sizeof cbcap::mx);
+            double t = NowMs(); memcpy(x, &t, 8); uint32_t sq = (uint32_t)frame.sequence; memcpy(x + 2, &sq, 4); uint32_t fl = (uint32_t)controls::VehicleMode(); memcpy(x + 3, &fl, 4);
+            auto p3 = [](float* d, fc2vr::tracking::Vec3 v) { d[0] = v.x; d[1] = v.y; d[2] = v.z; };
+            p3(x + 4, frame.raw.P); p3(x + 7, frame.raw.F); p3(x + 10, frame.game.P); p3(x + 13, frame.game.F);
+            float pl[3] = {}, hd = 0; arms::PlayerState(pl, &hd); memcpy(x + 16, pl, 12); x[19] = hd;
+            float bp[3] = {}; arms::CamBonePos(bp); memcpy(x + 20, bp, 12); x[23] = frame.worldScale;
+            auto pose = [](float* d, const XrPosef& p) { d[0] = p.position.x; d[1] = p.position.y; d[2] = p.position.z; d[3] = p.orientation.x; d[4] = p.orientation.y; d[5] = p.orientation.z; d[6] = p.orientation.w; };
+            pose(x + 50, fv.views[0].pose); pose(x + 57, fv.views[1].pose);
+            pose(x + 64, xr::Hand(1).grip); pose(x + 71, xr::Hand(1).aim); pose(x + 78, xr::Hand(0).grip);
+            uint64_t ds = (uint64_t)fv.displayTime; memcpy(x + 86, &ds, 8);
+            cbcap::mxValid = true;
+        }
         if (g_rsOn) {   // v231: the head's horizontal offset from the body (recenter point), game space
             V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
             fc2vr::tracking::Vec3 t = frame.reference.Position({ mid.x, mid.y, mid.z });
@@ -2928,6 +2944,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             V3 dir = frame.WorldDirection(QRot(v.pose.orientation, { 0, 0, -1 }));
             V3 up  = frame.WorldDirection(QRot(v.pose.orientation, { 0, 1, 0 }));
             PoseCamera(rc, pos, dir, up, rtan[e][0], rtan[e][1], rtan[e][2], rtan[e][3], true);
+            { float* x = cbcap::mx + 32 + e * 9; x[0] = pos.x; x[1] = pos.y; x[2] = pos.z; x[3] = dir.x; x[4] = dir.y; x[5] = dir.z; x[6] = up.x; x[7] = up.y; x[8] = up.z; }
             double vpCur[16]; bool havePrev = false;
             { const float* VP = &F<float>(rc, cam::ViewProj); for (int i = 0; i < 16; ++i) vpCur[i] = VP[i]; }
             if (afwSkip[e]) { memcpy(afwTarget[e], vpCur, sizeof vpCur); continue; }   // rebuilt after the loop
@@ -3651,7 +3668,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v232 test 5 = 1.0.2 + F4 rigid A/B, Ctrl+F4 GPU constant capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v232 test 6 = 1.0.2 + F4 SteadyCamera A/B, Ctrl+F4 GPU capture, Ctrl+Shift+F4 motion capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
