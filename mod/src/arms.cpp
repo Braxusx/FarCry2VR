@@ -88,6 +88,7 @@ static fc2vr::authority::Stamp g_shotSource; static void* g_shotWeapon = nullptr
 
 
 // v231 rotation helpers (row-vector matrices: rows 0..2 are the basis vectors)
+static double QpcSec() { static LARGE_INTEGER f{}; if (!f.QuadPart) QueryPerformanceFrequency(&f); LARGE_INTEGER c; QueryPerformanceCounter(&c); return (double)c.QuadPart / (double)f.QuadPart; }
 static void MatQuat(const M4& M, float* q) {
     float r[3][3];
     for (int i = 0; i < 3; ++i) { float l = sqrtf(M.m[i][0] * M.m[i][0] + M.m[i][1] * M.m[i][1] + M.m[i][2] * M.m[i][2]); if (l < 1e-8f) l = 1; for (int j = 0; j < 3; ++j) r[i][j] = M.m[i][j] / l; }
@@ -1031,7 +1032,22 @@ static void Apply(uint8_t* skel) {
         float span = sqrtf(Dot3(dd, dd));
         oneHanded = span > g_c.twoHandMaxSpan;
         g_lastSpan = span;
-        if (!oneHanded) XformPt(Map, l0, fg);
+        if (!oneHanded) {
+            // v232: the animation's support hand slides on the weapon while running (and pops where the cycle loops):
+            // its place relative to the right hand is low-pass filtered (ForegripSmoothing, seconds)
+            if (g_c.foregripSmooth > 0.0f) {
+                static float sm[3]; static bool have = false; static double lt = 0; static void* lw = nullptr;
+                M4 ih; float loc[3];
+                if (Inv(Bw[rh], ih)) {
+                    XformPt(ih, l0, loc);
+                    double tn = QpcSec(); float dt = lt > 0 ? (float)(tn - lt) : 1.0f; lt = tn;
+                    if (!have || lw != g_curWeapon || dt > 0.25f) { memcpy(sm, loc, 12); have = true; lw = g_curWeapon; }
+                    else { float k = 1.0f - expf(-dt / g_c.foregripSmooth); for (int q = 0; q < 3; ++q) sm[q] += (loc[q] - sm[q]) * k; }
+                    XformPt(Bw[rh], sm, l0);
+                }
+            }
+            XformPt(Map, l0, fg);
+        }
         else for (int k = 0; k < 3; ++k) fg[k] = tgt[k] - ar[k] * 0.02f - au[k] * 0.07f - ab[k] * 0.02f;   // support hand under the grip
     }
     { float r[3]; toRef(fg, r); Lock(); memcpy(g_foregripRef, r, 12); g_foregripValid = true; g_oneHanded = oneHanded; Unlock(); }
@@ -1287,6 +1303,30 @@ static void Apply(uint8_t* skel) {
                     if (g_armMask[i] && i != hand && i != fore && bones[i].parent == fore) Bw[i] = Mul(Bw[i], R);
             }
             Bw[upa] = newU; Bw[fore] = newF;
+            if (g_c.clavSmooth > 0.0f) {
+                // v232: the clavicles kept the animation's orientation, which swings ~12 cm with the running cycle and
+                // pops where it loops, while the shoulder is held on the view: the shoulders and upper arms twitched.
+                // The animated clavicle (relative to the camera bone) is low-pass filtered (ClavicleSmoothing, seconds)
+                // and placed so that it ends at the shoulder.
+                static float sq[2][4]; static float sc[2][3]; static bool have[2] = { false, false }; static double lt[2] = { 0, 0 };
+                M4 icw; float lp[3]; M4 ica;
+                if (Inv(camW, icw) && Inv(Banim[clav], ica)) {
+                    float up0[3] = { Banim[upa].m[3][0], Banim[upa].m[3][1], Banim[upa].m[3][2] }; XformPt(ica, up0, lp);   // shoulder in the clavicle's frame
+                    M4 rel = Mul(Banim[clav], icw); float q[4]; MatQuat(rel, q);
+                    float scl[3]; for (int c = 0; c < 3; ++c) scl[c] = sqrtf(rel.m[c][0] * rel.m[c][0] + rel.m[c][1] * rel.m[c][1] + rel.m[c][2] * rel.m[c][2]);
+                    double tn = QpcSec(); float dt = lt[side] > 0 ? (float)(tn - lt[side]) : 1.0f; lt[side] = tn;
+                    if (!have[side] || dt > 0.25f) { memcpy(sq[side], q, 16); have[side] = true; }
+                    else { float o[4]; QuatNlerp(sq[side], q, 1.0f - expf(-dt / g_c.clavSmooth), o); memcpy(sq[side], o, 16); }
+                    memcpy(sc[side], scl, 12);
+                    M4 r = QuatMat(sq[side]); for (int c = 0; c < 3; ++c) for (int j = 0; j < 3; ++j) r.m[c][j] *= sc[side][c];
+                    M4 nc = Mul(r, camW);
+                    float e[3]; nc.m[3][0] = nc.m[3][1] = nc.m[3][2] = 0; XformPt(nc, lp, e);
+                    for (int k = 0; k < 3; ++k) nc.m[3][k] = S[k] - e[k];
+                    M4 io; if (Inv(Bw[clav], io)) { M4 D = Mul(io, nc);
+                        for (int i = 0; i < n && i < 512; ++i) if (g_armMask[i] && i != upa && bones[i].parent == clav) Bw[i] = Mul(Bw[i], D); }
+                    Bw[clav] = nc;
+                } else for (int k = 0; k < 3; ++k) Bw[clav].m[3][k] += S[k] - P0[k];
+            } else
             for (int k = 0; k < 3; ++k) Bw[clav].m[3][k] += S[k] - P0[k];       // clavicle follows the shoulder
         }
     }
@@ -3353,6 +3393,8 @@ bool DiagLiveHand(float out[3]) {   // v231: the right hand bone as it is in the
 float DiagForeStep() { return g_dgForeStep; }
 void DiagArm(float pos[10], float rot[10]) { memcpy(pos, g_dgArmPos, 40); memcpy(rot, g_dgArmRot, 40); }
 static bool g_armStab = true; static float g_stabKeep[5];
+bool ClavFix(bool toggle) { static float c0 = -1, f0 = -1; if (c0 < 0) { c0 = g_c.clavSmooth > 0 ? g_c.clavSmooth : 0.5f; f0 = g_c.foregripSmooth > 0 ? g_c.foregripSmooth : 0.3f; }
+    if (toggle) { bool on = g_c.clavSmooth > 0; g_c.clavSmooth = on ? 0 : c0; g_c.foregripSmooth = on ? 0 : f0; } return g_c.clavSmooth > 0; }
 void SetBoneSink(void (*fn)(const float*, const float*, int)) { g_boneSink = fn; }
 void DiagApplied(float p[3], float fw[3], uint64_t* seq) { memcpy(p, g_dbgApplyP, 12); memcpy(fw, g_dbgApplyF, 12); *seq = g_dbgApplySeq; }
 int RigidArmTest() { return g_rigidMode; }
