@@ -12,6 +12,7 @@
 #include "gameaddr.h"
 #include "xr.h"
 #include "controls.h"
+#include "common/arm_pose.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -81,6 +82,8 @@ static float g_lastSpan = 0; static float g_rayRefO[3], g_rayRefD[3]; static DWO
 static float g_foregripRef[3]; static bool g_foregripValid = false, g_oneHanded = true;
 static float g_shotO[3], g_shotF[3], g_camFwdNow[3], g_camRefO[3], g_camRefD[3]; static bool g_shotValid = false;
 static fc2vr::authority::Stamp g_shotSource; static void* g_shotWeapon = nullptr;
+static fc2vr::arm::TwistHistory g_twist[2]; // protected by g_cs; one update per source sample
+static uint64_t g_twistReport[2]{};
 
 struct Bone { uint32_t hash; uint8_t pad0[12]; float local[16]; float model[16]; int parent; uint8_t locked; uint8_t pad1[11]; };
 static_assert(sizeof(Bone) == 0xA0, "bone stride");
@@ -1140,25 +1143,29 @@ static void Apply(uint8_t* skel) {
                 float ur[3], fr[3], n0[3];
                 for (int k = 0; k < 3; ++k) { ur[k] = Banim[fore].m[3][k] - Banim[upa].m[3][k]; fr[k] = Banim[hand].m[3][k] - Banim[fore].m[3][k]; }
                 n0[0] = ur[1] * fr[2] - ur[2] * fr[1]; n0[1] = ur[2] * fr[0] - ur[0] * fr[2]; n0[2] = ur[0] * fr[1] - ur[1] * fr[0];
-                static int hingeRow[2] = { -1, -1 };
-                if (Dot3(n0, n0) > 1e-8f) { Normalize(n0); int best = 0; float bv = -1;
+                const fc2vr::arm::RigKey key{(uintptr_t)g_pawn,(uintptr_t)skel,(uintptr_t)bones,(uintptr_t)f.weapon,
+                    n,upa,fore,hand,(unsigned)(f.map | (phoneMode<<1) | (f.twoHand<<2) | (controls::NormalControls()<<3))};
+                const bool tracked = (side ? f.handAuthority : f.leftAuthority) && xr::InputCurrent(f.source,side);
+                float correction=0; bool correct=false;
+                Lock(); auto& history = g_twist[side]; history.Bind(key,f.source,side);
+                if (history.hinge < 0 && Dot3(n0, n0) > 1e-8f) { Normalize(n0); int best = 0; float bv = -1;
                     for (int r = 0; r < 3; ++r) { float row[3] = { Banim[upa].m[r][0], Banim[upa].m[r][1], Banim[upa].m[r][2] }; Normalize(row); float v = fabsf(Dot3(row, n0)); if (v > bv) { bv = v; best = r; } }
-                    hingeRow[side] = best; }
-                int kr = hingeRow[side];
+                    history.hinge = best; }
+                int kr = history.hinge;
+                float u1[3] = { E[0] - S[0], E[1] - S[1], E[2] - S[2] };
                 if (kr >= 0) {
-                    auto twist = [&](const M4& U, const M4& F, const float* axis) {
-                        float ax[3] = { axis[0], axis[1], axis[2] }; Normalize(ax);
-                        float a[3] = { U.m[kr][0], U.m[kr][1], U.m[kr][2] }, b[3] = { F.m[kr][0], F.m[kr][1], F.m[kr][2] };
-                        float da = Dot3(a, ax), db = Dot3(b, ax);
-                        for (int k = 0; k < 3; ++k) { a[k] -= ax[k] * da; b[k] -= ax[k] * db; }
-                        float c[3] = { a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
-                        return atan2f(Dot3(c, ax), Dot3(a, b));
-                    };
-                    float u1[3] = { E[0] - S[0], E[1] - S[1], E[2] - S[2] };
-                    float d = twist(newU, newF, u1) - twist(Banim[upa], Banim[fore], ur);
-                    while (d > 3.14159265f) d -= 6.2831853f; while (d < -3.14159265f) d += 6.2831853f;
+                    float live=0,rest=0;
+                    const bool measured = fc2vr::arm::ProjectedAngle(Read3(newU.m[kr]),Read3(newF.m[kr]),Read3(u1),live)
+                        && fc2vr::arm::ProjectedAngle(Read3(Banim[upa].m[kr]),Read3(Banim[fore].m[kr]),Read3(ur),rest);
+                    correct = history.Resolve(live-rest,key,f.source,side,tracked && measured,correction);
+                } else history.Clear();
+                const bool report = correct && (!g_twistReport[side] || f.source.sequence-g_twistReport[side] >= 900);
+                if (report) g_twistReport[side]=f.source.sequence;
+                Unlock();
+                if (correct) {
+                    if (report) LOG("arms: arm-twist-1 side=%d seq=%llu hinge=%d continuous=%.2f deg weight=%.2f",side,(unsigned long long)f.source.sequence,kr,correction*57.29578f,g_c.upperArmTwist);
                     Normalize(u1);
-                    newU = Mul(Mul(Mul(newU, Translate(-S[0], -S[1], -S[2])), RotMat(u1, d * g_c.upperArmTwist)), Translate(S[0], S[1], S[2]));
+                    newU = Mul(Mul(Mul(newU, Translate(-S[0], -S[1], -S[2])), RotMat(u1, correction * g_c.upperArmTwist)), Translate(S[0], S[1], S[2]));
                 }
             }
             M4 iu, iF; if (!Inv(oldU, iu) || !Inv(oldF, iF)) continue;
