@@ -482,6 +482,11 @@ static volatile LONG g_bufCreates = 0; static LONG g_bufLogged = 0; static LONGL
 static void ModOff(uintptr_t a, char* out, size_t n);
 struct BufSite { uint32_t c[4]; int usage, bind; uint32_t n; uint64_t bytes; };
 static BufSite g_bufSites[128];
+static void* g_capRTV0 = nullptr; static int g_capEye = 0;
+#include <string>
+#include <vector>
+static void ShowToast(const char* t);
+namespace cbcap { void NoteBuffer(ID3D10Buffer* b); void HookCreateVS(void** vt); void Install(void** vt); void Arm(); void Present(const char* dir); void NoteBones(const float* W, const float* models, int n); }
 static HRESULT STDMETHODCALLTYPE Hook_CreateBuffer(ID3D10Device* d, const D3D10_BUFFER_DESC* bd, const D3D10_SUBRESOURCE_DATA* init, ID3D10Buffer** out) {
     InterlockedIncrement(&g_bufCreates);
     if (bd) g_bufBytes += bd->ByteWidth;
@@ -494,7 +499,9 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateBuffer(ID3D10Device* d, const D3D10_
             if (!e.n) { memcpy(e.c, c, sizeof c); e.usage = bd->Usage; e.bind = bd->BindFlags; e.n = 1; e.bytes = bd->ByteWidth; break; }
         }
     }
-    return o_CreateBuffer(d, bd, init, out);
+    HRESULT hr = o_CreateBuffer(d, bd, init, out);
+    if (SUCCEEDED(hr) && bd && (bd->BindFlags & D3D10_BIND_CONSTANT_BUFFER) && out && *out) cbcap::NoteBuffer(*out);
+    return hr;
 }
 static CreateRTV_t o_CreateRTV = nullptr;
 static HRESULT STDMETHODCALLTYPE Hook_CreateTexture2D(ID3D10Device* d, const D3D10_TEXTURE2D_DESC* td, const D3D10_SUBRESOURCE_DATA* init, ID3D10Texture2D** out) {
@@ -565,10 +572,11 @@ static void STDMETHODCALLTYPE Hook_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, 
 static void STDMETHODCALLTYPE Hook_DrawInst(ID3D10Device* d, UINT a, UINT b, UINT c, UINT e) { o_DrawInst(d, a, b, c, e); }
 // Inline hooks on the runtime implementations (catch every caller, cached pointers included).
 static DrawIndexed_t t_DrawIndexed = nullptr; static Draw_t t_Draw = nullptr; static DrawIdxInst_t t_DrawIdxInst = nullptr; static DrawInst_t t_DrawInst = nullptr; static OMSetRT_t t_OMSetRT = nullptr;
-static void STDMETHODCALLTYPE I_DrawIndexed(ID3D10Device* d, UINT n, UINT s0, INT b) { NoteDraw(__builtin_frame_address(0), d); t_DrawIndexed(d, n, s0, b); }
-static void STDMETHODCALLTYPE I_Draw(ID3D10Device* d, UINT n, UINT s0) { NoteDraw(__builtin_frame_address(0), d); t_Draw(d, n, s0); }
-static void STDMETHODCALLTYPE I_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, UINT c, INT e, UINT f) { NoteDraw(__builtin_frame_address(0), d); t_DrawIdxInst(d, a, b, c, e, f); }
-static void STDMETHODCALLTYPE I_DrawInst(ID3D10Device* d, UINT a, UINT b, UINT c, UINT e) { NoteDraw(__builtin_frame_address(0), d); t_DrawInst(d, a, b, c, e); }
+namespace cbcap { void OnDraw(uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t e, uint32_t f, void* rtv, int eye); }
+static void STDMETHODCALLTYPE I_DrawIndexed(ID3D10Device* d, UINT n, UINT s0, INT b) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(1, n, s0, (uint32_t)b, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawIndexed(d, n, s0, b); }
+static void STDMETHODCALLTYPE I_Draw(ID3D10Device* d, UINT n, UINT s0) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(2, n, s0, 0, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_Draw(d, n, s0); }
+static void STDMETHODCALLTYPE I_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, UINT c, INT e, UINT f) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(3, a, b, c, (uint32_t)e, f, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawIdxInst(d, a, b, c, e, f); }
+static void STDMETHODCALLTYPE I_DrawInst(ID3D10Device* d, UINT a, UINT b, UINT c, UINT e) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(4, a, b, c, e, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawInst(d, a, b, c, e); }
 // ---- per-eye UI viewport (UiMode 1)
 typedef void (STDMETHODCALLTYPE *RSSetVP_t)(ID3D10Device*, UINT, const D3D10_VIEWPORT*);
 static RSSetVP_t o_RSSetVP = nullptr, t_RSSetVP = nullptr;
@@ -643,6 +651,7 @@ static void NoteEyeBind(ID3D10View* v, bool depth) {
     t->Release();
 }
 static void STDMETHODCALLTYPE I_OMSetRT(ID3D10Device* d, UINT n, ID3D10RenderTargetView* const* rtv, ID3D10DepthStencilView* dsv) {
+    g_capRTV0 = (rtv && n) ? (void*)rtv[0] : nullptr;
     ScanDrawSlots();
     if (g_eyeBindsOn && g_inEye) { NoteEyeBind(dsv, true); if (rtv) for (UINT k = 0; k < n && k < 8; ++k) NoteEyeBind(rtv[k], false); }
     if (g_capCollect && rtv) for (UINT k = 0; k < n && k < 8; ++k) if (rtv[k] && g_nCapRTs < 64) {
@@ -954,6 +963,103 @@ static void InlineHookImpl(void* fn, void* hook, void** tramp, const char* name)
     char where[96]; ModOff((uintptr_t)p, where, sizeof where);
     LOG("inline %s at %s: %d", name, where, ok);
 }
+
+// ---------------------------------------------------------------- v232 arm jitter: GPU constant capture (Ctrl+F4)
+// Records 3 consecutive frames: every constant buffer write (Map/Unmap, UpdateSubresource), VS constant-buffer and
+// shader bindings, every draw (with the bound VS CBs, render target, eye), and the arm skeleton the mod wrote (from the
+// game thread). Written to fc2vr_cbcap.bin with the bytecode of the vertex shaders used, for offline analysis.
+namespace cbcap {
+typedef void (STDMETHODCALLTYPE *VSSetCB_t)(ID3D10Device*, UINT, UINT, ID3D10Buffer* const*);
+typedef void (STDMETHODCALLTYPE *VSSetShader_t)(ID3D10Device*, ID3D10VertexShader*);
+typedef void (STDMETHODCALLTYPE *UpdSub_t)(ID3D10Device*, ID3D10Resource*, UINT, const D3D10_BOX*, const void*, UINT, UINT);
+typedef HRESULT (STDMETHODCALLTYPE *CreateVS_t)(ID3D10Device*, const void*, SIZE_T, ID3D10VertexShader**);
+typedef HRESULT (STDMETHODCALLTYPE *BufMap_t)(ID3D10Buffer*, D3D10_MAP, UINT, void**);
+typedef void (STDMETHODCALLTYPE *BufUnmap_t)(ID3D10Buffer*);
+static VSSetCB_t t_VSSetCB; static VSSetShader_t t_VSSetShader; static UpdSub_t t_UpdSub; static CreateVS_t o_CreateVS; static BufMap_t t_Map; static BufUnmap_t t_Unmap;
+static CRITICAL_SECTION cs; static bool csInit; static volatile int state;   // 0 idle, 1 armed (starts at next present), 2 capturing
+static int frames; static std::string out; static ID3D10Buffer* cb[16]; static void* curVS;
+struct MapRec { ID3D10Buffer* b; void* p; }; static MapRec maps[64];
+struct VsCode { void* vs; std::string code; }; static std::vector<VsCode> vsCodes; static CRITICAL_SECTION vsCs; static bool vsInit;
+static void Put(char type, const void* a, uint32_t na, const void* b = nullptr, uint32_t nb = 0) {
+    if (out.size() > (64u << 20)) return;
+    uint32_t len = na + nb; out.push_back(type); out.append((const char*)&len, 4); out.append((const char*)a, na); if (b && nb) out.append((const char*)b, nb);
+}
+static bool On() { return state == 2; }
+static void STDMETHODCALLTYPE I_VSSetCB(ID3D10Device* d, UINT start, UINT n, ID3D10Buffer* const* b) {
+    if (b) for (UINT i = 0; i < n && start + i < 16; ++i) cb[start + i] = b[i];
+    if (On()) { EnterCriticalSection(&cs); uint32_t h[2 + 16] = { start, n }; for (UINT i = 0; i < n && i < 16; ++i) h[2 + i] = (uint32_t)(uintptr_t)(b ? b[i] : nullptr); Put('S', h, 8 + 4 * (n < 16 ? n : 16)); LeaveCriticalSection(&cs); }
+    t_VSSetCB(d, start, n, b);
+}
+static void STDMETHODCALLTYPE I_VSSetShader(ID3D10Device* d, ID3D10VertexShader* vs) { curVS = vs; t_VSSetShader(d, vs); }
+static void BufData(ID3D10Buffer* b, const void* data) {
+    D3D10_BUFFER_DESC bd; b->GetDesc(&bd); if (!(bd.BindFlags & D3D10_BIND_CONSTANT_BUFFER) || bd.ByteWidth > 65536) return;
+    uint32_t h[2] = { (uint32_t)(uintptr_t)b, bd.ByteWidth }; EnterCriticalSection(&cs); Put('B', h, 8, data, bd.ByteWidth); LeaveCriticalSection(&cs);
+}
+static void STDMETHODCALLTYPE I_UpdSub(ID3D10Device* d, ID3D10Resource* r, UINT sub, const D3D10_BOX* box, const void* data, UINT rp, UINT dp) {
+    if (On() && !box && data && r) { D3D10_RESOURCE_DIMENSION dim; r->GetType(&dim); if (dim == D3D10_RESOURCE_DIMENSION_BUFFER) BufData((ID3D10Buffer*)r, data); }
+    t_UpdSub(d, r, sub, box, data, rp, dp);
+}
+static HRESULT STDMETHODCALLTYPE I_Map(ID3D10Buffer* b, D3D10_MAP t, UINT f, void** pp) {
+    HRESULT hr = t_Map(b, t, f, pp);
+    if (On() && SUCCEEDED(hr) && pp && *pp && t != D3D10_MAP_READ) { EnterCriticalSection(&cs); for (auto& m : maps) if (!m.b || m.b == b) { m.b = b; m.p = *pp; break; } LeaveCriticalSection(&cs); }
+    return hr;
+}
+static void STDMETHODCALLTYPE I_Unmap(ID3D10Buffer* b) {
+    if (On()) { void* p = nullptr; EnterCriticalSection(&cs); for (auto& m : maps) if (m.b == b) { p = m.p; m.b = nullptr; break; } LeaveCriticalSection(&cs); if (p) BufData(b, p); }
+    t_Unmap(b);
+}
+static HRESULT STDMETHODCALLTYPE H_CreateVS(ID3D10Device* d, const void* code, SIZE_T n, ID3D10VertexShader** out_) {
+    HRESULT hr = o_CreateVS(d, code, n, out_);
+    if (SUCCEEDED(hr) && out_ && *out_ && code && n < 262144) { if (!vsInit) { InitializeCriticalSection(&vsCs); vsInit = true; } EnterCriticalSection(&vsCs); vsCodes.push_back({ *out_, std::string((const char*)code, n) }); LeaveCriticalSection(&vsCs); }
+    return hr;
+}
+void NoteBuffer(ID3D10Buffer* b) {   // first constant buffer created: hook Map/Unmap on the runtime implementation
+    static bool done = false; if (done || !b) return; done = true;
+    void** vt = *(void***)b;
+    InlineHookImpl(vt[10], (void*)&I_Map, (void**)&t_Map, "ID3D10Buffer::Map");
+    InlineHookImpl(vt[11], (void*)&I_Unmap, (void**)&t_Unmap, "ID3D10Buffer::Unmap");
+}
+void Install(void** vt) {
+    if (!csInit) { InitializeCriticalSection(&cs); csInit = true; }
+    if (!vsInit) { InitializeCriticalSection(&vsCs); vsInit = true; }
+    InlineHookImpl(vt[3], (void*)&I_VSSetCB, (void**)&t_VSSetCB, "VSSetConstantBuffers");
+    InlineHookImpl(vt[7], (void*)&I_VSSetShader, (void**)&t_VSSetShader, "VSSetShader");
+    InlineHookImpl(vt[34], (void*)&I_UpdSub, (void**)&t_UpdSub, "UpdateSubresource");
+}
+void HookCreateVS(void** vt) { DWORD o; VirtualProtect(&vt[79], 4, PAGE_EXECUTE_READWRITE, &o); o_CreateVS = (CreateVS_t)vt[79]; vt[79] = (void*)&H_CreateVS; VirtualProtect(&vt[79], 4, o, &o); }
+void OnDraw(uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t e, uint32_t f, void* rtv, int eye) {
+    if (!On()) return;
+    uint32_t h[8 + 8] = { kind, a, b, c, e, f, (uint32_t)(uintptr_t)curVS, (uint32_t)(uintptr_t)rtv | ((uint32_t)(eye & 3) << 30) };
+    for (int i = 0; i < 8; ++i) h[8 + i] = (uint32_t)(uintptr_t)cb[i];
+    EnterCriticalSection(&cs); Put('D', h, sizeof h); LeaveCriticalSection(&cs);
+}
+void NoteBones(const float* W, const float* models, int n) {   // game thread, after the arm write
+    if (state != 2 && state != 1) return;
+    uint32_t h[2] = { GetCurrentThreadId(), (uint32_t)n }; EnterCriticalSection(&cs);
+    std::string buf((const char*)h, 8); buf.append((const char*)W, 64); buf.append((const char*)models, n * 64);
+    Put('K', buf.data(), (uint32_t)buf.size()); LeaveCriticalSection(&cs);
+}
+void Arm() { if (state == 0) { state = 1; LOG("cbcap: armed (3 frames)"); ShowToast("GPU capture: 3 frames"); } }
+void Present(const char* iniDir) {   // render thread, each present
+    if (state == 1) { EnterCriticalSection(&cs); out.clear(); frames = 0; for (auto& m : maps) m.b = nullptr; LeaveCriticalSection(&cs); state = 2; }
+    if (state != 2) return;
+    double t = NowMs(); uint32_t h[3] = { (uint32_t)frames, 0, 0 }; memcpy(&h[1], &t, 8);
+    EnterCriticalSection(&cs); Put('F', h, 12); LeaveCriticalSection(&cs);
+    if (++frames <= 3) return;
+    state = 3;
+    // vertex shaders used
+    std::vector<void*> used; size_t i = 0;
+    while (i + 5 <= out.size()) { char ty = out[i]; uint32_t len; memcpy(&len, &out[i + 1], 4); if (ty == 'D' && len >= 28) { uint32_t vs; memcpy(&vs, &out[i + 5 + 24], 4); bool k = false; for (auto u : used) if (u == (void*)(uintptr_t)vs) k = true; if (!k) used.push_back((void*)(uintptr_t)vs); } i += 5 + len; }
+    EnterCriticalSection(&vsCs);
+    for (auto& v : vsCodes) for (auto u : used) if (u == v.vs) { uint32_t p = (uint32_t)(uintptr_t)v.vs; Put('C', &p, 4, v.code.data(), (uint32_t)v.code.size()); }
+    LeaveCriticalSection(&vsCs);
+    char path[MAX_PATH]; snprintf(path, sizeof path, "%sfc2vr_cbcap.bin", iniDir);
+    FILE* fp = fopen(path, "wb"); if (fp) { fwrite(out.data(), 1, out.size(), fp); fclose(fp); }
+    LOG("cbcap: %u bytes written to %s (%u vertex shaders)", (unsigned)out.size(), path, (unsigned)used.size());
+    ShowToast("GPU capture saved");
+    out.clear(); out.shrink_to_fit(); state = 0;
+}
+}
 static void InstallInlineDrawHooks() {
     static bool done = false; if (done) return; done = true;
     InlineHookImpl((void*)o_DrawIndexed, (void*)&I_DrawIndexed, (void**)&t_DrawIndexed, "DrawIndexed");
@@ -962,6 +1068,8 @@ static void InstallInlineDrawHooks() {
     InlineHookImpl((void*)o_DrawInst, (void*)&I_DrawInst, (void**)&t_DrawInst, "DrawInstanced");
     InlineHookImpl((void*)o_OMSetRT, (void*)&I_OMSetRT, (void**)&t_OMSetRT, "OMSetRenderTargets");
     if (o_RSSetVP) InlineHookImpl((void*)o_RSSetVP, (void*)&I_RSSetVP, (void**)&t_RSSetVP, "RSSetViewports");
+    if (g_vtDev) cbcap::Install(*(void***)g_vtDev);
+    arms::SetBoneSink(&cbcap::NoteBones);
 }
 // DLSS upscaling: the eyes render smaller than shown, so texture detail is picked one or more mip levels too blurry.
 // While an eye renders, every pixel-shader sampler is swapped for a copy with MipLODBias += log2(render / output)
@@ -1001,6 +1109,7 @@ static void HookDeviceVtable(ID3D10Device* dev) {
     void** vt = *(void***)dev;
     DWORD old; VirtualProtect(&vt[71], 6 * 4, PAGE_EXECUTE_READWRITE, &old);
     o_CreateBuffer = (CreateBuffer_t)vt[71]; vt[71] = (void*)&Hook_CreateBuffer;
+    cbcap::HookCreateVS(vt);
     { DWORD o2; VirtualProtect(&vt[8], 17 * 4, PAGE_EXECUTE_READWRITE, &o2);
       o_DrawIndexed = (DrawIndexed_t)vt[8]; vt[8] = (void*)&Hook_DrawIndexed;
       o_Draw = (Draw_t)vt[9]; vt[9] = (void*)&Hook_Draw;
@@ -1750,6 +1859,7 @@ static void Hotkeys(const XrPosef* head) {
     { static bool prevF4 = false; bool f4 = (GetAsyncKeyState(VK_F4) & 0x8000) != 0 && !(GetAsyncKeyState(VK_MENU) & 0x8000);   // v231: 3 s motion trace
       bool sh = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
       if (f4 && !prevF4 && sh) { g_motionTrace = 270; LOG("motion trace: 3 s started (Shift+F4)"); ShowToast("Recording motion (3 s)"); }
+      if (f4 && !prevF4 && (GetAsyncKeyState(VK_CONTROL) & 0x8000)) cbcap::Arm(); else
       if (f4 && !prevF4 && !sh) { int m = (arms::RigidArmTest() + 1) % 3; arms::SetRigidArmTest(m); ShowToast(m == 0 ? "Arm test: off (normal arms)" : m == 1 ? "Arm test 1: arms rigid on the hands" : "Arm test 2: whole body rigid on the hands"); }
 
       prevF4 = f4; }
@@ -2830,7 +2940,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             perf::SetPhase(e ? perf::P_EYE1 : perf::P_EYE0);
             static bool s_census = true;
             if (e == 0 && (dlssOn || afw::Wanted()) && s_census) { g_eyeBindsOn = true; }
-            g_inEye = true; g_uiEye = e; g_renderEye = e; hang::Mark(e ? "eye1 render" : "eye0 render");
+            g_inEye = true; g_uiEye = e; g_renderEye = e; g_capEye = e; hang::Mark(e ? "eye1 render" : "eye0 render");
             if (g_capState == 2) TraceMark(e ? "eye1 dispatch begin" : "eye0 dispatch begin");
             if (g_eyeTex) {
                 // Off-screen at headset resolution, exactly like the engine's tiled-screenshot path:
@@ -3036,6 +3146,7 @@ static XrPosef MenuPose() {
 }
 static void __fastcall Hook_Present(void* self, void* edx, int a1) {
     hang::Beat(); hang::Mark("present");
+    cbcap::Present(g_dir);
     {
         static int logged = 0; static uintptr_t lastSc = 0; static int changes = 0;
         uint8_t* drv = (uint8_t*)self;
@@ -3536,7 +3647,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v232 test 2 = 1.0.2 + rigid arm / whole-skeleton jitter A/B on F4, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v232 test 3 = 1.0.2 + F4 rigid A/B, Ctrl+F4 GPU constant capture, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

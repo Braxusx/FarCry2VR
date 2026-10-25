@@ -58,6 +58,7 @@ static CRITICAL_SECTION g_cs; static bool g_csInit = false;
 static Frame g_frame;                               // latest from the render thread
 static FrameUsage g_frameUsage;
 static volatile uint8_t* g_playerSkel = nullptr;    // player's skeleton object (bone array +0x20, count +0x2C)
+static void (*g_boneSink)(const float*, const float*, int) = nullptr;
 static volatile bool g_rigidTest = false; static volatile long g_rigidGen = 0; static volatile int g_rigidMode = 0;   // v232 F4 A/B
 static float g_dgW[3], g_dgHand[3], g_dgTarget[3]; static long g_dgSeq = 0; static float g_dgForeStep = 0; static float g_dgBend[2] = {}; static float g_dgModel[512][16]; static bool g_dgWritten[512]; static int g_dgN = 0; static uint8_t* g_dgSkel = nullptr; static float g_dgArmPos[10], g_dgArmRot[10];   // v231 jitter diagnostic
 static volatile uint8_t* g_playerGfx = nullptr;     // its graphic component (world matrix at +0x170)
@@ -1398,6 +1399,7 @@ static void Apply(uint8_t* skel) {
         dst[3] = w3[0]; dst[7] = w3[1]; dst[11] = w3[2]; dst[15] = w3[3];
     }
     InterlockedIncrement(&g_applied);
+    if (g_boneSink) { static float mods[512 * 16]; int m = n < 512 ? n : 512; for (int i = 0; i < m; ++i) memcpy(mods + i * 16, bones[i].model, 64); float w[16]; memcpy(w, W.m, 64); g_boneSink(w, mods, m); }
     {   // v231: keep what was written to every arm / helper bone (model space) for the render-time comparison
         Lock(); g_dgN = n < 512 ? n : 512; for (int i = 0; i < g_dgN; ++i) { g_dgWritten[i] = (g_armMask[i] || g_follow[i] >= 0); if (g_dgWritten[i]) memcpy(g_dgModel[i], bones[i].model, 64); } g_dgSkel = skel; Unlock();
     }
@@ -3348,6 +3350,7 @@ bool DiagLiveHand(float out[3]) {   // v231: the right hand bone as it is in the
 float DiagForeStep() { return g_dgForeStep; }
 void DiagArm(float pos[10], float rot[10]) { memcpy(pos, g_dgArmPos, 40); memcpy(rot, g_dgArmRot, 40); }
 static bool g_armStab = true; static float g_stabKeep[5];
+void SetBoneSink(void (*fn)(const float*, const float*, int)) { g_boneSink = fn; }
 int RigidArmTest() { return g_rigidMode; }
 void SetRigidArmTest(int mode) { InterlockedIncrement(&g_rigidGen); g_rigidMode = mode; g_rigidTest = mode != 0; LOG("arms: rigid test mode %d (%s)", mode, mode == 0 ? "off" : mode == 1 ? "arm chains" : "whole skeleton"); }
 bool ArmStability() { return g_armStab; }
