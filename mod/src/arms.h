@@ -13,6 +13,7 @@ struct Config {
     float softIk = 0.0f;         // SoftIkStart (v231): share of the arm length where the shoulder starts easing toward the hand (0 = off)
     float softIkMaxPull = 0.12f;  // SoftIkMaxShoulderPull (v231): m, for the free left hand
     float elbowSmooth = 0.0f;    // ElbowSmoothing (v231): seconds    // UpperArmTwistSmoothing (v231): seconds
+    int localFrame = 1;          // ArmLocalFrame (v232): arm maths in a frame near the player (float precision)
     float clavSmooth = 0.5f;     // ClavicleSmoothing (v232): seconds; the animated clavicles are low-pass filtered (0 = off)
     float foregripSmooth = 0.3f; // ForegripSmoothing (v232): seconds; the animation's support-hand place on the weapon (0 = off)
     float armSmooth = 0.0f;      // ArmSmoothing (v231): seconds; the animated arm bones the solve starts from are smoothed (0 = off)
@@ -142,6 +143,7 @@ float DiagForeStep();
 void DiagArm(float pos[10], float rot[10]);   // v231: per-frame change of R/L forearm, R/L upper arm, R/L forearm twist (mm, deg)   // v231: largest per-frame turn of the animated forearms (deg)
 float ArmSmooth(); void SetArmSmooth(float s);
 bool ArmStability(); void SetArmStability(bool on);
+bool LocalFrameToggle();   // v232 Ctrl+F5 A/B
 bool ClavFix(bool toggle);   // v232 F4 A/B: clavicle + foregrip smoothing on/off
 void DiagApplied(float p[3], float fw[3], uint64_t* seq);   // v232 mocap
 void SetBoneSink(void (*fn)(const float* W, const float* models, int n));   // v232: skeleton as written, each frame (GPU capture)
