@@ -1,0 +1,37 @@
+{
+  "checkpoint": "scenario-runner-2",
+  "native_source_commit": "5d6e4c15507352f63dbb5b2edb2631b588031297",
+  "compiler": "i686-w64-mingw32-g++ 16.2.0 (MSYS2 Rev3)",
+  "environment": "build_only",
+  "game_launched": false,
+  "xr_session_started": false,
+  "deployed": false,
+  "packaged": false,
+  "native_accepted": false,
+  "artifacts": [
+    {
+      "path": "build/scenario-debug-2/dinput8.dll",
+      "scenario_testing": 1,
+      "bytes": 1376395,
+      "sha256": "45023cd9cef5673c5817d080349fc7ccfc62c4e9e039848efa9956cda39913d9",
+      "pe": "PE32/i386",
+      "proxy_export": "DirectInput8Create",
+      "arming_tokens_and_debug_symbols": "present",
+      "ascii_and_utf16_payload_checks": "PASS",
+      "warnings": 31,
+      "new_warnings": 0
+    },
+    {
+      "path": "build/scenario-production-2/dinput8.dll",
+      "scenario_testing": 0,
+      "bytes": 1311159,
+      "sha256": "0eb79aa35fd4db911553eb41c017bee2d0b4585d613b8dd000928c1a86b580e0",
+      "pe": "PE32/i386",
+      "proxy_export": "DirectInput8Create",
+      "arming_tokens_and_debug_symbols": "absent",
+      "ascii_and_utf16_payload_checks": "PASS",
+      "warnings": 31,
+      "new_warnings": 0
+    }
+  ]
+}

@@ -5,6 +5,11 @@ Base: `92a29c5b1e28a652d067262aacc59b421ed044c1` (upstream 1.0.1).
 
 ## Latest checkpoint: scenario-runner-2 (local only, debug-only)
 
+Implementation: `5d6e4c15507352f63dbb5b2edb2631b588031297`.
+Build identities and retained logs: `docs/evidence/scenario-runner-2/`.
+Standalone receipt: `receipts/20261026-scenario-runner-2.json` (validated locally;
+no fleet submission or registration change).
+
 Hardened provenance, stereo applied-pose matching and baseline compatibility;
 the previously reproduced mixed-environment and mixed-applied-pose checker gaps
 are rejected by retained controls. Headers pin actual module files, an INI snapshot,

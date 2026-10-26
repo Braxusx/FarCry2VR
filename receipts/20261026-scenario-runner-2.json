@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "project": "FarCry2VR-Braxusx",
+  "run_id": "20261026-scenario-runner-2",
+  "recorded_at": "2026-10-26T03:29:57Z",
+  "target": {
+    "name": "Braxusx/FarCry2VR local contribution: v2 provenance and sampled motion review",
+    "identity_kind": "git_commit",
+    "identity": "5d6e4c15507352f63dbb5b2edb2631b588031297"
+  },
+  "question": "Can the debug runner require independent temporal stereo observations and its offline tools reject incompatible or changed evidence while retaining production authority and distinct visual/HMD review?",
+  "claim": "Source and harness controls establish required per-sample acknowledgements, full run provenance, stricter stereo applied-pose/clock/context matching, compatible-baseline checks and hash-bound review artifacts. Missing/repeated samples, mixed environments or applied poses, undeclared settings, stale clocks, changed images/reports and failed runs are rejected. Three independently rebuilt broken variants fail assertions. Normal/debug x86 DLLs compile with payload exclusion/inclusion. This confirms the inspected mechanism and offline controls, not native execution, skinning-consumer timing, actual movement pixels, wrist/elbow quality or headset acceptance.",
+  "evidence_grade": "SOURCE",
+  "environment": "source",
+  "method": "Python 3.12.3: 16 receipt methods and 13 review methods, including synthetic file comparisons, artifact tampering, copied-receipt validation and CLI subprocess checks. CMake/MSBuild 18.5.4 Win32 Release: 58 CTest groups. GCC 16.2.0 MSYS2 Rev3 x86: seven portable groups with -Wall -Wextra -Werror; mod/tests/check_scenario_mutants.ps1 rebuilt mixed-applied-pose, endpoint-only and old-sample-ack variants, each returning assertion exit 1 at its intended witness. mod/build-local.ps1 built isolated normal/debug DLLs, checked PE32/i386, DirectInput8Create and ASCII/UTF-16 payload inclusion/exclusion. Both retain 31 prior warnings. A 22-sample synthetic demo generated and reverified stereo and A/B bundles; Node v24.19.0 exercised the generated HTML script with document/timer stubs, not a browser. The registered-project receipt template was initialized under ignored build and adapted to the actual unregistered donor identity for local validation. Prior receipt: 20261026-scenario-runner-1. No game, XR session, deployment, runtime switch, remote write or fleet intake.",
+  "validity": "VALID",
+  "mutation": "persistent",
+  "gates": {
+    "identity": {
+      "status": "PASS",
+      "reason": "Full implementation commit, stamped source/tests/logs and exact output DLL sizes and SHA-256 values identify this checkpoint."
+    },
+    "instrument": {
+      "status": "PASS",
+      "reason": "Nonempty portable/helper tests, real file/hash validation, x86 builds and explicit assertion-failing mutants were inspected. The HTML replay probe used owned synthetic output with a DOM stub, not a real browser or game."
+    },
+    "control": {
+      "status": "PASS",
+      "reason": "Positive fixtures complete; malformed/missing/stale or incompatible fixtures are rejected. Rebuilt mutants remove actual pose matching, intermediate samples or independent acknowledgements and fail their targeted assertions."
+    },
+    "scene": {
+      "status": "NA",
+      "reason": "Offline source/harness work only. No native save, level, controller runtime, game frame, GPU consumer or headset was exercised."
+    },
+    "restore": {
+      "status": "NA",
+      "reason": "Persistent local source edits and isolated ignored fixture/mutant/build output. No running game, deployed DLL, active configuration or shared runtime required restoration."
+    }
+  },
+  "fact_verdict": "CONFIRM",
+  "baseline": {
+    "verdict": "PASS",
+    "reason": "All 58 offline CTest groups and both x86 builds pass. Native and HMD baselines were NOT_MEASURED; this does not approve release or clear their gates."
+  },
+  "limits": "Run labels and external save/profile hashes are declarations, not proof of loaded native state. Module hashes identify files, not a fresh measurement of every mapped byte. Topology fingerprints do not identify mesh weights or establish native lifetimes. Native capture bracketing, GPU queue/bone-cache consumption and actual image quality were not executed. Sampling remains synchronous, pre-DLSS, bounded and observer-affecting; it is not continuous video, final XR composition or performance evidence. The replay probe checks JS behavior against DOM stubs, not browser rendering or visual quality. Review records bind bytes and self-declared attribution, not authenticated human identity. A sampled-image PASS never grants headset acceptance. Existing GOG mapping, saved-hold provenance, reload acknowledgement, physical steering and HMD wrist/elbow gates remain open; ArmRigFix stays default-off.",
+  "artifacts": [
+    {
+      "path": "docs/SCENARIO_EVIDENCE_2026-10-26.md",
+      "sha256": "03a3da5065cc1ea03f185a2f9178f438c8045185475a5b28d18ef43ddd684e9a",
+      "role": "Current scope, provenance/sampling contracts, offline commands, acceptance and limits"
+    },
+    {
+      "path": "docs/evidence/scenario-runner-2/builds.json",
+      "sha256": "a2bee3b4ea9f6d979745dc313275f642fe27e5dab325a411e04182b0438d32bf",
+      "role": "Exact normal/debug DLL identities, payload checks and warning counts"
+    },
+    {
+      "path": "docs/evidence/scenario-runner-2/ctest.log",
+      "sha256": "bbf6848d70c346643b71da20266e4ea1606e353f79dcd26ecce6d214db7d6230",
+      "role": "All 58 offline groups; trailing-space-normalized copy of build/scenario-verification-2/ctest-final.log"
+    },
+    {
+      "path": "docs/evidence/scenario-runner-2/gcc-controls.log",
+      "sha256": "9843ceafd909ed78c67fd21187a9fd53baf359baa8f301b3dcbbfe7f7c987506",
+      "role": "Seven GCC x86 groups and three rebuilt assertion-failing mutants"
+    },
+    {
+      "path": "docs/evidence/scenario-runner-2/review-controls.log",
+      "sha256": "d0b4192b06e64ff07d9e4756b87e9bdec8823e6fcc2168a12b062f59df884c4e",
+      "role": "Synthetic 22-sample bundle outputs and JS DOM-stub probe results, not browser/game evidence"
+    },
+    {
+      "path": "mod/src/common/scenario.h",
+      "sha256": "5ebeac07625390736b5b0d45340fec1a5575ee496b859463b521732617a11e4c",
+      "role": "Portable per-sample plans, deadlines and downstream acknowledgement requirements"
+    },
+    {
+      "path": "mod/src/common/scenario_capture.h",
+      "sha256": "79c750b42a0ae991cb911d867715d3886d113d95f684688b670e4ad1983c09ef",
+      "role": "Encoder, topology fingerprint and applied-pose/clock/format-aware stereo pair gate"
+    },
+    {
+      "path": "mod/src/scenario_runner.cpp",
+      "sha256": "36b30df8e92dc986fc3a5fb0d34ec77176e9d9df969a6c36e05ac2c2114e28ff",
+      "role": "Compile-gated file provenance, timestamps and capture context bracketing"
+    },
+    {
+      "path": "mod/src/scenario_runner.h",
+      "sha256": "78296d55411a33cd214a93a5218e7122f102fed8b5304c542258ece9cd176dcc",
+      "role": "Default-off interface and bounded source-owned frame/palette records"
+    },
+    {
+      "path": "mod/src/arms.cpp",
+      "sha256": "192d281b335689563e1f2680036276b9d026a610812a889a723b01777ab3aee3",
+      "role": "Post-writeback topology/palette observation; no new native address or field"
+    },
+    {
+      "path": "mod/src/xr.cpp",
+      "sha256": "64f65a0ab36610e243ebff04fdeed004835e01dab2953b2a43a4ae40362a238c",
+      "role": "Reported runtime identity from the existing XR initialization path"
+    },
+    {
+      "path": "mod/src/main.cpp",
+      "sha256": "c786200127e342e1a18098bfa977e4800618509d50d28d62b01d2ad6ec419339",
+      "role": "Actual render/XR context and effective rig-setting publication"
+    },
+    {
+      "path": "mod/tests/verify_scenario_run.py",
+      "sha256": "5477b893744f32b339fdc79bd4ad5a634dbecf2ea7c520d7c1226139c8142a8b",
+      "role": "Strict file, provenance, clock, applied-pose and baseline validation"
+    },
+    {
+      "path": "mod/tests/review_scenario_run.py",
+      "sha256": "0ea06527d2f0c8ed91d84b65050d3a86751e7c1eca6c095e488740df100c6584",
+      "role": "Self-contained reverified bundles, timestamped HTML replay, differences and separate review records"
+    },
+    {
+      "path": "mod/tests/test_scenario.cpp",
+      "sha256": "197d15f2d25846f1c371668032ef834d2703e0052ae9928c69f29f8d7a15fda1",
+      "role": "Portable runner/sampler/encoder/pair positive and negative controls"
+    },
+    {
+      "path": "mod/tests/test_scenario_report.py",
+      "sha256": "54fe747a147812b69f0ea0208caf1bdddb924d2f65333b2df8be782b878e40aa",
+      "role": "Synthetic source/clock/provenance/compatibility controls"
+    },
+    {
+      "path": "mod/tests/test_scenario_review.py",
+      "sha256": "d8208ab148b892139090cf6c119bbae1ab89d76b31cae7e08491cffb7dde80c9",
+      "role": "Synthetic preview, bundle, CLI and immutable review record controls"
+    },
+    {
+      "path": "mod/tests/check_scenario_mutants.ps1",
+      "sha256": "88e0c4a775cb6df954e6f1c00de0613a94ac9a069509feeec08199cdb9c71747",
+      "role": "Reproducible isolated GCC baseline and rebuilt broken controls"
+    },
+    {
+      "path": "mod/tests/check_scenario_wiring.cmake",
+      "sha256": "4f0dbd18583f5f5c5c0f638f616c54518dda8d9f6ccd967cfab948331f4a3e14",
+      "role": "Source-only adapter topology guards, not native execution evidence"
+    },
+    {
+      "path": "mod/tests/CMakeLists.txt",
+      "sha256": "54374e5352fa2896388cff9ce66277c1a1faa2016987d5bae824f2edd14af6b3",
+      "role": "Actual registered offline test commands"
+    },
+    {
+      "path": "mod/build-local.ps1",
+      "sha256": "80e5a8f1895c7630753401b1400e8219b02a929f4ba761bee4547bdd278b6472",
+      "role": "Build-only isolated flavors and PE/export/ASCII/UTF-16 payload checks"
+    }
+  ],
+  "routes": [],
+  "do_not_repeat": [
+    {
+      "approach": "Treat matched dimensions or a generic success marker as a sufficient A/B baseline, or relabel repeated endpoint captures as intermediate motion",
+      "reason": "These omit provenance/context/actual applied-pose and independent sample coverage; retained fixture and rebuilt-mutant controls discriminate the errors.",
+      "reopen_when": "A versioned evidence schema explicitly preserves equivalent identities and temporal coverage with independent controls; actual native/visual acceptance still requires separate execution."
+    }
+  ],
+  "next_action": "Keep local. Separately authorize one native run on a verified disposable scene with AFW/DLSS/scope disabled; validate v2 receipts and inspect both-eye samples and native consumer timing. No release or HMD acceptance from these controls. Fleet submission is deferred: donor checkout is unregistered and user scope is offline/local-only."
+}
