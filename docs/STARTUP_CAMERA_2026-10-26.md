@@ -61,4 +61,8 @@ on-foot owner plus all correlated scenario records/checker. If it crashes, use
 the added registers/receiver evidence to select the next static discriminator;
 do not spend another launch without authorization. Always close the owned game.
 
-Native results will be recorded separately after the single bounded attempt.
+Native result: [run 02](NATIVE_SCENARIO_TEST_2026-10-26_02.md) was invalidated by
+a stale installed-log race and stopped during early startup. The corrected
+supervisor now moves prior logs into its private run directory before launch,
+checks file freshness, and has stale/fresh-marker/runtime/AV regression controls.
+Those corrections were tested offline only. No second launch was taken.

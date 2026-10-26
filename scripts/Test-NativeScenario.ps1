@@ -62,6 +62,13 @@ try {
     Copy-Item -LiteralPath $DebugDll -Destination (Join-Path $GameBin 'dinput8.dll') -Force
     Copy-Item -LiteralPath $TestIni -Destination (Join-Path $GameBin 'fc2vr.ini') -Force
     Copy-Item -LiteralPath $TestProfile -Destination $Profile -Force
+    # The previous logs must not remain visible to the supervisor while the new
+    # process is still in the loader. Move (do not discard) their backed-up bytes
+    # into this private run; finally restores the exact originals.
+    foreach($name in @('fc2vr.log','fc2vr_prev.log')) {
+        $prior=Join-Path $GameBin $name
+        if(Test-Path -LiteralPath $prior) { Move-Item -LiteralPath $prior -Destination (Join-Path $RunRoot ('prior-'+$name)) }
+    }
     $environment=@{XR_RUNTIME_JSON=$RuntimeManifest;XRSIM_DIR=(Join-Path $RunRoot 'sim');XRSIM_HEADSET_CONFIG=(Join-Path $RunRoot 'sim/headset.json');XR_API_LAYER_PATH=$null;XR_ENABLE_API_LAYERS=$null;XRTAPE_DIR=$null;FC2VR_SCENARIO='arm-sweep';FC2VR_SCENARIO_ARM='ALLOW_SYNTHETIC_INPUT';FC2VR_SCENARIO_OUT=(Join-Path $RunRoot 'scenarios');FC2VR_SCENARIO_FIXTURE='native-startup-camera-1';FC2VR_SCENARIO_SAVE=(Join-Path $RunRoot 'declared-save.sav');FC2VR_SCENARIO_PROFILE=$Profile}
     foreach($key in $environment.Keys) { $savedEnvironment[$key]=[Environment]::GetEnvironmentVariable($key,'Process');[Environment]::SetEnvironmentVariable($key,$environment[$key],'Process') }
     AssertNoGame
@@ -88,9 +95,8 @@ try {
         $log=Join-Path $GameBin 'fc2vr.log'
         if(Test-Path -LiteralPath $log) {
             $text=[IO.File]::ReadAllText($log)
-            if($text -match 'FC2VR loaded' -and $text -notmatch 'startup-camera-1/scenario-runner-2, scenarioTesting=1') { throw 'Wrong loaded mod marker' }
-            if($text -match 'XR: runtime ' -and $text -notmatch 'XR: runtime xr-sim ') { throw 'Wrong runtime; refusing hardware fallback' }
-            if($text -match 'EXCEPTION c0000005') { throw 'Native access violation recorded (exit code is not acceptance)' }
+            $logFailure=Get-NativeTestLogFailure -Text $text -Fresh ((Get-Item -LiteralPath $log).LastWriteTimeUtc -ge $launchAt)
+            if($logFailure) { throw $logFailure }
         }
         $traces=@(Get-ChildItem -LiteralPath (Join-Path $RunRoot 'scenarios') -Filter trace.jsonl -Recurse -File)
         if($traces.Count -gt 1) { throw 'Multiple traces in a one-launch fixture' }
@@ -125,6 +131,8 @@ finally {
             if(!(Test-Path -LiteralPath $entry.Path) -or (Hash $entry.Path) -ne $entry.Sha256) { Copy-Item -LiteralPath $entry.Backup -Destination $entry.Path -Force }
             if((Hash $entry.Path) -ne $entry.Sha256) { throw 'Save restoration hash mismatch' }
         }
+        $newSaves=@(Get-ChildItem -LiteralPath $SaveDir -File | Where-Object { $_.FullName -notin @($saveBackups|ForEach-Object {$_.Path}) })
+        if($newSaves.Count) { throw 'Unexpected new saves retained for inspection; not claiming exact save inventory restoration' }
         $restored=$true
     } catch { $failure+='; cleanup: '+$_.Exception.Message;Write-Output ('CLEANUP FAILURE: '+$_) }
     foreach($key in $savedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($key,$savedEnvironment[$key],'Process') }

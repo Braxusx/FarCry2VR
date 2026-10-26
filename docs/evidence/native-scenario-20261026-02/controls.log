@@ -1,0 +1,15 @@
+PASS: parse, plan-only, stale directory/log, wrong-marker/runtime/AV controls, nonblocking native child (28.5234ms), affinity and PID-reuse refusal; no game launch
+      Start 59: scenario_receipt_controls
+59/60 Test #59: scenario_receipt_controls ........   Passed    2.75 sec
+      Start 60: scenario_review_controls
+60/60 Test #60: scenario_review_controls .........   Passed    2.42 sec
+
+100% tests passed, 0 tests failed out of 60
+
+Total Test time (real) =  12.63 sec
+NO_DATA: no scenario trace
+VERIFIER_EXIT=2
+INVALID: NO_DATA: no scenario trace
+REVIEW_EXIT=1
+REVIEW_OUTPUT_EXISTS=False
+INDEPENDENT RESTORATION PASS: original hashes, five saves/inventory, no FarCry2

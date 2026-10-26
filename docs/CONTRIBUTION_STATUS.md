@@ -3,7 +3,22 @@
 Date: 2026-10-26. Branch: `codex/tracking-arms-physical-steering`.
 Base: `92a29c5b1e28a652d067262aacc59b421ed044c1` (upstream 1.0.1).
 
-## Latest native attempt: 2026-10-26 — startup failed, scenario unmeasured
+## Latest native attempt: run 02 — invalid early-startup supervisor abort
+
+Local implementation `08480a8` adds native single-pass front-end camera ownership,
+debug crash registers/receiver observations and a suspended/affinity-first bounded
+launcher. Both x86 DLL variants build; all 60 offline CTest groups pass.
+The one additional authorised game launch correctly bound PID 99500, but consumed
+an old installed log before the new DLL wrote its marker and falsely aborted.
+The new log confirms the expected DLL/engine; cleanup stopped the owned process
+and independently restored original files and all five saves. Stale-log isolation
+and regression controls were then fixed offline, with no second launch.
+**The original native callback crash is still unresolved/unverified**; no XR,
+world-policy, menu, scenario or HMD acceptance was reached. See
+[run-02 result](NATIVE_SCENARIO_TEST_2026-10-26_02.md) and
+[startup/launcher implementation](STARTUP_CAMERA_2026-10-26.md). No push/package/PR.
+
+## Previous native attempt: run 01 — startup failed, scenario unmeasured
 
 One user-authorized headless launch loaded the expected v2 debug proxy, accepted
 the exact engine image and initialized xr-sim/800x800 targets, then crashed in a

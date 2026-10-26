@@ -62,4 +62,14 @@ function Get-OwnedTestProcess {
     }
     $p
 }
-Export-ModuleMember -Function Start-NativeTestProcess,Get-OwnedTestProcess
+function Get-NativeTestLogFailure {
+    param([string]$Text,[bool]$Fresh)
+    # Ignore a previous generation even when it contains a crash or a different
+    # build marker. A retained log is evidence, not this process's live telemetry.
+    if(!$Fresh) { return '' }
+    if($Text -match 'FC2VR loaded' -and $Text -notmatch 'startup-camera-1/scenario-runner-2, scenarioTesting=1') { return 'Wrong loaded mod marker' }
+    if($Text -match 'XR: runtime ' -and $Text -notmatch 'XR: runtime xr-sim ') { return 'Wrong runtime; refusing hardware fallback' }
+    if($Text -match 'EXCEPTION c0000005') { return 'Native access violation recorded (exit code is not acceptance)' }
+    return ''
+}
+Export-ModuleMember -Function Start-NativeTestProcess,Get-OwnedTestProcess,Get-NativeTestLogFailure

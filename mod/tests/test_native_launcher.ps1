@@ -15,6 +15,15 @@ $refused=$false
 try { & $script @args } catch { $refused=$_.Exception.Message -like '*RunRoot must not exist*' }
 if(!$refused) { throw 'Used-directory guard failed' }
 Import-Module (Join-Path $repo 'scripts/NativeTestProcess.psm1') -Force
+# Reproduces the actual run-02 race without launching a game: old installed
+# sessions can have both a different marker and an old native exception.
+$stale='FC2VR loaded (1.0.1); XR: runtime VirtualDesktopXR; EXCEPTION c0000005'
+if(Get-NativeTestLogFailure -Text $stale -Fresh $false) { throw 'Stale native log was consumed' }
+if((Get-NativeTestLogFailure -Text $stale -Fresh $true) -ne 'Wrong loaded mod marker') { throw 'Wrong fresh marker was accepted' }
+$current='FC2VR loaded (contribution startup-camera-1/scenario-runner-2, scenarioTesting=1); XR: runtime xr-sim 1.0.0'
+if(Get-NativeTestLogFailure -Text $current -Fresh $true) { throw 'Fresh matching marker was rejected' }
+if((Get-NativeTestLogFailure -Text ($current+' EXCEPTION c0000005') -Fresh $true) -notlike 'Native access violation*') { throw 'Fresh AV was accepted' }
+if((Get-NativeTestLogFailure -Text ($current.Replace('xr-sim','wrong-runtime')) -Fresh $true) -notlike 'Wrong runtime*') { throw 'Fresh wrong runtime was accepted' }
 $identity=$null
 try {
     $start=[DateTime]::UtcNow
@@ -29,7 +38,7 @@ try {
     if(!$refused -or !(Get-OwnedTestProcess $identity)) { throw 'PID reuse control failed' }
     (Get-OwnedTestProcess $identity).WaitForExit(6000)|Out-Null
     if(Get-OwnedTestProcess $identity) { throw 'Benign child did not finish' }
-    Write-Output ("PASS: parse, plan-only, stale directory, nonblocking native child (${ms}ms), affinity and PID-reuse refusal; no game launch")
+    Write-Output ("PASS: parse, plan-only, stale directory/log, wrong-marker/runtime/AV controls, nonblocking native child (${ms}ms), affinity and PID-reuse refusal; no game launch")
 } finally {
     $p=Get-OwnedTestProcess $identity
     if($p) { $p.Kill();$p.WaitForExit(8000)|Out-Null }

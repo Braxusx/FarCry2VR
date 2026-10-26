@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "project": "FarCry2VR-Braxusx",
+  "run_id": "20261026-native-scenario-02",
+  "recorded_at": "2026-10-26T05:16:54Z",
+  "target": {
+    "name": "FC2VR startup-camera-1 debug DLL, source 08480a82ed60b4989af982440d8172aba858bab1, exact Steam Dunia image",
+    "identity_kind": "sha256",
+    "identity": "bd09ac7a2665533170c244e6301de84fd5817ca42f50840caab94f8598b7fef0"
+  },
+  "question": "Does the native startup callback crash recur with a supervised/acknowledged virtual XR fixture and a native single-pass unowned startup viewport?",
+  "claim": "Unanswered. Exactly one process was launched and identity-bound by the new nonblocking suspended/affinity primitive. The supervisor prematurely read the installed prior session log and began cleanup for a false wrong-build result. The actual new log identifies the correct debug DLL and engine gate. The process was stopped in early startup, before XR or the previous crash window. No crash-resolution, world-camera, arm or capture acceptance follows. Stale-log isolation/verdict regression controls were added offline after the run; no second game launch occurred.",
+  "evidence_grade": "LIVE",
+  "environment": "in_game",
+  "method": "User-authorized single bounded run, PID 99500, path/start-ticks recorded in owned.json. Native CreateProcessW(CREATE_SUSPENDED, inheritHandles=false), affinity 0xffff before ResumeThread; process-scoped x86 xr-sim selection and exact exe/engine/debug hashes. Same declared save, test INI/profile and 800x800 boot headset as run 01. Watchdog 240 seconds; false stale-log marker failure immediately triggered graceful close then 12-second matched-PID fallback. Independently checked original file hashes and five-save inventory after restoration. Python 3.12.3 strict checker returned 2/NO_DATA and review builder 1 with no output. All 60 MSVC x86 CTest groups and benign Python-child launch/PID/affinity plus stale/fresh-log controls passed offline. Initial receipt template created with registered in-house ID then adapted to donor repository identity for local-only validation, as in run 01. No fleet submission.",
+  "validity": "INVALID",
+  "mutation": "temporary",
+  "gates": {
+    "identity": {
+      "status": "PASS",
+      "reason": "Actual returned PID/path/start ticks and affinity retained. Exact debug DLL hash checked before temporary deployment; actual new game log shows startup-camera-1/scenario-runner-2 scenarioTesting=1 and exact Steam engine/mapped-header acceptance."
+    },
+    "instrument": {
+      "status": "FAIL",
+      "reason": "Supervisor consumed old installed fc2vr.log before this process wrote its marker. False wrong-build failure stopped coverage during early startup. Corrected current script has offline regression/isolation checks only; used script is preserved unchanged."
+    },
+    "control": {
+      "status": "FAIL",
+      "reason": "No live XR state or post-start fixture acknowledgement was reached before cleanup. Offline benign child and checker controls do not supply the missing native bootstrap control."
+    },
+    "scene": {
+      "status": "FAIL",
+      "reason": "No first viewport-policy decision, menu, declared-save load, on-foot owner, trace or palette/eye sample observed. Original ~94-second crash window was not covered."
+    },
+    "restore": {
+      "status": "PASS",
+      "reason": "Owned PID was stopped after graceful request plus matched-process forced fallback. No FarCry2 remains. Original proxy, INI, GamerProfile, current/previous logs and all five saves/inventory independently match backups. Per-process environment restored; global runtime selection unchanged."
+    }
+  },
+  "fact_verdict": "AMBIGUOUS",
+  "baseline": {
+    "verdict": "NOT_MEASURED",
+    "reason": "Early-startup supervisor abort did not reach the native menu failure or XR initialization. No new native AV appeared in this short window, which cannot establish crash resolution or baseline health."
+  },
+  "limits": "No comparable single-variable A/B: startup policy and launcher/bootstrap changed together. The debug register/receiver probe and safe front-end path were not reached. Stale-log correction and simulator acknowledgement remain game-unverified. No scenario, palette, eye pixels, GPU consumer, HMD or manual-reload acceptance. Forced cleanup is recorded as a failure-quality signal, not a clean scenario completion. Raw game-derived evidence remains ignored/local; no remote writes or release package.",
+  "artifacts": [
+    {
+      "path": "docs/NATIVE_SCENARIO_TEST_2026-10-26_02.md",
+      "sha256": "5abf513ad7ca6a97dadba199193086e3b5f153b57dc2acbd8050ed0bb0ea46c5",
+      "role": "Honest invalid-run report, restoration, correction and remaining discriminator"
+    },
+    {
+      "path": "docs/evidence/native-scenario-20261026-02/summary.json",
+      "sha256": "d9babff4c2c17f357a3a5f1bb2989b1ecc34175e652a11a827b862c4ba19d467",
+      "role": "Structured stage/identity/acceptance limits"
+    },
+    {
+      "path": "docs/evidence/native-scenario-20261026-02/controls.log",
+      "sha256": "6f76edf45637ecf6bba47ecf151cf3096fca7f689cf3a9041968c32a7d8aad24",
+      "role": "Offline checks and actual empty native checker/refusal results"
+    },
+    {
+      "path": "out/native-scenario-20261026-02/test-fc2vr.log",
+      "sha256": "1713e622b6fe6890051fd0f0f1c8a2cc856456462aa4d9bc6b0889086059bdc3",
+      "role": "Actual new native early-startup log; correct marker, no XR or menu coverage"
+    },
+    {
+      "path": "out/native-scenario-20261026-02/owned.json",
+      "sha256": "68ddbbb88b2f08e0d019f2b07cd8db5eb4523ebf58ff20e9226e3b21f7d81b27",
+      "role": "Returned native process identity and pre-resume affinity"
+    },
+    {
+      "path": "out/native-scenario-20261026-02/before.json",
+      "sha256": "1926a5ef425e4368ea86c0654036d298bad0b429206dce08c91d7a106df74234",
+      "role": "Original file/save backup identities"
+    },
+    {
+      "path": "out/native-scenario-20261026-02/cleanup.json",
+      "sha256": "962d94085a8d8b7039aac2c799123aa6ac4c709e6ed5d510a6bc62ab3e5a0ebc",
+      "role": "False supervisor marker failure, forced owned-process cleanup, restored files"
+    },
+    {
+      "path": "out/native-scenario-20261026-02/one-launch.used.ps1",
+      "sha256": "92d0995cb2c5157855e679618d16994ef389ec6104e413d2f6abd44326d17e45",
+      "role": "Exact used supervisor before offline stale-log correction"
+    },
+    {
+      "path": "out/native-scenario-20261026-02/NativeTestProcess.used.psm1",
+      "sha256": "4d7893a3e718803d2c500a2728f771bda20f793a03673c960dcfe15dd22e7419",
+      "role": "Exact used suspended native process primitive"
+    },
+    {
+      "path": "out/native-scenario-20261026-02/supervisor.log",
+      "sha256": "a9db96c61939c3ef0cb0b3494b39db365c406539a6317e9f4365893989c06a7b",
+      "role": "Actual one-launch supervisor output, not a passing test"
+    }
+  ],
+  "routes": [],
+  "do_not_repeat": [
+    {
+      "approach": "Validate loaded build/runtime/crash against an installed previous-session log before the new process opens its own log",
+      "reason": "PID binding can succeed before the proxy DLL writes a log; this run falsely rejected the correct new binary and exhausted its one-launch budget before XR/menu coverage.",
+      "reopen_when": "Prior logs are privately archived, fresh-generation checks and stale/fresh wrong-build/runtime/AV controls pass; a new game attempt is separately authorized."
+    }
+  ],
+  "next_action": "No further launch under this authorization. Keep local. Use corrected fresh-log supervision for an explicitly authorized future run, require post-start xr-sim acknowledgement and surviving menu, then inspect bounded native crash registers/receiver if needed. Only after startup works attempt correlated arm captures. The native startup crash remains unresolved/unverified."
+}
