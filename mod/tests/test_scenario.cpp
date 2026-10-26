@@ -24,7 +24,7 @@ struct Harness {
         if(d.syntheticPose&&!h.select&&pressed) { if(doSwap) { o.weapon=20;++o.ownerEpoch; }pressed=false; }
         if(doPoll) { o.polledSequence=seq;o.polledOwner=o.ownerEpoch;o.polledMs=now;o.emittedTrigger=o.rightAuthority?h.trigger:0; }
         if(doApply&&tracked) { o.appliedSequence=seq;o.appliedOwner=o.ownerEpoch;o.appliedMs=now; }
-        if(d.capture&&doCapture) { if(o.captureTicket!=d.ticket) ++captures;o.captureTicket=d.ticket; }
+        if(d.capture&&doCapture) { if(o.captureTicket!=d.captureId) ++captures;o.captureTicket=d.captureId; }
         if(d.overrideInput&&!d.syntheticPose) ++neutralDrains;
         now+=20;++seq;return d;
     }
@@ -54,11 +54,11 @@ void Loss() {
         if(d.step==2) { held=true;Verify(!h.o.rightAuthority&&h.o.emittedTrigger==0,"tracked held input cannot rearm"); }
         if(d.step==3) { rearmed=true;Verify(h.o.rightAuthority&&h.o.emittedTrigger==0,"neutral recovery rearms without firing"); }
     }
-    Verify(lost&&held&&rearmed&&h.r.Status()==State::Complete&&h.captures==4,"entire loss/recovery path observed");
+    Verify(lost&&held&&rearmed&&h.r.Status()==State::Complete&&h.captures==10,"entire sampled loss/recovery path observed");
     Harness bad(Case::TrackingLoss);for(int i=0;i<40;++i) bad.Tick();bad.o.safe=false;bad.Run();Verify(bad.r.Status()==State::Aborted,"leaving safe gameplay aborts");
 }
 void Sweep() {
-    Harness h(Case::ArmSweep);h.Run();Verify(h.r.Status()==State::Complete&&h.captures==6,"full deterministic sweep completes with modelled downstream observations");
+    Harness h(Case::ArmSweep);h.Run();Verify(h.r.Status()==State::Complete&&h.captures==22,"full sampled sweep completes with modelled downstream observations");
     for(const auto p:{Pattern::Neutral,Pattern::WristOut,Pattern::WristBack,Pattern::ReachOut,Pattern::ReachBack}) for(int i=0;i<=1000;++i) for(unsigned s=0;s<2;++s) {
         const auto hand=Fixture(s,p,float(i)/1000);Verify(Finite(hand.grip.p)&&Unit(hand.grip.q),"sweep finite and unit quaternion");
         const float x=hand.aim.p.x-hand.grip.p.x,y=hand.aim.p.y-hand.grip.p.y,z=hand.aim.p.z-hand.grip.p.z;
@@ -78,13 +78,33 @@ void Lifecycle() {
     Harness time(Case::TrackingLoss);time.Tick();time.now-=21;time.Tick();Verify(time.r.Status()==State::Aborted,"regressing time aborts");
     Harness missing(Case::TrackingLoss);missing.o.safe=false;missing.Run();Verify(missing.r.Status()==State::Failed,"missing positive-control gameplay times out");
     Runner idle;Verify(!idle.Busy()&&idle.Status()==State::Idle&&!idle.Start(Case::None,1),"idle/default is nonmutating");
+    Harness stalled(Case::ArmSweep);
+    while(stalled.r.Index()==0&&stalled.r.Busy()) stalled.Tick();
+    stalled.now+=1000;stalled.Tick();
+    Verify(stalled.r.Status()==State::Failed&&std::string(stalled.r.Reason())=="motion-sample-missed","late samples fail instead of replaying endpoint catch-up frames");
+    Harness held(Case::ArmSweep);
+    while(held.r.Index()==0&&held.r.Busy()) held.Tick();
+    held.doCapture=false;held.Run();Verify(held.r.Status()==State::Failed,"an earlier sample acknowledgement cannot complete later motion samples");
 }
 void Pair() {
-    EyePair p;Verify(!p.Add(0,1,10,20,30,true),"one eye is incomplete");Verify(!p.Add(1,1,11,20,30,true),"different frames cannot form a pair");
-    Verify(p.Add(0,1,11,20,30,true),"same-frame pair acknowledged");p.Clear();
-    Verify(!p.Add(0,2,12,21,31,true)&&!p.Add(1,2,12,22,31,true),"different source sequences cannot pair");
-    Verify(!p.Add(0,3,13,23,32,true)&&!p.Add(1,3,13,23,33,true),"different owners cannot pair");
-    Verify(!p.Add(2,4,14,24,34,true)&&!p.Add(0,4,14,24,34,false),"failed/invalid capture cannot acknowledge");
+    const CaptureIdentity key{1,10,20,30,19,10,2,3,123,1000000,true,false};
+    EyePair p;Verify(!p.Add(0,key,true),"one eye is incomplete");
+    Verify(p.Has(0,key)&&!p.Has(1,key),"duplicate-eye guard uses full identity");
+    Verify(p.Add(1,key,true),"consistent applied-pose pair acknowledged");
+    for(unsigned field=0;field<15;++field) {
+        auto other=key;
+        switch(field) {
+        case 0:++other.id;break;case 1:++other.frame;break;case 2:++other.sequence;break;case 3:++other.owner;break;
+        case 4:++other.poseSequence;break;case 5:++other.poseFrame;break;case 6:++other.generation;break;
+        case 7:++other.space;break;case 8:++other.rig;break;case 9:++other.displayTime;break;
+        case 10:other.physical=false;break;case 11:other.named=true;break;
+        case 12:++other.format;break;case 13:++other.width;break;case 14:++other.height;break;
+        }
+        p.Clear();Verify(!p.Add(0,key,true)&&!p.Add(1,other,true),"mismatched capture/apply/clock/context cannot pair");
+    }
+    p.Clear();Verify(!p.Add(2,key,true)&&!p.Add(0,key,false),"failed/invalid capture cannot acknowledge");
+    const auto seed=14695981039346656037ull;
+    Verify(TopologyWord(seed,123)==TopologyWord(seed,123)&&TopologyWord(seed,123)!=TopologyWord(seed,124),"topology signature deterministic and content-sensitive");
 }
 void Bitmap() {
     std::vector<std::uint8_t> out;const std::uint8_t px[16]={255,0,0,255,0,255,0,255,0,0,255,255,255,255,255,255};

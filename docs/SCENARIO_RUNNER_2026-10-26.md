@@ -1,5 +1,9 @@
 # Debug-only scenario runner — offline checkpoint
 
+Historical v1 checkpoint. Current source/activation requirements, timestamped
+sampling and review tools: [scenario evidence v2](SCENARIO_EVIDENCE_2026-10-26.md).
+The v2 checker deliberately does not certify old v1 receipts as v2 evidence.
+
 Branch: `codex/tracking-arms-physical-steering`. Parent:
 `c0f3627e6c194667e0eccf508b5abc9d6739ae6f`. Local only: no game launch,
 deployment, release packaging, remote operation, runtime switch or headset test.

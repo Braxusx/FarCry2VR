@@ -1,0 +1,485 @@
+UpdateCTestConfiguration  from :D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/DartConfiguration.tcl
+Test project D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 1
+      Start  1: tracking_position
+
+1: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\tracking_frame_tests.exe" "position"
+1: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+1: Test timeout computed to be: 10000000
+1: position: 15 checks, 0 failures
+ 1/58 Test  #1: tracking_position ................   Passed    0.10 sec
+test 2
+      Start  2: tracking_direction
+
+2: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\tracking_frame_tests.exe" "direction"
+2: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+2: Test timeout computed to be: 10000000
+2: direction: 41 checks, 0 failures
+ 2/58 Test  #2: tracking_direction ...............   Passed    0.04 sec
+test 3
+      Start  3: tracking_rotation
+
+3: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\tracking_frame_tests.exe" "rotation"
+3: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+3: Test timeout computed to be: 10000000
+3: rotation: 365 checks, 0 failures
+ 3/58 Test  #3: tracking_rotation ................   Passed    0.04 sec
+test 4
+      Start  4: tracking_stereo
+
+4: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\tracking_frame_tests.exe" "stereo"
+4: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+4: Test timeout computed to be: 10000000
+4: stereo: 15 checks, 0 failures
+ 4/58 Test  #4: tracking_stereo ..................   Passed    0.04 sec
+test 5
+      Start  5: tracking_affine
+
+5: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\tracking_frame_tests.exe" "affine"
+5: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+5: Test timeout computed to be: 10000000
+5: affine: 300 checks, 0 failures
+ 5/58 Test  #5: tracking_affine ..................   Passed    0.04 sec
+test 6
+      Start  6: pose_bob
+
+6: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\pose_frame_tests.exe" "bob"
+6: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+6: Test timeout computed to be: 10000000
+6: legacy bob disagreement 0.0948064 game units; shared disagreement 0.0000000
+6: bob: 1209 checks, 0 failures
+ 6/58 Test  #6: pose_bob .........................   Passed    0.09 sec
+test 7
+      Start  7: pose_yaw
+
+7: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\pose_frame_tests.exe" "yaw"
+7: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+7: Test timeout computed to be: 10000000
+7: yaw: 811 checks, 0 failures
+ 7/58 Test  #7: pose_yaw .........................   Passed    0.04 sec
+test 8
+      Start  8: pose_policy
+
+8: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\pose_frame_tests.exe" "policy"
+8: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+8: Test timeout computed to be: 10000000
+8: policy: 24000 checks, 0 failures
+ 8/58 Test  #8: pose_policy ......................   Passed    0.05 sec
+test 9
+      Start  9: pose_once
+
+9: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\pose_frame_tests.exe" "once"
+9: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+9: Test timeout computed to be: 10000000
+9: once: 156 checks, 0 failures
+ 9/58 Test  #9: pose_once ........................   Passed    0.05 sec
+test 10
+      Start 10: pose_inverse
+
+10: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\pose_frame_tests.exe" "inverse"
+10: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+10: Test timeout computed to be: 10000000
+10: inverse: 3825 checks, 0 failures
+10/58 Test #10: pose_inverse .....................   Passed    0.04 sec
+test 11
+      Start 11: pose_bone
+
+11: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\pose_frame_tests.exe" "bone"
+11: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+11: Test timeout computed to be: 10000000
+11: bone: 11 checks, 0 failures
+11/58 Test #11: pose_bone ........................   Passed    0.04 sec
+test 12
+      Start 12: pose_source_wiring
+
+12: Test command: "C:\Program Files\CMake\bin\cmake.exe" "-DSOURCE_DIR=D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/../src" "-P" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/check_pose_wiring.cmake"
+12: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+12: Test timeout computed to be: 10000000
+12: -- Shared camera frame wiring verified (source only)
+12/58 Test #12: pose_source_wiring ...............   Passed    0.10 sec
+test 13
+      Start 13: authority_freshness
+
+13: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\authority_tests.exe" "freshness"
+13: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+13: Test timeout computed to be: 10000000
+13: freshness: 118 checks, 0 failures
+13/58 Test #13: authority_freshness ..............   Passed    0.09 sec
+test 14
+      Start 14: authority_cache
+
+14: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\authority_tests.exe" "cache"
+14: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+14: Test timeout computed to be: 10000000
+14: cache: 106 checks, 0 failures
+14/58 Test #14: authority_cache ..................   Passed    0.04 sec
+test 15
+      Start 15: authority_rearm
+
+15: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\authority_tests.exe" "rearm"
+15: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+15: Test timeout computed to be: 10000000
+15: rearm: 210 checks, 0 failures
+15/58 Test #15: authority_rearm ..................   Passed    0.04 sec
+test 16
+      Start 16: authority_cursor
+
+16: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\authority_tests.exe" "cursor"
+16: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+16: Test timeout computed to be: 10000000
+16: cursor: 6 checks, 0 failures
+16/58 Test #16: authority_cursor .................   Passed    0.05 sec
+test 17
+      Start 17: authority_safety
+
+17: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\authority_tests.exe" "safety"
+17: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+17: Test timeout computed to be: 10000000
+17: safety: 28 checks, 0 failures
+17/58 Test #17: authority_safety .................   Passed    0.05 sec
+test 18
+      Start 18: authority_finite
+
+18: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\authority_tests.exe" "finite"
+18: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+18: Test timeout computed to be: 10000000
+18: finite: 9 checks, 0 failures
+18/58 Test #18: authority_finite .................   Passed    0.05 sec
+test 19
+      Start 19: authority_source_wiring
+
+19: Test command: "C:\Program Files\CMake\bin\cmake.exe" "-DSOURCE_DIR=D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/../src" "-P" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/check_authority_wiring.cmake"
+19: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+19: Test timeout computed to be: 10000000
+19: -- Input authority adapters wired (source only)
+19/58 Test #19: authority_source_wiring ..........   Passed    0.09 sec
+test 20
+      Start 20: arm_twist
+
+20: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\arm_pose_tests.exe" "twist"
+20: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+20: Test timeout computed to be: 10000000
+20: twist: 13620 checks, 0 failures
+20/58 Test #20: arm_twist ........................   Passed    0.10 sec
+test 21
+      Start 21: arm_reset
+
+21: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\arm_pose_tests.exe" "reset"
+21: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+21: Test timeout computed to be: 10000000
+21: reset: 33 checks, 0 failures
+21/58 Test #21: arm_reset ........................   Passed    0.04 sec
+test 22
+      Start 22: arm_projection
+
+22: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\arm_pose_tests.exe" "projection"
+22: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+22: Test timeout computed to be: 10000000
+22: projection: 1447 checks, 0 failures
+22/58 Test #22: arm_projection ...................   Passed    0.04 sec
+test 23
+      Start 23: weapon_socket
+
+23: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\weapon_pose_tests.exe" "socket"
+23: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+23: Test timeout computed to be: 10000000
+23: socket: 2506 checks, 0 failures
+23/58 Test #23: weapon_socket ....................   Passed    0.27 sec
+test 24
+      Start 24: weapon_ownership
+
+24: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\weapon_pose_tests.exe" "ownership"
+24: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+24: Test timeout computed to be: 10000000
+24: ownership: 41 checks, 0 failures
+24/58 Test #24: weapon_ownership .................   Passed    0.04 sec
+test 25
+      Start 25: weapon_latch
+
+25: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\weapon_pose_tests.exe" "latch"
+25: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+25: Test timeout computed to be: 10000000
+25: latch: 56 checks, 0 failures
+25/58 Test #25: weapon_latch .....................   Passed    0.05 sec
+test 26
+      Start 26: weapon_arc
+
+26: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\weapon_pose_tests.exe" "arc"
+26: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+26: Test timeout computed to be: 10000000
+26: arc: 1088 checks, 0 failures
+26/58 Test #26: weapon_arc .......................   Passed    0.04 sec
+test 27
+      Start 27: weapon_spread
+
+27: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\weapon_pose_tests.exe" "spread"
+27: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+27: Test timeout computed to be: 10000000
+27: spread: 12963 checks, 0 failures
+27/58 Test #27: weapon_spread ....................   Passed    0.05 sec
+test 28
+      Start 28: weapon_invalid_spread
+
+28: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\weapon_pose_tests.exe" "invalid_spread"
+28: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+28: Test timeout computed to be: 10000000
+28: invalid_spread: 7 checks, 0 failures
+28/58 Test #28: weapon_invalid_spread ............   Passed    0.04 sec
+test 29
+      Start 29: motion_source_wiring
+
+29: Test command: "C:\Program Files\CMake\bin\cmake.exe" "-DSOURCE_DIR=D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/../src" "-P" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/check_motion_wiring.cmake"
+29: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+29: Test timeout computed to be: 10000000
+29: -- Motion pose adapters wired (source only)
+29/58 Test #29: motion_source_wiring .............   Passed    0.10 sec
+test 30
+      Start 30: rig_mapping
+
+30: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\arm_rig_tests.exe" "mapping"
+30: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+30: Test timeout computed to be: 10000000
+30: mapping: 74 checks, 0 failures
+30/58 Test #30: rig_mapping ......................   Passed    0.11 sec
+test 31
+      Start 31: rig_joints
+
+31: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\arm_rig_tests.exe" "joints"
+31: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+31: Test timeout computed to be: 10000000
+31: joints: 7211 checks, 0 failures
+31/58 Test #31: rig_joints .......................   Passed    0.05 sec
+test 32
+      Start 32: rig_singular
+
+32: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\arm_rig_tests.exe" "singular"
+32: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+32: Test timeout computed to be: 10000000
+32: singular: 606 checks, 0 failures
+32/58 Test #32: rig_singular .....................   Passed    0.04 sec
+test 33
+      Start 33: rig_wrist
+
+33: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\arm_rig_tests.exe" "wrist"
+33: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+33: Test timeout computed to be: 10000000
+33: wrist: 9626 checks, 0 failures
+33/58 Test #33: rig_wrist ........................   Passed    0.05 sec
+test 34
+      Start 34: rig_cap
+
+34: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\arm_rig_tests.exe" "cap"
+34: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+34: Test timeout computed to be: 10000000
+34: cap: 6 checks, 0 failures
+34/58 Test #34: rig_cap ..........................   Passed    0.05 sec
+test 35
+      Start 35: rig_mesh
+
+35: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\arm_rig_tests.exe" "mesh"
+35: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+35: Test timeout computed to be: 10000000
+35: mesh: 721 checks, 0 failures
+35/58 Test #35: rig_mesh .........................   Passed    0.04 sec
+test 36
+      Start 36: rig_staging
+
+36: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\arm_rig_tests.exe" "staging"
+36: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+36: Test timeout computed to be: 10000000
+36: staging: 16 checks, 0 failures
+36/58 Test #36: rig_staging ......................   Passed    0.05 sec
+test 37
+      Start 37: rig_history
+
+37: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\arm_rig_tests.exe" "history"
+37: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+37: Test timeout computed to be: 10000000
+37: history: 9 checks, 0 failures
+37/58 Test #37: rig_history ......................   Passed    0.05 sec
+test 38
+      Start 38: rig_torso
+
+38: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\arm_rig_tests.exe" "torso"
+38: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+38: Test timeout computed to be: 10000000
+38: torso: 722 checks, 0 failures
+38/58 Test #38: rig_torso ........................   Passed    0.04 sec
+test 39
+      Start 39: rig_source_wiring
+
+39: Test command: "C:\Program Files\CMake\bin\cmake.exe" "-DSOURCE_DIR=D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/../src" "-P" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/check_rig_wiring.cmake"
+39: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+39: Test timeout computed to be: 10000000
+39: -- Named arm mode, ownership and staged commit adapters wired (source only)
+39/58 Test #39: rig_source_wiring ................   Passed    0.07 sec
+test 40
+      Start 40: image_sha
+
+40: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\image_identity_tests.exe" "sha"
+40: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+40: Test timeout computed to be: 10000000
+40: sha: 1042 checks, 0 failures
+40/58 Test #40: image_sha ........................   Passed    0.12 sec
+test 41
+      Start 41: image_headers
+
+41: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\image_identity_tests.exe" "headers"
+41: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+41: Test timeout computed to be: 10000000
+41: headers: 390 checks, 0 failures
+41/58 Test #41: image_headers ....................   Passed    0.04 sec
+test 42
+      Start 42: image_profiles
+
+42: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\image_identity_tests.exe" "profiles"
+42: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+42: Test timeout computed to be: 10000000
+42: profiles: 43 checks, 0 failures
+42/58 Test #42: image_profiles ...................   Passed    0.05 sec
+test 43
+      Start 43: image_translation
+
+43: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\image_identity_tests.exe" "translation"
+43: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+43: Test timeout computed to be: 10000000
+43: translation: 10 checks, 0 failures
+43/58 Test #43: image_translation ................   Passed    0.05 sec
+test 44
+      Start 44: owner_keys
+
+44: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\owner_lease_tests.exe" "keys"
+44: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+44: Test timeout computed to be: 10000000
+44: keys: 45 checks, 0 failures
+44/58 Test #44: owner_keys .......................   Passed    3.18 sec
+test 45
+      Start 45: owner_epochs
+
+45: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\owner_lease_tests.exe" "epochs"
+45: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+45: Test timeout computed to be: 10000000
+45: epochs: 33 checks, 0 failures
+45/58 Test #45: owner_epochs .....................   Passed    0.05 sec
+test 46
+      Start 46: owner_heartbeat
+
+46: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\owner_lease_tests.exe" "heartbeat"
+46: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+46: Test timeout computed to be: 10000000
+46: heartbeat: 10 checks, 0 failures
+46/58 Test #46: owner_heartbeat ..................   Passed    0.05 sec
+test 47
+      Start 47: owner_coverage
+
+47: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\owner_lease_tests.exe" "coverage"
+47: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+47: Test timeout computed to be: 10000000
+47: coverage: 385 checks, 0 failures
+47/58 Test #47: owner_coverage ...................   Passed    0.04 sec
+test 48
+      Start 48: owner_source_wiring
+
+48: Test command: "C:\Program Files\CMake\bin\cmake.exe" "-DSOURCE_DIR=D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/../src" "-P" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/check_owner_wiring.cmake"
+48: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+48: Test timeout computed to be: 10000000
+48: -- Observed owner and exact-image adapters wired (source only)
+48/58 Test #48: owner_source_wiring ..............   Passed    0.08 sec
+test 49
+      Start 49: scenario_parse
+
+49: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\scenario_tests.exe" "parse"
+49: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+49: Test timeout computed to be: 10000000
+49: parse: 22 checks, 0 failures (environment=harness; no game acceptance)
+49/58 Test #49: scenario_parse ...................   Passed    0.10 sec
+test 50
+      Start 50: scenario_swap
+
+50: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\scenario_tests.exe" "swap"
+50: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+50: Test timeout computed to be: 10000000
+50: swap: 5 checks, 0 failures (environment=harness; no game acceptance)
+50/58 Test #50: scenario_swap ....................   Passed    0.04 sec
+test 51
+      Start 51: scenario_loss
+
+51: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\scenario_tests.exe" "loss"
+51: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+51: Test timeout computed to be: 10000000
+51: loss: 79 checks, 0 failures (environment=harness; no game acceptance)
+51/58 Test #51: scenario_loss ....................   Passed    0.04 sec
+test 52
+      Start 52: scenario_sweep
+
+52: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\scenario_tests.exe" "sweep"
+52: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+52: Test timeout computed to be: 10000000
+52: sweep: 30033 checks, 0 failures (environment=harness; no game acceptance)
+52/58 Test #52: scenario_sweep ...................   Passed    0.04 sec
+test 53
+      Start 53: scenario_lifecycle
+
+53: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\scenario_tests.exe" "lifecycle"
+53: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+53: Test timeout computed to be: 10000000
+53: lifecycle: 8 checks, 0 failures (environment=harness; no game acceptance)
+53/58 Test #53: scenario_lifecycle ...............   Passed    0.04 sec
+test 54
+      Start 54: scenario_pair
+
+54: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\scenario_tests.exe" "pair"
+54: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+54: Test timeout computed to be: 10000000
+54: pair: 20 checks, 0 failures (environment=harness; no game acceptance)
+54/58 Test #54: scenario_pair ....................   Passed    0.05 sec
+test 55
+      Start 55: scenario_bitmap
+
+55: Test command: "D:\Dev Debug\Other VR Mods\FarCry2VR\build\tracking-tests-msvc\Release\scenario_tests.exe" "bitmap"
+55: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+55: Test timeout computed to be: 10000000
+55: bitmap: 9 checks, 0 failures (environment=harness; no game acceptance)
+55/58 Test #55: scenario_bitmap ..................   Passed    0.05 sec
+test 56
+      Start 56: scenario_source_wiring
+
+56: Test command: "C:\Program Files\CMake\bin\cmake.exe" "-DSOURCE_DIR=D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/../src" "-P" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/check_scenario_wiring.cmake"
+56: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+56: Test timeout computed to be: 10000000
+56: -- Debug-only raw input / downstream observations wired (source only)
+56/58 Test #56: scenario_source_wiring ...........   Passed    0.10 sec
+test 57
+      Start 57: scenario_receipt_controls
+
+57: Test command: C:\Users\meise\AppData\Local\Programs\Python\Python312\python.exe "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/test_scenario_report.py"
+57: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+57: Test timeout computed to be: 10000000
+57: ................
+57: ----------------------------------------------------------------------
+57: Ran 16 tests in 3.292s
+57:
+57: OK
+57/58 Test #57: scenario_receipt_controls ........   Passed    3.58 sec
+test 58
+      Start 58: scenario_review_controls
+
+58: Test command: C:\Users\meise\AppData\Local\Programs\Python\Python312\python.exe "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/test_scenario_review.py"
+58: Working Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+58: Test timeout computed to be: 10000000
+58: .............
+58: ----------------------------------------------------------------------
+58: Ran 13 tests in 2.955s
+58:
+58: OK
+58/58 Test #58: scenario_review_controls .........   Passed    3.28 sec
+
+100% tests passed, 0 tests failed out of 58
+
+Total Test time (real) =  13.75 sec

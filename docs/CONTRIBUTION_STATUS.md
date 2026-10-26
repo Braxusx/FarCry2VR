@@ -3,7 +3,28 @@
 Date: 2026-10-26. Branch: `codex/tracking-arms-physical-steering`.
 Base: `92a29c5b1e28a652d067262aacc59b421ed044c1` (upstream 1.0.1).
 
-## Latest checkpoint: scenario-runner-1 (local only, debug-only)
+## Latest checkpoint: scenario-runner-2 (local only, debug-only)
+
+Hardened provenance, stereo applied-pose matching and baseline compatibility;
+the previously reproduced mixed-environment and mixed-applied-pose checker gaps
+are rejected by retained controls. Headers pin actual module files, an INI snapshot,
+reported runtime and declared save/profile/scene. Fixture declarations remain
+distinct from proof that the game loaded them. Intentional mod/arm-setting A/B
+changes require explicit allowances; unrelated settings/optics/anchors are refused.
+
+Wrist/reach phases now collect five timestamped samples each (22 arm-sweep pairs);
+loss/rearm collects ten pairs. Capture brackets ownership/source/palette context,
+keeps original freshness limits and refuses late/catch-up sampling. Offline tools
+produce self-contained stereo replay/review bundles, difference sheets and
+exclusive hash-bound image-review records without promoting visual/HMD acceptance.
+
+All 58 MSVC x86 CTest groups pass, including 16 receipt and 13 review methods.
+Seven GCC x86 groups and three rebuilt assertion-failing controls were checked.
+Normal/debug DLLs build without added warnings; debug payload is absent from the
+normal build. No game, XR session, deployment, packaging, remote write or PR.
+ArmRigFix stays default-off. See [v2 commands and evidence boundaries](SCENARIO_EVIDENCE_2026-10-26.md).
+
+## Prior checkpoint: scenario-runner-1 (local only, debug-only)
 
 Added bounded weapon-swap, tracking-loss/rearm and wrist/reach plans. A compile
 gate plus explicit process opt-in are required; raw synthetic inputs pass through

@@ -2516,6 +2516,22 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     // A native flat fallback still uses its native camera: keep its hands raw too.
     const PoseFrame frame = poseReady
         ? PreparePoseFrame(g_frame, (uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam, renderScope || renderStereo) : PoseFrame{};
+#if FC2VR_SCENARIO_TESTING
+    scenario_debug::FrameRecord debugFrame;
+    debugFrame.appFrame=g_frame;debugFrame.space=fv.spaceGeneration;debugFrame.displayTime=fv.displayTime;
+    debugFrame.worldScale=g_cfg.worldScale;debugFrame.heightOffset=g_cfg.heightOffset;debugFrame.renderScale=g_cfg.renderScale;
+    debugFrame.overscan[0]=g_cfg.overscanH;debugFrame.overscan[1]=g_cfg.overscanV;
+    debugFrame.steadyCamera=g_cfg.steadyCam;debugFrame.fovMode=g_fovMode;debugFrame.cullMode=g_cullMode;
+    debugFrame.stereo=renderStereo;debugFrame.afw=afw::Wanted();debugFrame.dlss=dlssfc2::Wanted();
+    const float debugReference[9]={g_ref.pos.x,g_ref.pos.y,g_ref.pos.z,g_ref.rightH.x,g_ref.rightH.y,g_ref.rightH.z,g_ref.fwdH.x,g_ref.fwdH.y,g_ref.fwdH.z};
+    memcpy(debugFrame.reference,debugReference,sizeof debugReference);
+    for(int e=0;e<2;++e) {
+        const auto& v=fv.views[e];const float fov[4]={v.fov.angleLeft,v.fov.angleRight,v.fov.angleUp,v.fov.angleDown};
+        const float pose[7]={v.pose.position.x,v.pose.position.y,v.pose.position.z,v.pose.orientation.x,v.pose.orientation.y,v.pose.orientation.z,v.pose.orientation.w};
+        memcpy(debugFrame.fov+e*4,fov,sizeof fov);memcpy(debugFrame.eyes+e*7,pose,sizeof pose);
+    }
+    scenario_debug::Frame(debugFrame);
+#endif
     if (poseReady) {   // arms/weapon/shots follow the controllers on every frame, scoped or not
         uint8_t* rc0 = (uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam;
         SubmitArmsFrame(fv, rc0, frame);
@@ -3365,6 +3381,9 @@ static void Install() {
         ac.dump = (int)IniF("DumpSkeleton", 0);
         ac.ik = (int)IniF("ArmIK", 1); ac.freeLeftHand = (int)IniF("FreeLeftHand", 1);
         ac.rigFix = (int)IniF("ArmRigFix",0); ac.wristTwistLimit=IniF("ArmWristTwistLimit",90);
+#if FC2VR_SCENARIO_TESTING
+        scenario_debug::RigSettings(ac.ik,ac.rigFix,ac.wristTwistLimit);
+#endif
         ac.shoulderSide = IniF("ShoulderSide", 0.17f); ac.shoulderDown = IniF("ShoulderDown", 0.22f); ac.shoulderBack = IniF("ShoulderBack", 0.06f);
         ac.twoHandMaxSpan = IniF("TwoHandMaxSpan", 0.65f); ac.noIdleBreak = (int)IniF("NoIdleAnimation", 1);
         xr::SetHoldLostPose(IniF("HoldLostTracking", 1) != 0);
@@ -3430,7 +3449,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (contribution scenario-runner-1, scenarioTesting=%d, build " __DATE__ " " __TIME__ ", module=%s)", FC2VR_SCENARIO_TESTING,modulePath);
+        LOG("FC2VR loaded (contribution scenario-runner-2, scenarioTesting=%d, build " __DATE__ " " __TIME__ ", module=%s)", FC2VR_SCENARIO_TESTING,modulePath);
         LogVA("startup");
         { LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_qpcToMs=1000.0/(double)f.QuadPart; }
         LoadConfig(); g_cullMode=g_cfg.cullMode; g_fovMode=g_cfg.symmetricFov?((g_cfg.overscanH>0 || g_cfg.overscanV>0)?2:1):0;

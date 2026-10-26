@@ -1,0 +1,18 @@
+parse: 22 checks, 0 failures (environment=harness; no game acceptance)
+swap: 5 checks, 0 failures (environment=harness; no game acceptance)
+loss: 79 checks, 0 failures (environment=harness; no game acceptance)
+sweep: 30033 checks, 0 failures (environment=harness; no game acceptance)
+lifecycle: 8 checks, 0 failures (environment=harness; no game acceptance)
+pair: 20 checks, 0 failures (environment=harness; no game acceptance)
+bitmap: 9 checks, 0 failures (environment=harness; no game acceptance)
+pair: 20 checks, 2 failures (environment=harness; no game acceptance)
+FAIL: mismatched capture/apply/clock/context cannot pair
+FAIL: mismatched capture/apply/clock/context cannot pair
+DISCRIMINATED: mixed-applied-pose (expected assertion exit 1; harness only)
+FAIL: full sampled sweep completes with modelled downstream observations
+sweep: 30033 checks, 1 failures (environment=harness; no game acceptance)
+DISCRIMINATED: endpoint-only (expected assertion exit 1; harness only)
+FAIL: full sampled sweep completes with modelled downstream observations
+sweep: 30033 checks, 1 failures (environment=harness; no game acceptance)
+DISCRIMINATED: old-sample-ack (expected assertion exit 1; harness only)
+PASS: seven GCC x86 groups and three rebuilt negative controls; no native/game acceptance.

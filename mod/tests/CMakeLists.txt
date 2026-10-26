@@ -130,3 +130,5 @@ add_test(NAME scenario_source_wiring COMMAND ${CMAKE_COMMAND}
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 add_test(NAME scenario_receipt_controls COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test_scenario_report.py)
+add_test(NAME scenario_review_controls COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_scenario_review.py)

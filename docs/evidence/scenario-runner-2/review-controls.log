@@ -1,0 +1,22 @@
+Environment: harness. Synthetic fixtures only; no game, XR or browser was launched.
+Python 3.12.3; test_scenario_report.fixture(arm-sweep), bundle, comparison_bundle, check_bundle.
+Generated artifacts: build/scenario-verification-2/demo/ (ignored; reproducible synthetic files).
+{
+  "environment": "harness",
+  "samples": 22,
+  "review": {
+    "bundle_files_verified": 70,
+    "visual_review": "not_inferred",
+    "headset_accepted": false
+  },
+  "comparison": {
+    "bundle_files_verified": 138,
+    "visual_review": "not_inferred",
+    "headset_accepted": false
+  },
+  "no_game_or_visual_acceptance": true
+}
+
+Bundled Node v24.19.0: executed the generated owned HTML script with a document/timer stub.
+PASS: initial frame/no autoplay, timestamped replay, pause and manual final-sample selection; synthetic DOM stub only.
+This is not a browser rendering, visual-quality, performance or HMD result.

@@ -4,7 +4,7 @@ param(
 )
 $ErrorActionPreference='Stop'
 $repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$flavor=if($ScenarioTesting) {'scenario-debug-1'} else {'scenario-production-1'}
+$flavor=if($ScenarioTesting) {'scenario-debug-2'} else {'scenario-production-2'}
 $out=Join-Path $repo ('build/'+$flavor)
 if(!(Test-Path -LiteralPath $Compiler -PathType Leaf)) { throw "Compiler not found: $Compiler" }
 New-Item -ItemType Directory -Path $out -Force | Out-Null
@@ -27,8 +27,10 @@ try {
     $nt=[BitConverter]::ToUInt32($bytes,60)
     if($nt -gt $bytes.Length-26 -or [BitConverter]::ToUInt16($bytes,$nt+4) -ne 0x14c -or [BitConverter]::ToUInt16($bytes,$nt+24) -ne 0x10b) { throw 'Expected PE32/i386' }
     $strings=[Text.Encoding]::ASCII.GetString($bytes)
-    foreach($token in @('FC2VR_SCENARIO_ARM','ALLOW_SYNTHETIC_INPUT','scenario_debug')) {
-        if($strings.Contains($token) -ne $ScenarioTesting.IsPresent) { throw "Scenario compile-gate mismatch: $token" }
+    $wideStrings=[Text.Encoding]::Unicode.GetString($bytes)
+    foreach($token in @('FC2VR_SCENARIO_ARM','ALLOW_SYNTHETIC_INPUT','FC2VR_SCENARIO_FIXTURE','FC2VR_SCENARIO_SAVE','FC2VR_SCENARIO_PROFILE','scenario_debug')) {
+        $present=$strings.Contains($token) -or $wideStrings.Contains($token)
+        if($present -ne $ScenarioTesting.IsPresent) { throw "Scenario compile-gate mismatch: $token" }
     }
     $objdump=Join-Path $compilerDir 'objdump.exe'
     if(!(Test-Path -LiteralPath $objdump)) { $objdump=Join-Path $compilerDir 'i686-w64-mingw32-objdump.exe' }

@@ -5,6 +5,10 @@
 #include <cstring>
 #include <vector>
 namespace fc2vr::scenario {
+inline std::uint64_t TopologyWord(std::uint64_t hash,std::uint32_t word) {
+    for(unsigned i=0;i<4;++i) { hash^=static_cast<std::uint8_t>(word>>(8*i));hash*=1099511628211ull; }
+    return hash;
+}
 enum class Pixels { Rgba8,Bgra8,Rgba16f,Rgba32f,Unsupported };
 inline float Half(std::uint16_t h) {
     const unsigned e=(h>>10)&31,m=h&1023;
@@ -40,18 +44,31 @@ inline bool Bmp(const std::uint8_t* pixels,std::size_t bytes,unsigned width,unsi
     }
     out.swap(b);return true;
 }
-// A pair is acknowledged only for one ticket, one app frame and one source.
-class EyePair {
-    std::uint64_t ticket=0,frame=0,sequence=0,owner=0;unsigned mask=0;
-public:
-    bool Has(unsigned eye,std::uint64_t t,std::uint64_t f,std::uint64_t seq,std::uint64_t epoch) const {
-        return eye<2&&ticket==t&&frame==f&&sequence==seq&&owner==epoch&&(mask&(1u<<eye));
+struct CaptureIdentity {
+    std::uint64_t id=0,frame=0,sequence=0,owner=0,poseSequence=0,poseFrame=0;
+    std::uint64_t generation=0,space=0,rig=0;
+    std::int64_t displayTime=0;
+    bool physical=false,named=false;
+    unsigned format=0,width=0,height=0;
+    bool operator==(const CaptureIdentity& b) const {
+        return id==b.id&&frame==b.frame&&sequence==b.sequence&&owner==b.owner
+            &&poseSequence==b.poseSequence&&poseFrame==b.poseFrame&&generation==b.generation
+            &&space==b.space&&rig==b.rig&&displayTime==b.displayTime&&physical==b.physical&&named==b.named
+            &&format==b.format&&width==b.width&&height==b.height;
     }
-    bool Add(unsigned eye,std::uint64_t t,std::uint64_t f,std::uint64_t seq,std::uint64_t epoch,bool written) {
-        if(eye>1 || !t || !f || !seq || !epoch || !written) return false;
-        if(t!=ticket || f!=frame || seq!=sequence || epoch!=owner) { ticket=t;frame=f;sequence=seq;owner=epoch;mask=0; }
+};
+// A pair must also agree on the actual applied pose, rig and XR clock/context.
+class EyePair {
+    CaptureIdentity identity{};unsigned mask=0;
+public:
+    bool Has(unsigned eye,const CaptureIdentity& key) const {
+        return eye<2&&identity==key&&(mask&(1u<<eye));
+    }
+    bool Add(unsigned eye,const CaptureIdentity& key,bool written) {
+        if(eye>1 || !key.id || !key.frame || !key.sequence || !key.owner || !written) return false;
+        if(!(identity==key)) { identity=key;mask=0; }
         mask|=1u<<eye;return mask==3;
     }
-    void Clear() { ticket=frame=sequence=owner=mask=0; }
+    void Clear() { identity={};mask=0; }
 };
 } // namespace fc2vr::scenario

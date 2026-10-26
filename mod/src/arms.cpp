@@ -9,6 +9,9 @@
 // controller's aim ray (keeping the game's spread).
 #include "arms.h"
 #include "scenario_runner.h"
+#if FC2VR_SCENARIO_TESTING
+#include "common/scenario_capture.h"
+#endif
 #include "log.h"
 #include "gameaddr.h"
 #include "xr.h"
@@ -1422,6 +1425,11 @@ static void Apply(uint8_t* skel) {
     scenario_debug::PoseRecord observedPose;
     observedPose.source=f.source;observedPose.ownerEpoch=f.owner.epoch;observedPose.appFrame=f.frameSequence;
     observedPose.observedMs=GetTickCount64();observedPose.namedRig=g_c.rigFix;observedPose.physical=f.handAuthority;
+    observedPose.rig=fc2vr::scenario::TopologyWord(14695981039346656037ull,static_cast<std::uint32_t>(n));
+    for(int i=0;i<n;++i) {
+        observedPose.rig=fc2vr::scenario::TopologyWord(observedPose.rig,bones[i].hash);
+        observedPose.rig=fc2vr::scenario::TopologyWord(observedPose.rig,static_cast<std::uint32_t>(bones[i].parent));
+    }
     memcpy(observedPose.world,W.m,64);
     const int slots[6]={18,17,20,14,13,12};bool observedFinite=FiniteMatrix(observedPose.world);
     for(int i=0;i<6;++i) { const int b=g_slot[slots[i]];observedPose.indices[i]=b;

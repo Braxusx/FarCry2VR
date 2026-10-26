@@ -627,6 +627,9 @@ static bool InstanceImpl(ID3D10Device* dev10) {
     p_xrGetInstanceProperties(g_inst, &ip);
     LOG("XR: runtime %s %u.%u.%u", ip.runtimeName, XR_VERSION_MAJOR(ip.runtimeVersion),
         XR_VERSION_MINOR(ip.runtimeVersion), XR_VERSION_PATCH(ip.runtimeVersion));
+#if FC2VR_SCENARIO_TESTING
+    scenario_debug::Runtime(ip.runtimeName,ip.runtimeVersion);
+#endif
     XrSystemGetInfo sgi{ XR_TYPE_SYSTEM_GET_INFO }; sgi.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
     if (!Check(p_xrGetSystem(g_inst, &sgi, &g_sys), "xrGetSystem")) return false;   // headset absent: retryable
     g_fatal = true;   // from here on, failures are not fixed by retrying; avoid session churn

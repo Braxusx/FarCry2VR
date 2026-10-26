@@ -43,6 +43,11 @@ inline Step Plan(Case c,unsigned i) {
     return {"finished",Pattern::Neutral,Check::Ready,0,false};
 }
 inline unsigned Count(Case c) { return c==Case::None?0:c==Case::ArmSweep?6:4; }
+// Sampled checkpoints, not continuous video. No catch-up batch may fabricate
+// intermediate GPU observations after a slow readback.
+inline unsigned Samples(Case c,unsigned i) {
+    return c==Case::ArmSweep&&i>=1&&i<=4?5:c==Case::TrackingLoss&&i>0&&i<4?3:1;
+}
 struct Vec { float x=0,y=0,z=0; };
 struct Quat { float x=0,y=0,z=0,w=1; };
 inline bool Finite(Vec v) { return std::isfinite(v.x)&&std::isfinite(v.y)&&std::isfinite(v.z); }
@@ -80,13 +85,14 @@ struct Observation {
 enum class State { Idle,Waiting,Running,Complete,Failed,Aborted };
 struct Decision {
     bool overrideInput=false,syntheticPose=false,boundary=false,capture=false;
-    unsigned step=0;std::uint64_t ticket=0,firstSequence=0;
+    unsigned step=0,sample=0;std::uint64_t ticket=0,captureId=0,firstSequence=0;
+    float progress=0;
     Hand hand[2];const char* label="idle";
 };
 class Runner {
     Case which=Case::None;State state=State::Idle;
     std::uint64_t began=0,entered=0,first=0,lastNow=0,lastNext=0,baseWeapon=0,baseHand=0;
-    std::uint64_t serial=0,baseOwner=0;unsigned index=0,drain=0;bool captureRequested=false;
+    std::uint64_t serial=0,baseOwner=0;unsigned index=0,drain=0,sample=0;bool captureRequested=false;
     const char* reason="idle";Decision cached{};
     bool Current(const Observation& o) const { return first && o.sequence>=first; }
     bool Polled(const Observation& o,std::uint64_t now) const { return Current(o)&&o.polledSequence>=first&&o.polledSequence<=o.sequence&&o.polledOwner==o.ownerEpoch&&now>=o.polledMs&&now-o.polledMs<=100; }
@@ -109,7 +115,7 @@ public:
     bool Start(Case c,std::uint64_t now) {
         if(c==Case::None || state==State::Waiting || state==State::Running || drain) return false;
         which=c;state=State::Waiting;began=entered=lastNow=now;first=lastNext=baseWeapon=baseHand=0;
-        index=0;baseOwner=0;captureRequested=false;++serial;reason="waiting-ready";cached={};return true;
+        index=sample=0;baseOwner=0;captureRequested=false;++serial;reason="waiting-ready";cached={};return true;
     }
     void Abort(const char* why) { if(state==State::Waiting||state==State::Running) End(State::Aborted,why); }
     State Status() const { return state; }
@@ -143,14 +149,23 @@ public:
         if(elapsed>step.dwell+8000) { End(State::Failed,"step-timeout");d={};d.overrideInput=d.boundary=true;d.label=reason;--drain;cached=d;return d; }
         if(!first) first=nextSequence;
         const float u=step.dwell?std::min(1.0f,float(elapsed)/float(step.dwell)):1;
-        d.syntheticPose=true;d.step=index;d.ticket=(serial<<16)|(index+1);d.firstSequence=first;d.label=step.name;
+        d.syntheticPose=true;d.step=index;d.sample=sample;d.ticket=(serial<<16)|(index+1);
+        d.captureId=(d.ticket<<8)|(sample+1);d.firstSequence=first;d.label=step.name;d.progress=u;
         d.hand[0]=Fixture(0,step.pattern,u);d.hand[1]=Fixture(1,step.pattern,u);
-        const bool satisfied=elapsed>=step.dwell&&Satisfied(step.check,o,now);
-        if(satisfied && step.capture) { captureRequested=true;d.capture=true; }
-        if(satisfied && (!step.capture || (captureRequested&&o.captureTicket==d.ticket))) {
+        const unsigned samples=Samples(which,index);
+        const std::uint64_t due=samples==1?step.dwell:step.dwell*sample/(samples-1);
+        if(samples>1 && elapsed>due+200 && o.captureTicket!=d.captureId) {
+            End(State::Failed,"motion-sample-missed");d={};d.overrideInput=d.boundary=true;d.label=reason;--drain;cached=d;return d;
+        }
+        const bool observed=Satisfied(step.check,o,now);
+        if(observed && elapsed>=due && step.capture) { captureRequested=true;d.capture=true; }
+        const bool captured=captureRequested&&o.captureTicket==d.captureId;
+        if(captured && sample+1<samples) {
+            ++sample;captureRequested=false;d.capture=false; // one acknowledgement per source tick
+        } else if(observed && elapsed>=step.dwell && (!step.capture || captured)) {
             if(index==0) baseHand=o.handEpoch; // baseline follows the boundary's normal generation change
             if(step.check==Check::Swap) baseOwner=o.ownerEpoch;
-            ++index;entered=now;first=0;captureRequested=false;
+            ++index;entered=now;first=0;sample=0;captureRequested=false;
             if(index==Count(which)) { End(State::Complete,"complete-observed");d={};d.overrideInput=d.boundary=true;d.label=reason;--drain; }
         }
         cached=d;return d;
