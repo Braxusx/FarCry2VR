@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "project": "FarCry2VR-Braxusx",
+  "run_id": "20261026-menu-record-guard-2",
+  "recorded_at": "2026-10-26T08:44:43.266554+00:00",
+  "target": {
+    "name": "Braxusx contribution menu-record-guard-2 normal x86 DLL; implementation 774f3eed3d90197be49a04ee20df51fbd46cdfd0; exact Steam/Definitive Dunia image",
+    "identity_kind": "sha256",
+    "identity": "407c774f32fd5b91ff72dc5572a75987e3970168a6ee4d762a85b0208d2e2b70"
+  },
+  "question": "Does the latest normal DLL pass a bounded headset-free startup observation and clean shutdown, rather than merely survive until the watchdog?",
+  "claim": "Not fully. Run 12 with the exact normal DLL installed all three optional-menu-record guard hooks after four unique signature checks, observed constructed count 4 and unavailable fifth record, reached acknowledged private xr-sim and survived the 150-second startup window plus 120-second native-quit grace without a startup AV. No UI input was delivered during the grace. The supervisor then requested window close at 08:35:54.5871513Z, followed by native read AV c0000005 at preferred VA 0x10ad4095/address 0x0000000c at 08:35:54.603Z and self-termination code 0. The hardened final-log checker correctly fails the overall run. FarCry2 is stopped and original files, five saves and exact inventory are independently restored. The native menu-driven Quit comparison was not launched because subsequent preflight found Swat4X running.",
+  "evidence_grade": "LIVE",
+  "environment": "in_game",
+  "method": "Latest run: scripts/Test-NativeScenario.ps1 -Run -StartupOnly -ProductionProxy -MaxSeconds 150 -MenuQuitGraceSeconds 120, using the explicitly hashed menu-record-guard-2-production/dinput8.dll and retained config/profile/800x800 headset fixtures. The local build/startup-isolation-1/run-control.ps1 supplies exact game/runtime/save paths and a fresh out/startup-isolation-20261026-12-production-verification directory. Suspended creation binds PID 141948, image path, creation ticks and affinity 65535 before resume. Process-scoped x86 xr-sim 1.0.0 with D3D11 bridge; no global runtime switch. Fleet process/path/name preflight found no game before launch; Unreal build tools were excluded, not stopped. Inspect actual native log, four unique signature results, count-four guard proof, 11-command PID/sequence bootstrap acknowledgement, live input/frame progress and final log. The two-stage discriminator is startup survival versus native shutdown after the recorded close request. Retained older controls distinguish no-VR/spare zero, VR/spare garbage, and guard-on/off using the same debug DLL, but run 12 itself is a front-end observation, not a gameplay/scenario pass. All 61 CTest groups rerun with CMake/CTest and Python 3.12.3 after launcher changes. Read-only PowerShell independent current hashes/inventory and process inspection recorded in summary.json. Receipt initialized using registered in-house ID then adapted to this local contribution identity; no fleet submission.",
+  "validity": "VALID",
+  "mutation": "temporary",
+  "gates": {
+    "identity": {
+      "status": "PASS",
+      "reason": "Launcher pins executable/Dunia/normal proxy SHA-256 and pre-resume PID/path/creation ticks. New mod log identifies scenarioTesting=0 and safety=menu-record-guard-2, exact supported image and private xr-sim runtime. Source parent plus changed-file hashes are in summary.json; implementation committed as 774f3eed3d90197be49a04ee20df51fbd46cdfd0."
+    },
+    "instrument": {
+      "status": "PASS",
+      "reason": "Bounded, identity-owned supervisor retains the process through startup, records CloseRequestedUtc, then inspects the retained post-close log. It reports the actual native AV despite survival/exit-code-zero. Shared live-writer, stale-log, wrong-runtime/marker, ownership/reuse, nonblocking-child, disposal and restoration-copy controls pass."
+    },
+    "control": {
+      "status": "PASS",
+      "reason": "All 61 CTest groups pass. Same-DLL debug guard toggle previously reproduced original startup AV only with guard disabled; exact native signature uniqueness and absent fifth-record observations are positive controls in run 12. The live shutdown fault provides a direct positive control for final-log failure reporting. No zero or missing capture is treated as visual acceptance."
+    },
+    "scene": {
+      "status": "PASS",
+      "reason": "Only startup/front-end and post-window-close are the declared scenes. Native missing-record guard executes, XR input/frame progression is observed throughout, and the shutdown fault is timestamped after the close request. No world/arm scenario, native Quit action or save load is declared accepted."
+    },
+    "restore": {
+      "status": "PASS",
+      "reason": "Cleanup stopped the owned game without forced kill and restored original proxy, settings, profile and logs. Independent collection checks every original file hash/presence, all five save hashes and exact inventory; no FarCry2 process remains. Subsequent Swat4X preflight refused the next launch without touching that game."
+    }
+  },
+  "fact_verdict": "CONFIRM",
+  "baseline": {
+    "verdict": "FAIL",
+    "reason": "Startup is stable in this test, but native shutdown records read AV 0x10ad4095 after window close and self-terminates. Exit code 0, stopped process and successful file restoration do not establish overall baseline health."
+  },
+  "limits": "Only this exact Steam/Definitive image, normal contribution DLL, INI/profile and virtual-XR front-end configuration are covered. The second fault's receiver/ownership/root cause is not proved. No native menu-driven quit was delivered; follow-up was blocked before launch by SWAT4. No vanilla close-path comparison, actual arm/weapon scenario terminal or capture, declared-save load, GPU/palette ownership, visual quality or HMD acceptance. Older debug run 08 reached on-foot updates but initially failed restoration-copy cleanup and was manually recovered; it is not a clean run-12 gameplay baseline. Run 10's original cleanup missed a post-close AV; its success flag is superseded by log inspection. Interrupted run 11 is invalid startup acceptance. No source/proxy deployment left installed; no package, push or PR. Raw logs and decoded native bytes remain local; this receipt is not fleet acceptance.",
+  "artifacts": [
+    {
+      "path": "docs/STARTUP_FIX_2026-10-26.md",
+      "sha256": "7248a491bba92d464fce11e809b32364d7a0579c838d16e39c8e7f9e123cbd4e",
+      "role": "Guard ownership/ABI/signature contract, comparison history, shutdown failure and scoped next test"
+    },
+    {
+      "path": "docs/evidence/menu-record-guard-2/summary.json",
+      "sha256": "06fc906a73a99f665bfa1ac56f098993525b50112097c49a92e57ad10aab129a",
+      "role": "Actual binary/source identities, four signatures, all independent restoration hashes, saves and process observation"
+    },
+    {
+      "path": "docs/evidence/menu-record-guard-2/ctest.log",
+      "sha256": "cb1544fd1bfac780e61159839ff6d8231fea10a019b085968902acb12cd6b89f",
+      "role": "Actual rerun of 61 passing CTest groups, including launcher post-close wiring/control checks"
+    },
+    {
+      "path": "docs/evidence/menu-record-guard-2/run-12-test-fc2vr.log",
+      "sha256": "c11bb01142b6bdeb8dc043b7e84d6a7a89538bf5d93688a3406435a5b87d3624",
+      "role": "Actual loaded normal DLL, count-four guard, XR progress and native shutdown AV/self-termination"
+    },
+    {
+      "path": "docs/evidence/menu-record-guard-2/run-12-cleanup.json",
+      "sha256": "77502feada70b536fd9bfe3bfa2a181cd8ee07689e98eb22be3ec7fd01952efa",
+      "role": "Separate startup survival, close request/time, final native failure and restored/stopped verdicts"
+    },
+    {
+      "path": "docs/evidence/menu-record-guard-2/run-12-before.json",
+      "sha256": "6d8abdf2abec84311b3e771dbc60b6cf52155c8ef20fae3935add51b76c932fb",
+      "role": "Original proxy/config/profile/log/save identities and private runtime identity"
+    },
+    {
+      "path": "docs/evidence/menu-record-guard-2/run-12-owned.json",
+      "sha256": "fc186f92b264eeb4de5de8421d327f4ff7c61cf74bd9684243f76b6a07944ddb",
+      "role": "Pre-resume PID, executable path, creation ticks and affinity"
+    },
+    {
+      "path": "docs/evidence/menu-record-guard-2/run-12-bootstrap-ack.json",
+      "sha256": "6085e935309d8f94c505a0b7bf4cca17b6590b0c6e1330e5972bc7c83cd75582",
+      "role": "Fresh runtime/PID/command acknowledgement, not visual or scene-load acceptance"
+    },
+    {
+      "path": "docs/evidence/menu-record-guard-2/run-12-supervisor.log",
+      "sha256": "826b25394398534b941b8797aa7b96dfa6b7093f3ea92fccfec707efddad2a14",
+      "role": "Startup completion, unused menu-quit grace and final native-failure rejection"
+    },
+    {
+      "path": "out/startup-isolation-20261026-06-disabled-menu/test-fc2vr.log",
+      "sha256": "1d2eb5992cecdfe9f4ce17475f833635b70eccfb6fe311ceb9e65e5b1b406331",
+      "role": "Earlier no-VR positive control: constructed count four, spare callback zero"
+    },
+    {
+      "path": "out/startup-isolation-20261026-07-vr-diag/test-fc2vr.log",
+      "sha256": "c266e5e4940b31aa4da069aaa1775ff4c88a396bf064c2153e212029d58f7ac0",
+      "role": "Earlier VR positive control: same constructed count, unconstructed spare pointers and invalid callback release"
+    },
+    {
+      "path": "out/startup-isolation-20261026-08-vr-fixed/test-fc2vr.log",
+      "sha256": "be819d12dbb40603c40d4925fe0e7cf059d0b87db9e389683c3f9c936694dc50",
+      "role": "Guard-on debug reaches on-foot updates; restoration-copy problem is separately disclosed"
+    },
+    {
+      "path": "out/startup-isolation-20261026-09-vr-guard-off/test-fc2vr.log",
+      "sha256": "392271225eb5d024c164a8a230a9770d64e389aef1f64bf8983460f7ba51be8a",
+      "role": "Same-DLL guard-off debug control reproduces original startup fault"
+    },
+    {
+      "path": "build/menu-record-guard-2-production/dinput8.dll",
+      "sha256": "407c774f32fd5b91ff72dc5572a75987e3970168a6ee4d762a85b0208d2e2b70",
+      "role": "Actual normal PE32/i386 contribution proxy used by the latest native test"
+    }
+  ],
+  "routes": [],
+  "do_not_repeat": [
+    {
+      "approach": "Treat StartupSurvived, Forced=false, or native self-termination code 0 as a clean shutdown/build pass",
+      "reason": "Runs 10 and 12 survive startup but log a native access violation immediately after window close. The old cleanup success flag missed that post-close evidence; the new final-log check fails it.",
+      "reopen_when": "An actual native menu-driven Quit and final-log check are completed on the same normal DLL/fixture, with no fleet game overlap; fix any remaining close fault only against its target-specific receiver/ownership proof."
+    },
+    {
+      "approach": "Read or mutate spare native record bytes as if readability or a plausible pointer proves construction",
+      "reason": "The exact menu container has only four constructed records, while unchecked index 4 reads spare allocation contents that vary with VR allocation layout. A synthetic fifth record or a global callback-destructor bypass would conceal the ownership defect.",
+      "reopen_when": "A different exact-image/asset layout proves a genuinely constructed extra record, including descriptor count and native record identity; retain ordinary native behavior for that case."
+    }
+  ],
+  "next_action": "Remain local. Do not launch while SWAT4 or any fleet game is running. At the next available runtime window, compare observed native-menu Quit with the recorded WM_CLOSE fault using the same normal DLL and fixture. If both fault, trace exact 0x10ad4095 receiver/caller teardown ownership before patching. Keep startup, overall baseline, arm scenario and headset gates separate."
+}

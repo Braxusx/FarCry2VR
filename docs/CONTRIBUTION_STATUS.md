@@ -21,6 +21,10 @@ build is not permanently installed. A follow-up launch was refused because SWAT4
 was then running; native menu-driven Quit remains unmeasured. See
 [startup fix, controls and remaining shutdown gate](STARTUP_FIX_2026-10-26.md).
 Everything remains local on this contribution branch; no push/package/PR.
+Implementation/evidence checkpoint: `774f3eed3d90197be49a04ee20df51fbd46cdfd0`.
+Local receipt `receipts/20261026-menu-record-guard-2.json` validates 14 hashed
+artifacts; VALID/CONFIRM observation, independently **FAIL** overall baseline.
+It is not submitted to the fleet playbook under the local-only scope.
 
 ## Previous native attempt: run 04 — native startup crash confirmed
 
