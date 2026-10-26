@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "project": "FarCry2VR-Braxusx",
+  "run_id": "20261026-native-scenario-01",
+  "recorded_at": "2026-10-26T04:22:28Z",
+  "target": {
+    "name": "FC2VR scenario-runner-2 debug DLL, source 5d6e4c15507352f63dbb5b2edb2631b588031297, on exact Steam Dunia image",
+    "identity_kind": "sha256",
+    "identity": "45023cd9cef5673c5817d080349fc7ccfc62c4e9e039848efa9956cda39913d9"
+  },
+  "question": "Can one headless native launch reach the declared disposable scene, execute the opt-in named-arm sweep and provide all 22 correlated stereo samples to the v2 checker and review tooling?",
+  "claim": "Unanswered: the actual game loaded the expected debug marker and supported engine, initialized xr-sim, then recorded a native access violation and terminated before any scenario trace. The test driver also failed live PID supervision and its pre-start simulator commands were explicitly ignored. No scene or arm-sweep observation is available. Offline checkers correctly refuse no-data success artifacts, and original files/saves were independently restored. This invalid experiment neither confirms nor refutes native arm-rig, capture or visual correctness.",
+  "evidence_grade": "LIVE",
+  "environment": "in_game",
+  "method": "Exactly one user-authorized game launch, PID 118964 observed independently while alive, 2026-10-26 04:01:45.7695749 UTC. The game-bin proxy/INI and windowed profile were temporarily changed after backups; original Holds retained, ArmRigFix=1/ArmIK=1, DLSS/AFW/scope off, autosave off. The established cmd start affinity-inheritance route used mask 0x7fffffff, with a private installed x86 xr-sim manifest/state directory and 800x800 boot views. Expected source build: 5d6e4c15507352f63dbb5b2edb2631b588031297. Native logs and per-PID simulator state were inspected after self-termination at 04:03:19.373 UTC; no restart. Python 3.12.3 verifier returned expected NO_DATA exit 2; review builder returned exit 1 and created no output. Independent SHA-256 checks covered original proxy, INI, profile, current/previous logs and all five saves. Read-only pefile 2024.8.26 / Capstone 5.0.7 verified the instruction and direct-call candidate in the same engine SHA-256, without attaching to SS2's Ghidra instance. A benign Python child, not a game/XR/renderer, checked a nonblocking launch method; a next-template parser/reuse-refusal check was offline only. Initial template was generated with the registered in-house receipt ID in ignored build, then adapted to the actual donor identity for local-only validation.",
+  "validity": "INVALID",
+  "mutation": "temporary",
+  "gates": {
+    "identity": {
+      "status": "PASS",
+      "reason": "Expected debug binary SHA-256 was checked before temporary copy; actual game log identifies scenario-runner-2/scenarioTesting=1 and bin module path, exact engine file/mapped-header acceptance and xr-sim. Live PID/path/start time were observed separately, though not bound by the supervisor. Host is x86/LARGEADDRESSAWARE."
+    },
+    "instrument": {
+      "status": "FAIL",
+      "reason": "Synchronous shell output pipeline blocked supervisor PID binding/watchdog until game exit; cleanup OwnedPid=0 must not be treated as no launch. Caught supervisor failure also returned shell exit 0. No scenario trace or native eye image exists. Corrected template has only offline checks, not a second native run."
+    },
+    "control": {
+      "status": "FAIL",
+      "reason": "xr-sim explicitly ignored command.txt older than startup; cmdSeq=0 and default head/follow state show the intended bootstrap was never acknowledged. No comparable native control or omitted-action game control was run."
+    },
+    "scene": {
+      "status": "FAIL",
+      "reason": "Declared save was not observed loaded; no on-foot owner or 22-sample arm-sweep scene was established before the native crash. Two layered XR frames are partial submission telemetry, not game-world pixel or rig acceptance."
+    },
+    "restore": {
+      "status": "PASS",
+      "reason": "The game terminated itself; no forced kill. No FarCry2 process remains. Proxy, INI, GamerProfile, installed current/previous logs and five original saves independently match backup SHA-256 values. Per-process environment was restored; global runtime selection unchanged. Raw run files remain ignored/local."
+    }
+  },
+  "fact_verdict": "AMBIGUOUS",
+  "baseline": {
+    "verdict": "FAIL",
+    "reason": "This exact launch ended with read AV c0000005 at Dunia preferred VA 0x10189c0c, access address 0x12c, followed by logged self-termination code 0. Native startup and scenario execution are not accepted. This is not proof of which code change or runtime condition caused the failure."
+  },
+  "limits": "No arm sweep, native palette receipt, real capture pair, GPU-consumer ownership or HMD evaluation occurred. Runtime state was a stale pre-FOCUSED snapshot while its log subsequently queued FOCUSED; neither proves input acceptance. The exception logger provides a filtered stack-word scan, not a complete unwind or registers. Static bytes identify an invalid-pointer instruction/call candidate only, not a named field, ownership bug or safe patch. The run differs from prior hardware/upstream runs in multiple settings and code; no causal A/B was authorized. Nonblocking launch was checked with a benign CPU-only process; fresh simulator bootstrap and corrected supervisor remain untested in a game. Restored old logs are not this run's evidence; use the ignored archived copies.",
+  "artifacts": [
+    {
+      "path": "docs/NATIVE_SCENARIO_TEST_2026-10-26.md",
+      "sha256": "e55d0e7f2c5273a32ef9a501529bbb7172888d657c0438b26573ff674091394c",
+      "role": "Single-launch scope, observed stage, invalidity, bounded static lead, driver faults, restoration and next discriminator"
+    },
+    {
+      "path": "docs/evidence/native-scenario-20261026-01/summary.json",
+      "sha256": "f2912e63a28ed578bdbd7dd629485d575f0cf9c1f057599d7b2d741ca145f6c6",
+      "role": "Structured partial observations with invalid scenario verdict and unaccepted gates"
+    },
+    {
+      "path": "docs/evidence/native-scenario-20261026-01/controls.log",
+      "sha256": "11b06de9604adb34d8317b29e43cf097c9d77ae4a1de7afc29682721f373743f",
+      "role": "Actual no-data checker/refusal results and separate benign-launch control results"
+    },
+    {
+      "path": "out/native-scenario-20261026-01/mod.log",
+      "sha256": "ea181b89f5caa36b6a7cea1604f973e5e8cb9422bb547a8004a7a03df52e631a",
+      "role": "Ignored actual native startup/runtime/exception/termination log, copied before installed log restoration"
+    },
+    {
+      "path": "out/native-scenario-20261026-01/xrsim.log",
+      "sha256": "729a6b9ca2d691d4f810e62ee3d933de4ee9f824d5b0f2ca513f3f2cc22aa8d0",
+      "role": "Ignored actual simulator startup and explicit rejection of pre-start command.txt"
+    },
+    {
+      "path": "out/native-scenario-20261026-01/state.json",
+      "sha256": "f3ecf18b6e04012585b0a6896ab1fd3c5448ffcc026c28a1cd3b9febbfaefe6c",
+      "role": "Ignored final serialized partial state tied to PID 118964; not a post-crash live sample"
+    },
+    {
+      "path": "out/native-scenario-20261026-01/before.json",
+      "sha256": "b6ab3e4fb9c09534fb5d7fc42e9442a6155c1777cf92d9678bc47c0c9124d051",
+      "role": "Ignored original file/save hash and backup metadata"
+    },
+    {
+      "path": "out/native-scenario-20261026-01/cleanup.json",
+      "sha256": "c0307b0c5d06e1f2969b1079787e4fdcaea6ffef82401ad80d1d83c75a446646",
+      "role": "Ignored supervisor failure/restoration output; its OwnedPid=0 is explicitly not successful PID binding"
+    },
+    {
+      "path": "out/native-scenario-20261026-01/one-launch.used.ps1",
+      "sha256": "c0776d140535bedb49bb3e0ab3cea03351f1a1cabf0dd8f2f9d6a3da31c45db0",
+      "role": "Exact failed test-driver source, preserved unchanged"
+    },
+    {
+      "path": "out/native-scenario-20261026-01/one-launch.next.offline-only.ps1",
+      "sha256": "21f4364f596563a664aea115fd3f0fc187cc3062fc9cdcd1d984eb7138687c53",
+      "role": "Corrected next-template source, parser/reuse guard checked only; no game acceptance"
+    },
+    {
+      "path": "out/native-scenario-20261026-01/bootstrap-not-applied.txt",
+      "sha256": "b84df86de50329f2b167e218042be2f5b21655f7305fb3abe1d2439d14c074d6",
+      "role": "Ignored requested virtual fixture commands, which were not applied"
+    },
+    {
+      "path": "out/native-scenario-20261026-01/headset.json",
+      "sha256": "559effbf17561a83f0d67ef81c7cd6b143b296ffaebea34f96d725245b85837d",
+      "role": "Ignored boot-time eye geometry/profile actually identified by runtime"
+    },
+    {
+      "path": "out/native-scenario-20261026-01/supervisor.log",
+      "sha256": "e7325deb323eab132096293b07f3b24b7471f547e5875abcc12cdcf24786709e",
+      "role": "Ignored failure output, not a passing test result despite shell exit 0"
+    },
+    {
+      "path": "out/native-scenario-20261026-01/inspect-crash-static.py",
+      "sha256": "6196e7098c15c6db6abd76ad9292b68e7cb1ade33dfabcaae2f7fc5590fbe4f1",
+      "role": "Read-only exact-image decoder reproduction, no process or game launch"
+    },
+    {
+      "path": "out/native-scenario-20261026-01/static-disassembly.txt",
+      "sha256": "cf7bd23aaf4f0ffd961e490a0d91eaf6ae0afdbe50a35bf4125960bc3584e936",
+      "role": "Ignored game-byte instruction/callsite check; not complete ownership/root-cause proof"
+    },
+    {
+      "path": "out/native-scenario-20261026-01/hold-output-fixture.py",
+      "sha256": "8d10ac03d417f91b85fc782c96e96f4c992b61b8cfdbf8e546e47787b0481913",
+      "role": "Benign CPU-only stdout-lifetime fixture; not a game or XR test"
+    },
+    {
+      "path": "out/native-scenario-20261026-01/non-game-stdout.log",
+      "sha256": "7141fbc281e6f3a387cb249f9b1e6da810ba165c624d36ac76c7a24aa2a1f85b",
+      "role": "Benign fixture output, distinct from actual native game observations"
+    }
+  ],
+  "routes": [],
+  "do_not_repeat": [
+    {
+      "approach": "Use a synchronous cmd start output pipeline as if it returned an owned game PID immediately",
+      "reason": "This supervisor waited until the game exited before reaching PID supervision, hiding the actual startup lifetime and preventing its watchdog/control loop.",
+      "reopen_when": "The nonblocking identity-first helper, bounded supervisor and nonzero failure exit behavior are verified for a fresh fixture; another game launch is explicitly authorized."
+    },
+    {
+      "approach": "Preseed simulator command.txt before startup and assume the requested rig/focus/input fixture applied",
+      "reason": "The runtime deliberately ignored this stale command timestamp; cmdSeq=0 and default state provide the positive coverage check.",
+      "reopen_when": "A fresh state matches the owned PID, then the batch is written and its exact acknowledgement plus located state are required."
+    }
+  ],
+  "next_action": "No further game launch under this one-run authorization. Keep local; use corrected supervision and post-start bootstrap acknowledgement, then investigate the native startup invalid-pointer/callback-lifetime lead with a comparable control and bounded caller/register evidence. Arm/temporal/GPU/HMD gates remain open. No native patch, push or fleet intake was performed."
+}

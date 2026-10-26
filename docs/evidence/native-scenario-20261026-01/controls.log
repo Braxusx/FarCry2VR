@@ -1,0 +1,16 @@
+Observed on the actual failed run's empty scenario directory:
+PASS expected NO_DATA exit 2: NO_DATA: no scenario trace
+PASS expected refusal exit 1 and no output: INVALID: NO_DATA: no scenario trace
+Host EXE: x86=True LARGEADDRESSAWARE=True
+No FarCry2 process remains.
+
+Offline launcher control (benign Python child, no renderer/XR/game):
+HelperReturnMs=18
+ChildBoundBeforeExit=True
+GameLaunchesAdded=0
+PASS: nonblocking helper returns while its own child is still alive; no game launched.
+PASS: corrected template refuses a used fixture before any launch or mutation.
+
+Independent restoration check: original dinput8.dll, fc2vr.ini, GamerProfile.xml,
+fc2vr.log, fc2vr_prev.log and five existing save files all match before.json SHA-256.
+No native arm/visual/HMD acceptance. These controls do not repair or explain the crash.

@@ -1,4 +1,5 @@
 build/
+out/
 mod/build/
 launcher/build/
 launcher/payload_lzma/

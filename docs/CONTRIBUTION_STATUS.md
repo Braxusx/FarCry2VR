@@ -3,6 +3,20 @@
 Date: 2026-10-26. Branch: `codex/tracking-arms-physical-steering`.
 Base: `92a29c5b1e28a652d067262aacc59b421ed044c1` (upstream 1.0.1).
 
+## Latest native attempt: 2026-10-26 — startup failed, scenario unmeasured
+
+One user-authorized headless launch loaded the expected v2 debug proxy, accepted
+the exact engine image and initialized xr-sim/800x800 targets, then crashed in a
+native startup path before the arm scenario. No retry or arm capture.
+The test-driver's blocking shell pipeline and ignored pre-launch simulator
+commands also invalidated its control setup; neither is a native arm result.
+The checker returned NO_DATA and the review builder refused success output.
+The game is stopped; proxy, settings, logs and five saves were restored and
+independently hash-verified. A next test template has offline-only supervision/
+bootstrap corrections, not native acceptance. See
+[single-launch report](NATIVE_SCENARIO_TEST_2026-10-26.md). Native crash cause,
+arm/temporal capture and HMD gates remain open. Nothing pushed or packaged.
+
 ## Latest checkpoint: scenario-runner-2 (local only, debug-only)
 
 Implementation: `5d6e4c15507352f63dbb5b2edb2631b588031297`.
