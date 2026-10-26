@@ -94,13 +94,16 @@ try {
         }
         $log=Join-Path $GameBin 'fc2vr.log'
         if(Test-Path -LiteralPath $log) {
-            $text=[IO.File]::ReadAllText($log)
-            $logFailure=Get-NativeTestLogFailure -Text $text -Fresh ((Get-Item -LiteralPath $log).LastWriteTimeUtc -ge $launchAt)
-            if($logFailure) { throw $logFailure }
+            $text=Read-NativeTestText -Path $log
+            $logInfo=Get-Item -LiteralPath $log -ErrorAction SilentlyContinue
+            if($null -ne $text -and $logInfo) {
+                $logFailure=Get-NativeTestLogFailure -Text $text -Fresh ($logInfo.LastWriteTimeUtc -ge $launchAt)
+                if($logFailure) { throw $logFailure }
+            }
         }
         $traces=@(Get-ChildItem -LiteralPath (Join-Path $RunRoot 'scenarios') -Filter trace.jsonl -Recurse -File)
         if($traces.Count -gt 1) { throw 'Multiple traces in a one-launch fixture' }
-        if($traces.Count -eq 1 -and [IO.File]::ReadAllText($traces[0].FullName) -match '"event":"end"') {
+        if($traces.Count -eq 1 -and (Read-NativeTestText -Path $traces[0].FullName) -match '"event":"end"') {
             $terminal=$true;Write-Output ('SCENARIO TERMINAL '+$traces[0].FullName);Start-Sleep -Seconds 3;break
         }
         Start-Sleep -Milliseconds 250
@@ -136,7 +139,12 @@ finally {
         $restored=$true
     } catch { $failure+='; cleanup: '+$_.Exception.Message;Write-Output ('CLEANUP FAILURE: '+$_) }
     foreach($key in $savedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($key,$savedEnvironment[$key],'Process') }
-    Json 'cleanup.json' @{LaunchAttempts=[int]$attempted;Owned=$owned;ProcessStopped=!(Get-OwnedTestProcess $owned);Forced=$forced;Restored=$restored;Terminal=$terminal;BootstrapAcknowledged=$bootstrapApplied;Failure=$failure;FinishedUtc=[DateTime]::UtcNow.ToString('o')}
+    $stopped=$null
+    if($owned) { $stopped=!(Get-OwnedTestProcess $owned) }
+    elseif(!$attempted) { $stopped=$true }
+    # A lost identity cannot prove a created process stopped. Preserve unknown,
+    # rather than reporting !null as a false successful cleanup receipt.
+    Json 'cleanup.json' @{LaunchAttempts=[int]$attempted;Owned=$owned;ProcessStopped=$stopped;Forced=$forced;Restored=$restored;Terminal=$terminal;BootstrapAcknowledged=$bootstrapApplied;Failure=$failure;FinishedUtc=[DateTime]::UtcNow.ToString('o')}
     Write-Output ("FINISHED restored=$restored forced=$forced failure=$failure")
 }
 if($failure -or !$restored -or $forced) { exit 1 }
