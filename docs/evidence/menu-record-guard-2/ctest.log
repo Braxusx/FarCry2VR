@@ -1,0 +1,987 @@
+Start testing: Oct 26 19:40 AUS Eastern Daylight Time
+----------------------------------------------------------
+1/61 Testing: menu_record_bounds
+1/61 Test: menu_record_bounds
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/menu_guard_tests.exe"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"menu_record_bounds" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.10 sec
+----------------------------------------------------------
+Test Passed.
+"menu_record_bounds" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"menu_record_bounds" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/61 Testing: startup_camera_policy
+2/61 Test: startup_camera_policy
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/startup_policy_tests.exe"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"startup_camera_policy" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.08 sec
+----------------------------------------------------------
+Test Passed.
+"startup_camera_policy" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"startup_camera_policy" time elapsed: 00:00:00
+----------------------------------------------------------
+
+3/61 Testing: native_launcher_controls
+3/61 Test: native_launcher_controls
+Command: "C:/Program Files/PowerShell/7/pwsh.exe" "-NoProfile" "-NonInteractive" "-File" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/test_native_launcher.ps1"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"native_launcher_controls" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+123
+PASS: parse, plan-only, stale directory/log, live-writer legacy-failure/shared-read, appended AV, exclusive/missing/oversize, wrong-marker/runtime, pre-resume/short-lived identity, nonblocking native child (16.8666ms), affinity and path/PID-reuse refusal; no game launch
+<end of output>
+Test time =   5.81 sec
+----------------------------------------------------------
+Test Passed.
+"native_launcher_controls" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"native_launcher_controls" time elapsed: 00:00:05
+----------------------------------------------------------
+
+4/61 Testing: tracking_position
+4/61 Test: tracking_position
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/tracking_frame_tests.exe" "position"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"tracking_position" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+position: 15 checks, 0 failures
+<end of output>
+Test time =   0.09 sec
+----------------------------------------------------------
+Test Passed.
+"tracking_position" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"tracking_position" time elapsed: 00:00:00
+----------------------------------------------------------
+
+5/61 Testing: tracking_direction
+5/61 Test: tracking_direction
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/tracking_frame_tests.exe" "direction"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"tracking_direction" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+direction: 41 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"tracking_direction" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"tracking_direction" time elapsed: 00:00:00
+----------------------------------------------------------
+
+6/61 Testing: tracking_rotation
+6/61 Test: tracking_rotation
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/tracking_frame_tests.exe" "rotation"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"tracking_rotation" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+rotation: 365 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"tracking_rotation" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"tracking_rotation" time elapsed: 00:00:00
+----------------------------------------------------------
+
+7/61 Testing: tracking_stereo
+7/61 Test: tracking_stereo
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/tracking_frame_tests.exe" "stereo"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"tracking_stereo" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+stereo: 15 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"tracking_stereo" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"tracking_stereo" time elapsed: 00:00:00
+----------------------------------------------------------
+
+8/61 Testing: tracking_affine
+8/61 Test: tracking_affine
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/tracking_frame_tests.exe" "affine"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"tracking_affine" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+affine: 300 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"tracking_affine" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"tracking_affine" time elapsed: 00:00:00
+----------------------------------------------------------
+
+9/61 Testing: pose_bob
+9/61 Test: pose_bob
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/pose_frame_tests.exe" "bob"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"pose_bob" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+legacy bob disagreement 0.0948064 game units; shared disagreement 0.0000000
+bob: 1209 checks, 0 failures
+<end of output>
+Test time =   0.06 sec
+----------------------------------------------------------
+Test Passed.
+"pose_bob" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"pose_bob" time elapsed: 00:00:00
+----------------------------------------------------------
+
+10/61 Testing: pose_yaw
+10/61 Test: pose_yaw
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/pose_frame_tests.exe" "yaw"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"pose_yaw" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+yaw: 811 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"pose_yaw" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"pose_yaw" time elapsed: 00:00:00
+----------------------------------------------------------
+
+11/61 Testing: pose_policy
+11/61 Test: pose_policy
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/pose_frame_tests.exe" "policy"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"pose_policy" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+policy: 24000 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"pose_policy" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"pose_policy" time elapsed: 00:00:00
+----------------------------------------------------------
+
+12/61 Testing: pose_once
+12/61 Test: pose_once
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/pose_frame_tests.exe" "once"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"pose_once" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+once: 156 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"pose_once" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"pose_once" time elapsed: 00:00:00
+----------------------------------------------------------
+
+13/61 Testing: pose_inverse
+13/61 Test: pose_inverse
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/pose_frame_tests.exe" "inverse"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"pose_inverse" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+inverse: 3825 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"pose_inverse" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"pose_inverse" time elapsed: 00:00:00
+----------------------------------------------------------
+
+14/61 Testing: pose_bone
+14/61 Test: pose_bone
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/pose_frame_tests.exe" "bone"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"pose_bone" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+bone: 11 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"pose_bone" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"pose_bone" time elapsed: 00:00:00
+----------------------------------------------------------
+
+15/61 Testing: pose_source_wiring
+15/61 Test: pose_source_wiring
+Command: "C:/Program Files/CMake/bin/cmake.exe" "-DSOURCE_DIR=D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/../src" "-P" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/check_pose_wiring.cmake"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"pose_source_wiring" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+-- Shared camera frame wiring verified (source only)
+<end of output>
+Test time =   0.34 sec
+----------------------------------------------------------
+Test Passed.
+"pose_source_wiring" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"pose_source_wiring" time elapsed: 00:00:00
+----------------------------------------------------------
+
+16/61 Testing: authority_freshness
+16/61 Test: authority_freshness
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/authority_tests.exe" "freshness"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"authority_freshness" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+freshness: 118 checks, 0 failures
+<end of output>
+Test time =   0.06 sec
+----------------------------------------------------------
+Test Passed.
+"authority_freshness" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"authority_freshness" time elapsed: 00:00:00
+----------------------------------------------------------
+
+17/61 Testing: authority_cache
+17/61 Test: authority_cache
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/authority_tests.exe" "cache"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"authority_cache" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+cache: 106 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"authority_cache" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"authority_cache" time elapsed: 00:00:00
+----------------------------------------------------------
+
+18/61 Testing: authority_rearm
+18/61 Test: authority_rearm
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/authority_tests.exe" "rearm"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"authority_rearm" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+rearm: 210 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"authority_rearm" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"authority_rearm" time elapsed: 00:00:00
+----------------------------------------------------------
+
+19/61 Testing: authority_cursor
+19/61 Test: authority_cursor
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/authority_tests.exe" "cursor"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"authority_cursor" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+cursor: 6 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"authority_cursor" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"authority_cursor" time elapsed: 00:00:00
+----------------------------------------------------------
+
+20/61 Testing: authority_safety
+20/61 Test: authority_safety
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/authority_tests.exe" "safety"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"authority_safety" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+safety: 28 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"authority_safety" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"authority_safety" time elapsed: 00:00:00
+----------------------------------------------------------
+
+21/61 Testing: authority_finite
+21/61 Test: authority_finite
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/authority_tests.exe" "finite"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"authority_finite" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+finite: 9 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"authority_finite" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"authority_finite" time elapsed: 00:00:00
+----------------------------------------------------------
+
+22/61 Testing: authority_source_wiring
+22/61 Test: authority_source_wiring
+Command: "C:/Program Files/CMake/bin/cmake.exe" "-DSOURCE_DIR=D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/../src" "-P" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/check_authority_wiring.cmake"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"authority_source_wiring" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+-- Input authority adapters wired (source only)
+<end of output>
+Test time =   0.17 sec
+----------------------------------------------------------
+Test Passed.
+"authority_source_wiring" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"authority_source_wiring" time elapsed: 00:00:00
+----------------------------------------------------------
+
+23/61 Testing: arm_twist
+23/61 Test: arm_twist
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/arm_pose_tests.exe" "twist"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"arm_twist" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+twist: 13620 checks, 0 failures
+<end of output>
+Test time =   0.06 sec
+----------------------------------------------------------
+Test Passed.
+"arm_twist" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"arm_twist" time elapsed: 00:00:00
+----------------------------------------------------------
+
+24/61 Testing: arm_reset
+24/61 Test: arm_reset
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/arm_pose_tests.exe" "reset"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"arm_reset" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+reset: 33 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"arm_reset" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"arm_reset" time elapsed: 00:00:00
+----------------------------------------------------------
+
+25/61 Testing: arm_projection
+25/61 Test: arm_projection
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/arm_pose_tests.exe" "projection"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"arm_projection" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+projection: 1447 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"arm_projection" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"arm_projection" time elapsed: 00:00:00
+----------------------------------------------------------
+
+26/61 Testing: weapon_socket
+26/61 Test: weapon_socket
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/weapon_pose_tests.exe" "socket"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"weapon_socket" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+socket: 2506 checks, 0 failures
+<end of output>
+Test time =   0.06 sec
+----------------------------------------------------------
+Test Passed.
+"weapon_socket" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"weapon_socket" time elapsed: 00:00:00
+----------------------------------------------------------
+
+27/61 Testing: weapon_ownership
+27/61 Test: weapon_ownership
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/weapon_pose_tests.exe" "ownership"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"weapon_ownership" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+ownership: 41 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"weapon_ownership" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"weapon_ownership" time elapsed: 00:00:00
+----------------------------------------------------------
+
+28/61 Testing: weapon_latch
+28/61 Test: weapon_latch
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/weapon_pose_tests.exe" "latch"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"weapon_latch" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+latch: 56 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"weapon_latch" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"weapon_latch" time elapsed: 00:00:00
+----------------------------------------------------------
+
+29/61 Testing: weapon_arc
+29/61 Test: weapon_arc
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/weapon_pose_tests.exe" "arc"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"weapon_arc" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+arc: 1088 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"weapon_arc" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"weapon_arc" time elapsed: 00:00:00
+----------------------------------------------------------
+
+30/61 Testing: weapon_spread
+30/61 Test: weapon_spread
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/weapon_pose_tests.exe" "spread"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"weapon_spread" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+spread: 12963 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"weapon_spread" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"weapon_spread" time elapsed: 00:00:00
+----------------------------------------------------------
+
+31/61 Testing: weapon_invalid_spread
+31/61 Test: weapon_invalid_spread
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/weapon_pose_tests.exe" "invalid_spread"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"weapon_invalid_spread" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+invalid_spread: 7 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"weapon_invalid_spread" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"weapon_invalid_spread" time elapsed: 00:00:00
+----------------------------------------------------------
+
+32/61 Testing: motion_source_wiring
+32/61 Test: motion_source_wiring
+Command: "C:/Program Files/CMake/bin/cmake.exe" "-DSOURCE_DIR=D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/../src" "-P" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/check_motion_wiring.cmake"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"motion_source_wiring" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+-- Motion pose adapters wired (source only)
+<end of output>
+Test time =   0.08 sec
+----------------------------------------------------------
+Test Passed.
+"motion_source_wiring" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"motion_source_wiring" time elapsed: 00:00:00
+----------------------------------------------------------
+
+33/61 Testing: rig_mapping
+33/61 Test: rig_mapping
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/arm_rig_tests.exe" "mapping"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"rig_mapping" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+mapping: 74 checks, 0 failures
+<end of output>
+Test time =   0.07 sec
+----------------------------------------------------------
+Test Passed.
+"rig_mapping" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"rig_mapping" time elapsed: 00:00:00
+----------------------------------------------------------
+
+34/61 Testing: rig_joints
+34/61 Test: rig_joints
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/arm_rig_tests.exe" "joints"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"rig_joints" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+joints: 7211 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"rig_joints" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"rig_joints" time elapsed: 00:00:00
+----------------------------------------------------------
+
+35/61 Testing: rig_singular
+35/61 Test: rig_singular
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/arm_rig_tests.exe" "singular"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"rig_singular" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+singular: 606 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"rig_singular" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"rig_singular" time elapsed: 00:00:00
+----------------------------------------------------------
+
+36/61 Testing: rig_wrist
+36/61 Test: rig_wrist
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/arm_rig_tests.exe" "wrist"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"rig_wrist" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+wrist: 9626 checks, 0 failures
+<end of output>
+Test time =   0.05 sec
+----------------------------------------------------------
+Test Passed.
+"rig_wrist" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"rig_wrist" time elapsed: 00:00:00
+----------------------------------------------------------
+
+37/61 Testing: rig_cap
+37/61 Test: rig_cap
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/arm_rig_tests.exe" "cap"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"rig_cap" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+cap: 6 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"rig_cap" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"rig_cap" time elapsed: 00:00:00
+----------------------------------------------------------
+
+38/61 Testing: rig_mesh
+38/61 Test: rig_mesh
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/arm_rig_tests.exe" "mesh"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"rig_mesh" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+mesh: 721 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"rig_mesh" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"rig_mesh" time elapsed: 00:00:00
+----------------------------------------------------------
+
+39/61 Testing: rig_staging
+39/61 Test: rig_staging
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/arm_rig_tests.exe" "staging"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"rig_staging" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+staging: 16 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"rig_staging" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"rig_staging" time elapsed: 00:00:00
+----------------------------------------------------------
+
+40/61 Testing: rig_history
+40/61 Test: rig_history
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/arm_rig_tests.exe" "history"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"rig_history" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+history: 9 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"rig_history" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"rig_history" time elapsed: 00:00:00
+----------------------------------------------------------
+
+41/61 Testing: rig_torso
+41/61 Test: rig_torso
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/arm_rig_tests.exe" "torso"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"rig_torso" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+torso: 722 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"rig_torso" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"rig_torso" time elapsed: 00:00:00
+----------------------------------------------------------
+
+42/61 Testing: rig_source_wiring
+42/61 Test: rig_source_wiring
+Command: "C:/Program Files/CMake/bin/cmake.exe" "-DSOURCE_DIR=D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/../src" "-P" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/check_rig_wiring.cmake"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"rig_source_wiring" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+-- Named arm mode, ownership and staged commit adapters wired (source only)
+<end of output>
+Test time =   0.09 sec
+----------------------------------------------------------
+Test Passed.
+"rig_source_wiring" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"rig_source_wiring" time elapsed: 00:00:00
+----------------------------------------------------------
+
+43/61 Testing: image_sha
+43/61 Test: image_sha
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/image_identity_tests.exe" "sha"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"image_sha" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+sha: 1042 checks, 0 failures
+<end of output>
+Test time =   0.10 sec
+----------------------------------------------------------
+Test Passed.
+"image_sha" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"image_sha" time elapsed: 00:00:00
+----------------------------------------------------------
+
+44/61 Testing: image_headers
+44/61 Test: image_headers
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/image_identity_tests.exe" "headers"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"image_headers" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+headers: 390 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"image_headers" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"image_headers" time elapsed: 00:00:00
+----------------------------------------------------------
+
+45/61 Testing: image_profiles
+45/61 Test: image_profiles
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/image_identity_tests.exe" "profiles"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"image_profiles" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+profiles: 43 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"image_profiles" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"image_profiles" time elapsed: 00:00:00
+----------------------------------------------------------
+
+46/61 Testing: image_translation
+46/61 Test: image_translation
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/image_identity_tests.exe" "translation"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"image_translation" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+translation: 10 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"image_translation" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"image_translation" time elapsed: 00:00:00
+----------------------------------------------------------
+
+47/61 Testing: owner_keys
+47/61 Test: owner_keys
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/owner_lease_tests.exe" "keys"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"owner_keys" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+keys: 45 checks, 0 failures
+<end of output>
+Test time =   0.06 sec
+----------------------------------------------------------
+Test Passed.
+"owner_keys" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"owner_keys" time elapsed: 00:00:00
+----------------------------------------------------------
+
+48/61 Testing: owner_epochs
+48/61 Test: owner_epochs
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/owner_lease_tests.exe" "epochs"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"owner_epochs" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+epochs: 33 checks, 0 failures
+<end of output>
+Test time =   0.05 sec
+----------------------------------------------------------
+Test Passed.
+"owner_epochs" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"owner_epochs" time elapsed: 00:00:00
+----------------------------------------------------------
+
+49/61 Testing: owner_heartbeat
+49/61 Test: owner_heartbeat
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/owner_lease_tests.exe" "heartbeat"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"owner_heartbeat" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+heartbeat: 10 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"owner_heartbeat" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"owner_heartbeat" time elapsed: 00:00:00
+----------------------------------------------------------
+
+50/61 Testing: owner_coverage
+50/61 Test: owner_coverage
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/owner_lease_tests.exe" "coverage"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"owner_coverage" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+coverage: 385 checks, 0 failures
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"owner_coverage" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"owner_coverage" time elapsed: 00:00:00
+----------------------------------------------------------
+
+51/61 Testing: owner_source_wiring
+51/61 Test: owner_source_wiring
+Command: "C:/Program Files/CMake/bin/cmake.exe" "-DSOURCE_DIR=D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/../src" "-P" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/check_owner_wiring.cmake"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"owner_source_wiring" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+-- Observed owner and exact-image adapters wired (source only)
+<end of output>
+Test time =   0.13 sec
+----------------------------------------------------------
+Test Passed.
+"owner_source_wiring" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"owner_source_wiring" time elapsed: 00:00:00
+----------------------------------------------------------
+
+52/61 Testing: scenario_parse
+52/61 Test: scenario_parse
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/scenario_tests.exe" "parse"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"scenario_parse" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+parse: 22 checks, 0 failures (environment=harness; no game acceptance)
+<end of output>
+Test time =   0.07 sec
+----------------------------------------------------------
+Test Passed.
+"scenario_parse" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"scenario_parse" time elapsed: 00:00:00
+----------------------------------------------------------
+
+53/61 Testing: scenario_swap
+53/61 Test: scenario_swap
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/scenario_tests.exe" "swap"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"scenario_swap" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+swap: 5 checks, 0 failures (environment=harness; no game acceptance)
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"scenario_swap" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"scenario_swap" time elapsed: 00:00:00
+----------------------------------------------------------
+
+54/61 Testing: scenario_loss
+54/61 Test: scenario_loss
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/scenario_tests.exe" "loss"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"scenario_loss" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+loss: 79 checks, 0 failures (environment=harness; no game acceptance)
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"scenario_loss" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"scenario_loss" time elapsed: 00:00:00
+----------------------------------------------------------
+
+55/61 Testing: scenario_sweep
+55/61 Test: scenario_sweep
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/scenario_tests.exe" "sweep"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"scenario_sweep" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+sweep: 30033 checks, 0 failures (environment=harness; no game acceptance)
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"scenario_sweep" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"scenario_sweep" time elapsed: 00:00:00
+----------------------------------------------------------
+
+56/61 Testing: scenario_lifecycle
+56/61 Test: scenario_lifecycle
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/scenario_tests.exe" "lifecycle"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"scenario_lifecycle" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+lifecycle: 8 checks, 0 failures (environment=harness; no game acceptance)
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"scenario_lifecycle" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"scenario_lifecycle" time elapsed: 00:00:00
+----------------------------------------------------------
+
+57/61 Testing: scenario_pair
+57/61 Test: scenario_pair
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/scenario_tests.exe" "pair"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"scenario_pair" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+pair: 20 checks, 0 failures (environment=harness; no game acceptance)
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"scenario_pair" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"scenario_pair" time elapsed: 00:00:00
+----------------------------------------------------------
+
+58/61 Testing: scenario_bitmap
+58/61 Test: scenario_bitmap
+Command: "D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc/Release/scenario_tests.exe" "bitmap"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"scenario_bitmap" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+bitmap: 9 checks, 0 failures (environment=harness; no game acceptance)
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"scenario_bitmap" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"scenario_bitmap" time elapsed: 00:00:00
+----------------------------------------------------------
+
+59/61 Testing: scenario_source_wiring
+59/61 Test: scenario_source_wiring
+Command: "C:/Program Files/CMake/bin/cmake.exe" "-DSOURCE_DIR=D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/../src" "-P" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/check_scenario_wiring.cmake"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"scenario_source_wiring" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+-- Debug-only raw input / downstream observations wired (source only)
+<end of output>
+Test time =   0.25 sec
+----------------------------------------------------------
+Test Passed.
+"scenario_source_wiring" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"scenario_source_wiring" time elapsed: 00:00:00
+----------------------------------------------------------
+
+60/61 Testing: scenario_receipt_controls
+60/61 Test: scenario_receipt_controls
+Command: "C:/Users/meise/AppData/Local/Programs/Python/Python312/python.exe" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/test_scenario_report.py"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"scenario_receipt_controls" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+................
+----------------------------------------------------------------------
+Ran 16 tests in 2.814s
+
+OK
+<end of output>
+Test time =   3.12 sec
+----------------------------------------------------------
+Test Passed.
+"scenario_receipt_controls" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"scenario_receipt_controls" time elapsed: 00:00:03
+----------------------------------------------------------
+
+61/61 Testing: scenario_review_controls
+61/61 Test: scenario_review_controls
+Command: "C:/Users/meise/AppData/Local/Programs/Python/Python312/python.exe" "D:/Dev Debug/Other VR Mods/FarCry2VR/mod/tests/test_scenario_review.py"
+Directory: D:/Dev Debug/Other VR Mods/FarCry2VR/build/tracking-tests-msvc
+"scenario_review_controls" start time: Oct 26 19:40 AUS Eastern Daylight Time
+Output:
+----------------------------------------------------------
+.............
+----------------------------------------------------------------------
+Ran 13 tests in 2.516s
+
+OK
+<end of output>
+Test time =   2.81 sec
+----------------------------------------------------------
+Test Passed.
+"scenario_review_controls" end time: Oct 26 19:40 AUS Eastern Daylight Time
+"scenario_review_controls" time elapsed: 00:00:02
+----------------------------------------------------------
+
+End testing: Oct 26 19:40 AUS Eastern Daylight Time

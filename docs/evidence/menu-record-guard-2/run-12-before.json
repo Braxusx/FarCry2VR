@@ -1,0 +1,67 @@
+{
+  "RuntimeSha": "a8db637afca8b712f7a9b0e15f983cd5a4a06374ae824eab65efa530d2e99299",
+  "RuntimeManifest": "C:\\Users\\meise\\AppData\\Local\\xr-sim\\runtime\\xrsim-x86.json",
+  "Saves": [
+    {
+      "Sha256": "b7522af208e6ee58af75865c752d1f327a5c6040a85b9181c570e3cc8e638e68",
+      "Path": "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\3569356713291.sav",
+      "Backup": "D:\\Dev Debug\\Other VR Mods\\FarCry2VR\\out\\startup-isolation-20261026-12-production-verification\\backup\\save-3569356713291.sav"
+    },
+    {
+      "Sha256": "1824c8c8b920df7303bf5b34897a900e6e05c5363de800f65e175f6e418b3173",
+      "Path": "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\5344611687451.sav",
+      "Backup": "D:\\Dev Debug\\Other VR Mods\\FarCry2VR\\out\\startup-isolation-20261026-12-production-verification\\backup\\save-5344611687451.sav"
+    },
+    {
+      "Sha256": "0693201d8feddafcd12597d8581bdb37f7e0e8b27aaafba9b0b9912436a1ed89",
+      "Path": "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\5396390254288.sav",
+      "Backup": "D:\\Dev Debug\\Other VR Mods\\FarCry2VR\\out\\startup-isolation-20261026-12-production-verification\\backup\\save-5396390254288.sav"
+    },
+    {
+      "Sha256": "aef3586a459df95d7ba1f9f5d4fdea00c495106dd65117594e664c297fa828a3",
+      "Path": "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\5396398652962.sav",
+      "Backup": "D:\\Dev Debug\\Other VR Mods\\FarCry2VR\\out\\startup-isolation-20261026-12-production-verification\\backup\\save-5396398652962.sav"
+    },
+    {
+      "Sha256": "6311199d734ea57d5de433d5707dfe98f46ad3ee248109ef79059fc3a9307434",
+      "Path": "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\653604165658.sav",
+      "Backup": "D:\\Dev Debug\\Other VR Mods\\FarCry2VR\\out\\startup-isolation-20261026-12-production-verification\\backup\\save-653604165658.sav"
+    }
+  ],
+  "LaunchLimit": 1,
+  "Files": [
+    {
+      "Sha256": "f15cd71986caace00f9ca546ea0a057321c4f151afb78446e90dcbf81ae2b220",
+      "Path": "F:\\Games\\Far Cry 2 Remastered Definite Edition\\Far Cry 2 Remastered Definite Edition\\bin\\dinput8.dll",
+      "Present": true,
+      "Backup": "D:\\Dev Debug\\Other VR Mods\\FarCry2VR\\out\\startup-isolation-20261026-12-production-verification\\backup\\dinput8.dll"
+    },
+    {
+      "Sha256": "2325e60ead2f52c990a95925e6ff2eb2167ada099864d4957320d9322d34ae48",
+      "Path": "F:\\Games\\Far Cry 2 Remastered Definite Edition\\Far Cry 2 Remastered Definite Edition\\bin\\fc2vr.ini",
+      "Present": true,
+      "Backup": "D:\\Dev Debug\\Other VR Mods\\FarCry2VR\\out\\startup-isolation-20261026-12-production-verification\\backup\\fc2vr.ini"
+    },
+    {
+      "Sha256": "6f118b42f62fbc69b366ad3832b71d8672523b007edbf40f1bf7e19d5d881e3a",
+      "Path": "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\GamerProfile.xml",
+      "Present": true,
+      "Backup": "D:\\Dev Debug\\Other VR Mods\\FarCry2VR\\out\\startup-isolation-20261026-12-production-verification\\backup\\GamerProfile.xml"
+    },
+    {
+      "Sha256": "54a9d6a1aa109d75fcae4d45a1a02eb76587b38b1ee02c2f34f48acba9bfcd6f",
+      "Path": "F:\\Games\\Far Cry 2 Remastered Definite Edition\\Far Cry 2 Remastered Definite Edition\\bin\\fc2vr.log",
+      "Present": true,
+      "Backup": "D:\\Dev Debug\\Other VR Mods\\FarCry2VR\\out\\startup-isolation-20261026-12-production-verification\\backup\\fc2vr.log"
+    },
+    {
+      "Sha256": "",
+      "Path": "F:\\Games\\Far Cry 2 Remastered Definite Edition\\Far Cry 2 Remastered Definite Edition\\bin\\fc2vr_prev.log",
+      "Present": false,
+      "Backup": "D:\\Dev Debug\\Other VR Mods\\FarCry2VR\\out\\startup-isolation-20261026-12-production-verification\\backup\\fc2vr_prev.log"
+    }
+  ],
+  "Scenario": "none-startup-observation",
+  "ExpectedDll": "407c774f32fd5b91ff72dc5572a75987e3970168a6ee4d762a85b0208d2e2b70",
+  "MaxSeconds": 150
+}

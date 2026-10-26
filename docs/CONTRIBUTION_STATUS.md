@@ -3,7 +3,26 @@
 Date: 2026-10-26. Branch: `codex/tracking-arms-physical-steering`.
 Base: `92a29c5b1e28a652d067262aacc59b421ed044c1` (upstream 1.0.1).
 
-## Latest native attempt: run 04 — native startup crash confirmed
+## Latest checkpoint: menu-record-guard-2 — startup repaired, shutdown still fails
+
+Native menu animation requested index 4 from only four constructed 84-byte
+records. A bounded init/reset/tick owner guard prevents that access, retaining
+the standard parent/list update. Same-DLL guard-on/off comparison: on reaches
+on-foot updates, off reproduces the startup callback AV. The final normal DLL
+loads with four unique signatures and survives bounded virtual-XR startup.
+
+Run 12 independently confirms survival but **fails shutdown**: the supervisor's
+window-close request is followed by a different native AV at `0x10ad4095`.
+The hardened final-log checker rejects it despite exit code 0. All 61 offline
+groups pass. No claim of overall baseline health, actual arm/weapon scenario,
+specific save loaded, or headset acceptance. Far Cry 2 is stopped; original proxy,
+settings, logs and five saves/inventory are independently restored. The tested
+build is not permanently installed. A follow-up launch was refused because SWAT4
+was then running; native menu-driven Quit remains unmeasured. See
+[startup fix, controls and remaining shutdown gate](STARTUP_FIX_2026-10-26.md).
+Everything remains local on this contribution branch; no push/package/PR.
+
+## Previous native attempt: run 04 — native startup crash confirmed
 
 The corrected launcher worked: PID 130276 stayed owned, xr-sim reached ready/focused,
 and 11 bootstrap commands plus final requested head/hand poses were observed.

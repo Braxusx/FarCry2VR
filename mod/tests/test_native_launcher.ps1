@@ -17,6 +17,7 @@ if(!$refused) { throw 'Used-directory guard failed' }
 $launcherSource=[IO.File]::ReadAllText($script)
 if($launcherSource.Contains('[IO.File]::ReadAllText($log)') -or $launcherSource.Contains('[IO.File]::ReadAllText($traces')) {throw 'Exclusive live telemetry reader was reintroduced'}
 if(!$launcherSource.Contains('Read-NativeTestText -Path $log') -or !$launcherSource.Contains('Read-NativeTestText -Path $traces[0].FullName')) {throw 'Shared reader is not wired to both live telemetry files'}
+if(!$launcherSource.Contains('Get-NativeTestLogFailure -Text (Read-NativeTestText -Path $retainedLog)') -or !$launcherSource.Contains('FinalLogFailure=$finalLogFailure')) {throw 'Post-close native failure check/receipt missing'}
 Import-Module (Join-Path $repo 'scripts/NativeTestProcess.psm1') -Force
 # Reproduces the actual run-02 race without launching a game: old installed
 # sessions can have both a different marker and an old native exception.
@@ -25,11 +26,16 @@ if(Get-NativeTestLogFailure -Text $stale -Fresh $false) { throw 'Stale native lo
 if((Get-NativeTestLogFailure -Text $stale -Fresh $true) -ne 'Wrong loaded mod marker') { throw 'Wrong fresh marker was accepted' }
 $current='FC2VR loaded (contribution startup-camera-1/scenario-runner-2, scenarioTesting=1); XR: runtime xr-sim 1.0.0'
 if(Get-NativeTestLogFailure -Text $current -Fresh $true) { throw 'Fresh matching marker was rejected' }
+$production=$current.Replace('scenarioTesting=1','scenarioTesting=0')
+if(Get-NativeTestLogFailure -Text $production -Fresh $true -ScenarioTesting 0) {throw 'Production marker was rejected'}
+if((Get-NativeTestLogFailure -Text $production -Fresh $true) -ne 'Wrong loaded mod marker') {throw 'Production marker accepted as debug'}
+if((Get-NativeTestLogFailure -Text $current -Fresh $true -ScenarioTesting 0) -ne 'Wrong loaded mod marker') {throw 'Debug marker accepted as production'}
 if((Get-NativeTestLogFailure -Text ($current+' EXCEPTION c0000005') -Fresh $true) -notlike 'Native access violation*') { throw 'Fresh AV was accepted' }
 if((Get-NativeTestLogFailure -Text ($current.Replace('xr-sim','wrong-runtime')) -Fresh $true) -notlike 'Wrong runtime*') { throw 'Fresh wrong runtime was accepted' }
 $fixtureRoot=Join-Path ([IO.Path]::GetTempPath()) ('fc2vr-launcher-'+[Guid]::NewGuid().ToString('N'))
 $null=New-Item -ItemType Directory -Path $fixtureRoot
 $fixtureLog=Join-Path $fixtureRoot 'active.log'
+$fixtureCopy=Join-Path $fixtureRoot 'copy.log'
 $writer=$null
 try {
     # Exact sharing discriminator: a live native writer that permits readers.
@@ -48,10 +54,13 @@ try {
     if($null -ne (Read-NativeTestText $fixtureLog)) { throw 'Exclusive lock should be pending' }
     $writer.Dispose();$writer=$null
     if($null -ne (Read-NativeTestText (Join-Path $fixtureRoot 'not-yet-created.log'))) { throw 'Absent log should be pending' }
+    Copy-NativeTestFile -Source $fixtureLog -Destination $fixtureCopy
+    if((Get-FileHash -LiteralPath $fixtureLog).Hash -ne (Get-FileHash -LiteralPath $fixtureCopy).Hash) {throw 'Restoration copy changed bytes'}
 } finally {
     if($writer) {$writer.Dispose()}
     # Exact test-owned files only, never a recursive computed-directory delete.
     if(Test-Path -LiteralPath $fixtureLog) {Remove-Item -LiteralPath $fixtureLog}
+    if(Test-Path -LiteralPath $fixtureCopy) {Remove-Item -LiteralPath $fixtureCopy}
     Remove-Item -LiteralPath $fixtureRoot
 }
 $identity=$null
@@ -63,6 +72,13 @@ try {
     $ms=([DateTime]::UtcNow-$start).TotalMilliseconds
     if($ms -gt 2500 -or !(Get-OwnedTestProcess $identity)) { throw 'Launch was not nonblocking' }
     if($identity.Affinity -le 0 -or $identity.Affinity -gt 65535) { throw 'Affinity not limited before execution' }
+    $hostProbe=Get-Process -Id $PID
+    try {
+        $hostProbe.Refresh();$handlesBefore=$hostProbe.HandleCount
+        for($poll=0;$poll -lt 40;++$poll) {if(!(Test-OwnedTestProcess $identity)){throw 'Polling lost live child'}}
+        $hostProbe.Refresh();$handlesAfter=$hostProbe.HandleCount
+        if($handlesAfter-$handlesBefore -gt 12) {throw 'Ownership polling retained process handles'}
+    } finally {$hostProbe.Dispose()}
     $wrong=[pscustomobject]@{Id=$identity.Id;Path=$identity.Path;StartTicks=($identity.StartTicks+1)}
     $refused=$false;try { Get-OwnedTestProcess $wrong|Out-Null } catch { $refused=$_.Exception.Message -like '*PID identity changed*' }
     if(!$refused -or !(Get-OwnedTestProcess $identity)) { throw 'PID reuse control failed' }

@@ -1,0 +1,271 @@
+[19:31:24.690] FC2VR loaded (contribution startup-camera-1/scenario-runner-2, scenarioTesting=0, safety=menu-record-guard-2, build Oct 26 2026 18:19:08, module=F:\Games\Far Cry 2 Remastered Definite Edition\Far Cry 2 Remastered Definite Edition\bin\DINPUT8.dll)
+[19:31:24.690] VA[startup]: total=4095 MB avail=3977 MB largestFree=2046 MB
+[19:31:24.704] config: enable=1 worldScale=1 cullMargin=1.25 renderScale=1
+[19:31:24.704] dlss: off, DLAA, preset J, jitter 1 (16 phases), near-pass mask 1
+[19:31:24.705] afw: off (experimental), grid step 2, hand depth 0.30 m (min 0.30 m)
+[19:31:24.778] image-gate-1 profile=Steam exact accepted=1 measured=1 mappedHeader=1 bytes=20183176 sha256=6353936a54aa841350bb30ff005727859cdef1aa10c209209b220b399e862765 timestamp=4aae9636 imageSize=019e8000; unknown has no native addresses
+[19:31:24.779] core limit: 16 logical processors in use (limit 16)
+[19:31:24.779] system: Windows 6.0 build 6001, CPU AMD Ryzen 9 7950X3D 16-Core Processor          , power AC, process priority normal
+[19:31:24.779] timer: resolution 1.000 ms at start-up, power throttling control 0x0 state 0x0
+[19:31:24.779] timer fix (TimerFix=1): power throttling off ok (mask 0x5), timeBeginPeriod(1) ok, resolution now 1.000 ms
+[19:31:24.779] tracking frame height-direction-1: HeightOffset=0.0000 (positions only; directions untranslated)
+[19:31:24.779] DPI awareness: on
+[19:31:24.779] hook kernelbase.dll!TerminateProcess: 1
+[19:31:24.779] hook kernel32.dll!ExitProcess: prologue 55 8b ec 6a ff, skipped
+[19:31:24.779] Dunia.dll base 10000000
+[19:31:24.779] NPC fix: rigid-body character controller only for archetypes with bUpdateRotation (animals)
+[19:31:24.779] NPC fix: thread-count hook 1
+[19:31:24.779] water reflection fix installed
+[19:31:24.779] shadow caster camera fix installed
+[19:31:24.779] shadow cascade fix installed
+[19:31:24.779] shadow map size hook 1
+[19:31:24.779] shared shadow maps: caster culling setup installed
+[19:31:24.779] shared shadow maps: caster culling run installed
+[19:31:24.779] shared sun shadows: hooks 1 1 1 1 1 (on)
+[19:31:24.779] bullet counter hook 1
+[19:31:24.779] HUD setup hook 1
+[19:31:24.782] controls: XInputGetState hook 1, XInputSetState hook 1
+[19:31:24.793] arms: arm-rig-1 enabled=1 namedRequired=1 wristLimit=90.0 defaultOff=1
+[19:31:24.793] arms: projectile aim hook 1
+[19:31:24.794] arms: weapon pose hook 1
+[19:31:24.794] arms: monocular hook 1
+[19:31:24.794] arms: monocular tag ray hooks 1 1 1
+[19:31:24.794] arms: crossbow caller diagnostics 1 1 1
+[19:31:24.794] arms: reload detour 1
+[19:31:24.794] arms: animation event hook 1
+[19:31:24.794] arms: NPC grab 0 (ragdoll driver hook 0, ragdoll update hook 0, movement hook 0)
+[19:31:24.794] arms: throw hook 1
+[19:31:24.794] arms: orientation hook 1
+[19:31:24.794] arms: watch hook 1
+[19:31:24.794] arms: hooks camera 1 hierarchy 1 hierarchy-job 1 shots 1 (weapon in hand 1, aim from controller 1)
+[19:31:24.794] dev console: devmodeon/devmodeoff enabled
+[19:31:24.794] hook TreeLod=1 TreeMake=1 SlotDtor=1
+[19:31:24.794] hook NearProj=1
+[19:31:24.794] hook Render2DView=1
+[19:31:24.794] hooks: RenderViewport=1 Present=1 RenderFrame=1 DrvReset=1
+[19:31:24.815] menu-record-guard-2 signature bytes=9 matches=1
+[19:31:24.831] menu-record-guard-2 signature bytes=31 matches=1
+[19:31:24.848] menu-record-guard-2 signature bytes=13 matches=1
+[19:31:24.864] menu-record-guard-2 signature bytes=18 matches=1
+[19:31:24.864] menu-record-guard-2 installed 3/3 after unique executable-section signatures; missing optional fifth record skips init/reset/animation only, no synthetic record
+[19:31:25.104] real dinput8: C:\WINDOWS\system32\dinput8.dll 6ccd6fa0
+[19:31:25.266] thread count JOB_THREADS: 0 -> 1 (NPC fix)
+[19:32:33.666] shadow map: cascade size 2560 -> 2560 (map 7680x2560)
+[19:32:33.811] thread count PHYSIC_THREADS: 3 -> 1 (NPC fix)
+[19:32:33.812] thread count PHYSIC_THREADS: 3 -> 1 (NPC fix)
+[19:32:34.104] render config 045d12c0: DisableAntiPortals = 1, DisableVisibilityTest = 1
+[19:32:34.130] device vtable hooked (CreateTexture2D, CreateRenderTargetView)
+[19:32:34.130] engine device at drv+0x38 = 04aa0e24 (g_dev10 04aa0e24), vtables 04aa0e28 / 04aa0e28
+[19:32:34.130] inline DrawIndexed at d3d11.dll+e0960: 1
+[19:32:34.130] inline Draw at d3d11.dll+e0d00: 1
+[19:32:34.130] inline DrawIndexedInstanced at d3d11.dll+e0790: 1
+[19:32:34.130] inline DrawInstanced at d3d11.dll+e0b30: 1
+[19:32:34.130] inline OMSetRenderTargets at d3d11.dll+e4680: 1
+[19:32:34.130] inline RSSetViewports at d3d11.dll+e66b0: 1
+[19:32:34.130] backbuffer is now 1280x720
+[19:32:34.133] VA[before XR init]: total=4095 MB avail=2988 MB largestFree=2044 MB
+[19:32:34.264] XR: 9 runtime extensions: XR_KHR_D3D11_enable XR_KHR_D3D12_enable XR_KHR_opengl_enable XR_KHR_vulkan_enable XR_KHR_vulkan_enable2 XR_MND_headless XR_XRSIM_d3d9_enable XR_XRSIM_d3d10_enable XR_EXT_debug_utils 
+[19:32:34.345] XR: runtime xr-sim 1.0.0
+[19:32:34.345] XR: system 'FC2 native scenario validation (virtual XR, not HMD acceptance)'
+[19:32:34.345] XR: recommended eye 800x800
+[19:32:34.373] XR: D3D11 device on adapter 'NVIDIA GeForce RTX 5070 Ti' hr=00000000
+[19:32:34.408] XR: controller input ready (19 bindings)
+[19:32:34.408] engine eye targets 800x800: colour=183de100 depth=184540a0
+[19:32:34.414] eye texture found at +0x2c (depth 0) fmt=28 bind=0x28
+[19:32:34.417] eye texture found at +0x2c (depth 1) fmt=44 bind=0x40
+[19:32:34.417] XR: eye targets 800x800 fmt=28, backbuffer 1280x720 fmt=28 samples=1
+[19:32:34.417] XR: swapchain formats eye=29 screen=29
+[19:32:34.420] XR: HUD layer 800x800 ready
+[19:32:34.421] XR: reticle layer ready
+[19:32:34.422] XR: aiming dot layer ready
+[19:32:34.673] XR: scope window layer ready
+[19:32:34.790] XR: ready
+[19:32:34.790] UI layer patches: begin=1 end=1
+[19:32:34.790] UI mode 2: depth 6.0 m, scale 0.70, scope 3 (RSSetViewports hook on)
+[19:32:34.795] VA[after XR init]: total=4095 MB avail=2945 MB largestFree=2044 MB
+[19:32:34.795] XR: input-authority-1 seq=1 gen=2 focused=0 sync=0 headTracked=0 L(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=0 authority=0) R(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=0 authority=0)
+[19:32:34.795] XR: session state 1
+[19:32:34.795] XR: session state 2
+[19:32:34.795] XR: session state 3
+[19:32:34.797] tracking: LOCAL generation 1; auto-recenter before using new space
+[19:32:34.797] recentered (head y=1.600)
+[19:32:34.797] head: y=1.600 refY=1.600 -> view offset +0.000 m
+[19:32:34.797] startup-camera-1 world=0 loading=0 menu=0; unowned viewport stays native single-pass
+[19:32:34.798] TreeLod this=0470a910 cfg=02b48b80 cached=(0, 0) new=(1, 1) phase=other suppress=0
+[19:32:34.798] frame 1: xr running=1 eyes=0
+[19:32:34.802] VA[frame]: total=4095 MB avail=2945 MB largestFree=2044 MB
+[19:32:34.935] PRESENT target=003a1b54(Nomad 'Far Cry 2' client 1280x720) stored=003a1b54(Nomad) swapchain=07a6f0b8 changes=1
+[19:32:34.941] XR: session state 4
+[19:32:34.944] draw variant slot 8 at d3d11.dll+e08b0 hooked (1 total)
+[19:32:34.944] draw variant slot 9 at d3d11.dll+e0c50 hooked (2 total)
+[19:32:34.944] draw variant slot 14 at d3d11.dll+e06e0 hooked (3 total)
+[19:32:34.944] draw variant slot 15 at d3d11.dll+e0a80 hooked (4 total)
+[19:32:35.142] PRESENT target=003a1b54(Nomad 'Far Cry 2' client 1280x720) stored=003a1b54(Nomad) swapchain=07a6f0b8 changes=1
+[19:32:35.147] XR: session state 5
+[19:32:35.148] XR: interaction profile /interaction_profiles/oculus/touch_controller
+[19:32:35.148] XR: input-authority-1 seq=8 gen=8 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:32:35.148] extra main viewport in one frame: rendered flat only
+[19:32:37.205] menu-record-guard-1 extra=0 count=4 descriptorMatched=1 recordMatched=0; parent/list update retained
+[19:32:37.525] PRESENT target=003a1b54(Nomad 'Far Cry 2' client 1280x720) stored=003a1b54(Nomad) swapchain=07a6f0b8 changes=1
+[19:32:37.565] XR: input-authority-1 seq=9 gen=9 focused=1 sync=0 headTracked=0 L(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0) R(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0)
+[19:32:37.565] XR: input authority invalidated (publication gap)
+[19:32:37.565] XR: input-authority-1 seq=10 gen=9 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:32:37.727] PRESENT target=003a1b54(Nomad 'Far Cry 2' client 1280x720) stored=003a1b54(Nomad) swapchain=07a6f0b8 changes=1
+[19:32:37.730] XR: input-authority-1 seq=11 gen=10 focused=1 sync=0 headTracked=0 L(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0) R(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0)
+[19:32:37.730] XR: input authority invalidated (publication gap)
+[19:32:37.730] XR: input-authority-1 seq=12 gen=10 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:32:37.928] PRESENT target=003a1b54(Nomad 'Far Cry 2' client 1280x720) stored=003a1b54(Nomad) swapchain=07a6f0b8 changes=1
+[19:32:37.934] XR: input-authority-1 seq=13 gen=11 focused=1 sync=0 headTracked=0 L(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0) R(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0)
+[19:32:37.934] XR: input authority invalidated (publication gap)
+[19:32:37.934] XR: input-authority-1 seq=14 gen=11 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:32:38.129] PRESENT target=003a1b54(Nomad 'Far Cry 2' client 1280x720) stored=003a1b54(Nomad) swapchain=07a6f0b8 changes=1
+[19:32:38.134] XR: input-authority-1 seq=15 gen=12 focused=1 sync=0 headTracked=0 L(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0) R(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0)
+[19:32:38.134] XR: input authority invalidated (publication gap)
+[19:32:38.134] XR: input-authority-1 seq=16 gen=12 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:32:38.329] PRESENT target=003a1b54(Nomad 'Far Cry 2' client 1280x720) stored=003a1b54(Nomad) swapchain=07a6f0b8 changes=1
+[19:32:38.334] XR: input-authority-1 seq=17 gen=13 focused=1 sync=0 headTracked=0 L(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0) R(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0)
+[19:32:38.334] XR: input authority invalidated (publication gap)
+[19:32:38.334] XR: input-authority-1 seq=18 gen=13 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:32:38.530] PRESENT target=003a1b54(Nomad 'Far Cry 2' client 1280x720) stored=003a1b54(Nomad) swapchain=07a6f0b8 changes=1
+[19:32:38.536] XR: input-authority-1 seq=19 gen=14 focused=1 sync=0 headTracked=0 L(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0) R(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0)
+[19:32:38.536] XR: input authority invalidated (publication gap)
+[19:32:38.536] XR: input-authority-1 seq=20 gen=14 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:32:38.732] PRESENT target=003a1b54(Nomad 'Far Cry 2' client 1280x720) stored=003a1b54(Nomad) swapchain=07a6f0b8 changes=1
+[19:32:38.738] XR: input-authority-1 seq=21 gen=15 focused=1 sync=0 headTracked=0 L(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0) R(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0)
+[19:32:38.738] XR: input authority invalidated (publication gap)
+[19:32:38.738] XR: input-authority-1 seq=22 gen=15 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:32:38.934] PRESENT target=003a1b54(Nomad 'Far Cry 2' client 1280x720) stored=003a1b54(Nomad) swapchain=07a6f0b8 changes=1
+[19:32:38.941] XR: input-authority-1 seq=23 gen=16 focused=1 sync=0 headTracked=0 L(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0) R(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0)
+[19:32:38.941] XR: input authority invalidated (publication gap)
+[19:32:38.941] XR: input-authority-1 seq=24 gen=16 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:32:39.135] PRESENT target=003a1b54(Nomad 'Far Cry 2' client 1280x720) stored=003a1b54(Nomad) swapchain=07a6f0b8 changes=1
+[19:32:39.140] XR: input-authority-1 seq=25 gen=17 focused=1 sync=0 headTracked=0 L(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0) R(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0)
+[19:32:39.140] XR: input authority invalidated (publication gap)
+[19:32:39.140] XR: input-authority-1 seq=26 gen=17 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:32:39.335] PRESENT target=003a1b54(Nomad 'Far Cry 2' client 1280x720) stored=003a1b54(Nomad) swapchain=07a6f0b8 changes=1
+[19:32:39.346] XR: input-authority-1 seq=27 gen=18 focused=1 sync=0 headTracked=0 L(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0) R(active=0 gripValid=0 gripTracked=0 aimValid=0 aimTracked=0 held=1 authority=0)
+[19:32:39.346] XR: input authority invalidated (publication gap)
+[19:32:39.346] XR: input-authority-1 seq=28 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:32:39.347] controls: VR controllers drive gamepad 0
+[19:32:39.347] controls: action map 405707ae
+[19:32:44.802] PACE 10.0 s: 50.3 fps (frame 6.40-2417.94 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.37 ms, xrEndFrame 0.01 ms (max 0.16), GPU 5.13 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:32:49.035] XR: input-authority-1 seq=900 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:32:49.213] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:32:49.213] frame 901: xr running=1 eyes=0
+[19:32:49.219] VA[frame]: total=4095 MB avail=2860 MB largestFree=2044 MB
+[19:32:54.813] PACE 10.0 s: 89.9 fps (frame 6.50-16.61 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.27 ms, xrEndFrame 0.01 ms (max 0.02), GPU 0.58 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:32:59.035] XR: input-authority-1 seq=1800 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:32:59.214] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:32:59.214] frame 1801: xr running=1 eyes=0
+[19:32:59.223] VA[frame]: total=4095 MB avail=2734 MB largestFree=2044 MB
+[19:33:04.813] PACE 10.0 s: 89.9 fps (frame 3.41-23.63 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 8.83 ms, xrEndFrame 0.01 ms (max 0.02), GPU 0.77 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:33:09.034] XR: input-authority-1 seq=2700 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:33:09.213] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:33:09.213] frame 2701: xr running=1 eyes=0
+[19:33:09.221] VA[frame]: total=4095 MB avail=2611 MB largestFree=2044 MB
+[19:33:14.823] PACE 10.0 s: 89.9 fps (frame 7.72-14.04 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.62 ms, xrEndFrame 0.01 ms (max 0.02), GPU 0.37 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:33:19.035] XR: input-authority-1 seq=3600 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:33:19.214] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:33:19.214] frame 3601: xr running=1 eyes=0
+[19:33:19.222] VA[frame]: total=4095 MB avail=2611 MB largestFree=2044 MB
+[19:33:24.823] PACE 10.0 s: 89.9 fps (frame 7.22-14.62 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.73 ms, xrEndFrame 0.01 ms (max 0.02), GPU 0.45 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:33:29.035] XR: input-authority-1 seq=4500 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:33:29.213] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:33:29.213] frame 4501: xr running=1 eyes=0
+[19:33:29.221] VA[frame]: total=4095 MB avail=2611 MB largestFree=2044 MB
+[19:33:34.824] PACE 10.0 s: 89.9 fps (frame 6.47-15.05 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.41 ms, xrEndFrame 0.01 ms (max 0.02), GPU 0.61 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:33:39.034] XR: input-authority-1 seq=5400 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:33:39.212] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:33:39.214] frame 5401: xr running=1 eyes=0
+[19:33:39.222] VA[frame]: total=4095 MB avail=2611 MB largestFree=2044 MB
+[19:33:44.824] PACE 10.0 s: 89.9 fps (frame 7.08-15.47 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.86 ms, xrEndFrame 0.01 ms (max 0.03), GPU 0.37 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:33:49.034] XR: input-authority-1 seq=6300 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:33:49.213] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:33:49.213] frame 6301: xr running=1 eyes=0
+[19:33:49.221] VA[frame]: total=4095 MB avail=2611 MB largestFree=2044 MB
+[19:33:54.837] PACE 10.0 s: 89.9 fps (frame 7.12-14.63 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.67 ms, xrEndFrame 0.01 ms (max 0.02), GPU 0.45 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:33:59.034] XR: input-authority-1 seq=7200 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:33:59.213] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:33:59.213] frame 7201: xr running=1 eyes=0
+[19:33:59.221] VA[frame]: total=4095 MB avail=2615 MB largestFree=2044 MB
+[19:34:04.846] PACE 10.0 s: 89.9 fps (frame 1.43-56.45 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.32 ms, xrEndFrame 0.01 ms (max 0.03), GPU 0.64 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:34:09.035] XR: input-authority-1 seq=8100 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:34:09.214] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:34:09.214] frame 8101: xr running=1 eyes=0
+[19:34:09.222] VA[frame]: total=4095 MB avail=2615 MB largestFree=2044 MB
+[19:34:14.857] PACE 10.0 s: 89.9 fps (frame 7.58-14.01 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.91 ms, xrEndFrame 0.01 ms (max 0.02), GPU 0.36 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:34:19.035] XR: input-authority-1 seq=9000 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:34:19.215] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:34:19.215] frame 9001: xr running=1 eyes=0
+[19:34:19.223] VA[frame]: total=4095 MB avail=2615 MB largestFree=2044 MB
+[19:34:24.857] PACE 10.0 s: 89.9 fps (frame 6.47-16.23 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.81 ms, xrEndFrame 0.01 ms (max 0.03), GPU 0.40 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:34:29.035] XR: input-authority-1 seq=9900 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:34:29.214] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:34:29.214] frame 9901: xr running=1 eyes=0
+[19:34:29.223] VA[frame]: total=4095 MB avail=2615 MB largestFree=2044 MB
+[19:34:34.857] PACE 10.0 s: 89.9 fps (frame 8.26-13.96 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.88 ms, xrEndFrame 0.01 ms (max 0.03), GPU 0.37 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:34:39.035] XR: input-authority-1 seq=10800 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:34:39.213] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:34:39.213] frame 10801: xr running=1 eyes=0
+[19:34:39.221] VA[frame]: total=4095 MB avail=2615 MB largestFree=2044 MB
+[19:34:44.868] PACE 10.0 s: 89.9 fps (frame 2.02-40.85 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.72 ms, xrEndFrame 0.01 ms (max 0.02), GPU 0.44 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:34:49.035] XR: input-authority-1 seq=11700 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:34:49.214] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:34:49.214] frame 11701: xr running=1 eyes=0
+[19:34:49.222] VA[frame]: total=4095 MB avail=2620 MB largestFree=2044 MB
+[19:34:54.880] PACE 10.0 s: 89.9 fps (frame 6.06-16.46 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.66 ms, xrEndFrame 0.01 ms (max 0.02), GPU 0.47 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:34:59.034] XR: input-authority-1 seq=12600 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:34:59.213] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:34:59.213] frame 12601: xr running=1 eyes=0
+[19:34:59.221] VA[frame]: total=4095 MB avail=2620 MB largestFree=2044 MB
+[19:35:04.891] PACE 10.0 s: 89.9 fps (frame 3.31-18.23 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.59 ms, xrEndFrame 0.01 ms (max 0.02), GPU 0.49 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:35:09.035] XR: input-authority-1 seq=13500 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:35:09.212] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:35:09.214] frame 13501: xr running=1 eyes=0
+[19:35:09.222] VA[frame]: total=4095 MB avail=2616 MB largestFree=2044 MB
+[19:35:14.904] PACE 10.0 s: 89.9 fps (frame 1.24-32.58 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.68 ms, xrEndFrame 0.01 ms (max 0.02), GPU 0.45 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:35:19.034] XR: input-authority-1 seq=14400 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:35:19.213] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:35:19.214] frame 14401: xr running=1 eyes=0
+[19:35:19.222] VA[frame]: total=4095 MB avail=2616 MB largestFree=2044 MB
+[19:35:24.912] PACE 10.0 s: 89.9 fps (frame 6.62-15.82 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.72 ms, xrEndFrame 0.01 ms (max 0.02), GPU 0.44 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:35:29.035] XR: input-authority-1 seq=15300 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:35:29.213] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:35:29.213] frame 15301: xr running=1 eyes=0
+[19:35:29.221] VA[frame]: total=4095 MB avail=2616 MB largestFree=2044 MB
+[19:35:34.912] PACE 10.0 s: 89.9 fps (frame 1.27-20.15 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.72 ms, xrEndFrame 0.01 ms (max 0.02), GPU 0.43 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:35:39.035] XR: input-authority-1 seq=16200 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:35:39.214] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:35:39.214] frame 16201: xr running=1 eyes=0
+[19:35:39.221] VA[frame]: total=4095 MB avail=2616 MB largestFree=2044 MB
+[19:35:44.923] PACE 10.0 s: 89.9 fps (frame 5.18-17.89 ms), runtime refresh 90.00 Hz, frames not shown 0, xrWaitFrame 9.77 ms, xrEndFrame 0.01 ms (max 0.08), GPU 0.36 ms, timer 1.000 ms, foreground: claude.exe, game window shown, priority normal
+[19:35:49.035] XR: input-authority-1 seq=17100 gen=18 focused=1 sync=1 headTracked=1 L(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1) R(active=1 gripValid=1 gripTracked=1 aimValid=1 aimTracked=1 held=0 authority=1)
+[19:35:49.213] head: y=1.700 refY=1.700 -> view offset +0.000 m
+[19:35:49.213] frame 17101: xr running=1 eyes=0
+[19:35:49.221] VA[frame]: total=4095 MB avail=2616 MB largestFree=2044 MB
+[19:35:54.603] EXCEPTION c0000005 at Dunia.dll+10ad4095(VA) thread=72140 info=00000000 0000000c
+[19:35:54.603]    stack[6] Dunia.dll+1023ba22(VA)
+[19:35:54.603]    stack[11] Dunia.dll+10da7f78(VA)
+[19:35:54.603]    stack[13] Dunia.dll+10ad40f1(VA)
+[19:35:54.603]    stack[19] Dunia.dll+10ad425e(VA)
+[19:35:54.603]    stack[25] Dunia.dll+10ac4130(VA)
+[19:35:54.603]    stack[29] Dunia.dll+105f394a(VA)
+[19:35:54.603]    stack[33] Dunia.dll+102a7209(VA)
+[19:35:54.603]    stack[36] Dunia.dll+1029efbb(VA)
+[19:35:54.603]    stack[39] Dunia.dll+1058248f(VA)
+[19:35:54.603]    stack[42] Dunia.dll+1058248f(VA)
+[19:35:54.603]    stack[45] Dunia.dll+101d146f(VA)
+[19:35:54.603]    stack[53] Dunia.dll+1023b02b(VA)
+[19:35:54.603] TerminateProcess(self, code=0) thread=72140; Dunia frames:
+[19:35:54.603]    stack[6] Dunia.dll+1029d12f(VA)
+[19:35:54.603]    stack[147] Dunia.dll+10ad4095(VA)
+[19:35:54.603]    stack[210] Dunia.dll+10ad4095(VA)
+[19:35:54.603]    stack[304] Dunia.dll+10ad4095(VA)
+[19:35:54.603]    stack[340] Dunia.dll+10ad4095(VA)
+[19:35:54.603]    stack[832] Dunia.dll+10a980a6(VA)
+[19:35:54.603]    stack[841] Dunia.dll+10a981dd(VA)
+[19:35:54.603]    stack[844] Dunia.dll+10ad408e(VA)
+[19:35:54.603]    stack[852] Dunia.dll+1023ba22(VA)
+[19:35:54.603]    stack[857] Dunia.dll+10da7f78(VA)
+[19:35:54.603]    stack[859] Dunia.dll+10ad40f1(VA)
+[19:35:54.603]    stack[865] Dunia.dll+10ad425e(VA)

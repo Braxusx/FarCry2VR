@@ -79,8 +79,9 @@ function Get-OwnedTestProcess {
     # Bind the managed object's native handle BEFORE inspecting it. Close/Kill
     # then operate on that handle, not a newly opened PID after a reuse window.
     try { $current=[FC2NativeTestV2.ProcessApi]::InspectHandle($p.Handle) }
-    catch { $p.Refresh();if($p.HasExited) { return $null };throw }
+    catch { try {$p.Refresh();$gone=$p.HasExited} finally {$p.Dispose()};if($gone) { return $null };throw }
     if($current.Id -ne $Identity.Id -or $current.Path -ne $Identity.Path -or $current.StartTicks -ne $Identity.StartTicks) {
+        $p.Dispose()
         throw 'PID identity changed; refusing to operate on replacement process'
     }
     $p
@@ -108,14 +109,27 @@ function Read-NativeTestText {
         return $null
     } finally { if($stream) {$stream.Dispose()} }
 }
+function Test-OwnedTestProcess {
+    param($Identity)
+    $probe=$null
+    try {$probe=Get-OwnedTestProcess $Identity;return [bool]$probe}
+    finally {if($probe){$probe.Dispose()}}
+}
+function Copy-NativeTestFile {
+    param([Parameter(Mandatory)][string]$Source,[Parameter(Mandatory)][string]$Destination)
+    for($attempt=0;$attempt -lt 40;++$attempt) {
+        try {[IO.File]::Copy($Source,$Destination,$true);return}
+        catch [IO.IOException] {if($attempt -eq 39){throw};Start-Sleep -Milliseconds 100}
+    }
+}
 function Get-NativeTestLogFailure {
-    param([string]$Text,[bool]$Fresh)
+    param([string]$Text,[bool]$Fresh,[ValidateSet(0,1)][int]$ScenarioTesting=1)
     # Ignore a previous generation even when it contains a crash or a different
     # build marker. A retained log is evidence, not this process's live telemetry.
     if(!$Fresh) { return '' }
-    if($Text -match 'FC2VR loaded' -and $Text -notmatch 'startup-camera-1/scenario-runner-2, scenarioTesting=1') { return 'Wrong loaded mod marker' }
+    if($Text -match 'FC2VR loaded' -and $Text -notmatch ('startup-camera-1/scenario-runner-2, scenarioTesting='+$ScenarioTesting)) { return 'Wrong loaded mod marker' }
     if($Text -match 'XR: runtime ' -and $Text -notmatch 'XR: runtime xr-sim ') { return 'Wrong runtime; refusing hardware fallback' }
     if($Text -match 'EXCEPTION c0000005') { return 'Native access violation recorded (exit code is not acceptance)' }
     return ''
 }
-Export-ModuleMember -Function Start-NativeTestProcess,Get-OwnedTestProcess,Get-NativeTestLogFailure,Read-NativeTestText
+Export-ModuleMember -Function Start-NativeTestProcess,Get-OwnedTestProcess,Test-OwnedTestProcess,Get-NativeTestLogFailure,Read-NativeTestText,Copy-NativeTestFile

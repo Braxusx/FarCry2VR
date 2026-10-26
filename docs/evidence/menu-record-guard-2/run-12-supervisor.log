@@ -1,0 +1,5 @@
+OWNED pid=141948 affinity=65535 watchdog=150s; exactly one launch
+BOOTSTRAP ACK: fresh matching PID/sequence, fixed hands and focus
+STARTUP SURVIVAL WINDOW COMPLETE (not menu/gameplay/HMD acceptance)
+MENU QUIT GRACE: 120 seconds after completed startup window
+FINISHED restored=True forced=False failure=; final log: Native access violation recorded (exit code is not acceptance)

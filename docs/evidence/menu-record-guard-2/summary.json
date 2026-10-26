@@ -1,0 +1,159 @@
+{
+  "CollectedUtc": "2026-10-26T08:43:08.7064051Z",
+  "Run": 12,
+  "GamePid": 141948,
+  "SourceParent": "150986d85badd15a5981194438969fd582aeffa3",
+  "Branch": "codex/tracking-arms-physical-steering",
+  "ProductionDll": {
+    "Path": "build/menu-record-guard-2-production/dinput8.dll",
+    "Sha256": "407c774f32fd5b91ff72dc5572a75987e3970168a6ee4d762a85b0208d2e2b70"
+  },
+  "ExeSha256": "b5e081fe22c09618eeee68e0e470ce29c7e539100faf849c926b77a4e2fb4db8",
+  "DuniaSha256": "6353936a54aa841350bb30ff005727859cdef1aa10c209209b220b399e862765",
+  "FirstModLogLine": "[19:31:24.690] FC2VR loaded (contribution startup-camera-1/scenario-runner-2, scenarioTesting=0, safety=menu-record-guard-2, build Oct 26 2026 18:19:08, module=F:\\Games\\Far Cry 2 Remastered Definite Edition\\Far Cry 2 Remastered Definite Edition\\bin\\DINPUT8.dll)",
+  "Signatures": [
+    {
+      "Matches": 1,
+      "Length": 9
+    },
+    {
+      "Matches": 1,
+      "Length": 31
+    },
+    {
+      "Matches": 1,
+      "Length": 13
+    },
+    {
+      "Matches": 1,
+      "Length": 18
+    }
+  ],
+  "StartupSurvived": true,
+  "StartupWindowSeconds": 150,
+  "MenuQuitGraceSeconds": 120,
+  "NativeQuitTest": "NOT_MEASURED: no UI input delivered; later run-13 preflight refused Swat4X PID 94272; no new launch",
+  "Shutdown": "FAIL: WM_CLOSE requested 08:35:54.5871513Z; AV at preferred VA 0x10ad4095 logged 08:35:54.603Z; native self-termination code 0",
+  "OverallBaseline": "FAIL",
+  "Scenario": "NOT_ARMED",
+  "Headset": "NOT_MEASURED",
+  "CTestsPassed": 61,
+  "Forced": false,
+  "ProcessStopped": true,
+  "RestorationChecks": [
+    {
+      "Path": "F:\\Games\\Far Cry 2 Remastered Definite Edition\\Far Cry 2 Remastered Definite Edition\\bin\\dinput8.dll",
+      "Present": true,
+      "ExpectedPresent": true,
+      "Expected": "f15cd71986caace00f9ca546ea0a057321c4f151afb78446e90dcbf81ae2b220",
+      "Actual": "f15cd71986caace00f9ca546ea0a057321c4f151afb78446e90dcbf81ae2b220",
+      "Pass": true
+    },
+    {
+      "Path": "F:\\Games\\Far Cry 2 Remastered Definite Edition\\Far Cry 2 Remastered Definite Edition\\bin\\fc2vr.ini",
+      "Present": true,
+      "ExpectedPresent": true,
+      "Expected": "2325e60ead2f52c990a95925e6ff2eb2167ada099864d4957320d9322d34ae48",
+      "Actual": "2325e60ead2f52c990a95925e6ff2eb2167ada099864d4957320d9322d34ae48",
+      "Pass": true
+    },
+    {
+      "Path": "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\GamerProfile.xml",
+      "Present": true,
+      "ExpectedPresent": true,
+      "Expected": "6f118b42f62fbc69b366ad3832b71d8672523b007edbf40f1bf7e19d5d881e3a",
+      "Actual": "6f118b42f62fbc69b366ad3832b71d8672523b007edbf40f1bf7e19d5d881e3a",
+      "Pass": true
+    },
+    {
+      "Path": "F:\\Games\\Far Cry 2 Remastered Definite Edition\\Far Cry 2 Remastered Definite Edition\\bin\\fc2vr.log",
+      "Present": true,
+      "ExpectedPresent": true,
+      "Expected": "54a9d6a1aa109d75fcae4d45a1a02eb76587b38b1ee02c2f34f48acba9bfcd6f",
+      "Actual": "54a9d6a1aa109d75fcae4d45a1a02eb76587b38b1ee02c2f34f48acba9bfcd6f",
+      "Pass": true
+    },
+    {
+      "Path": "F:\\Games\\Far Cry 2 Remastered Definite Edition\\Far Cry 2 Remastered Definite Edition\\bin\\fc2vr_prev.log",
+      "Present": false,
+      "ExpectedPresent": false,
+      "Expected": "",
+      "Actual": "",
+      "Pass": true
+    },
+    {
+      "Path": "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\3569356713291.sav",
+      "Present": true,
+      "ExpectedPresent": true,
+      "Expected": "b7522af208e6ee58af75865c752d1f327a5c6040a85b9181c570e3cc8e638e68",
+      "Actual": "b7522af208e6ee58af75865c752d1f327a5c6040a85b9181c570e3cc8e638e68",
+      "Pass": true
+    },
+    {
+      "Path": "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\5344611687451.sav",
+      "Present": true,
+      "ExpectedPresent": true,
+      "Expected": "1824c8c8b920df7303bf5b34897a900e6e05c5363de800f65e175f6e418b3173",
+      "Actual": "1824c8c8b920df7303bf5b34897a900e6e05c5363de800f65e175f6e418b3173",
+      "Pass": true
+    },
+    {
+      "Path": "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\5396390254288.sav",
+      "Present": true,
+      "ExpectedPresent": true,
+      "Expected": "0693201d8feddafcd12597d8581bdb37f7e0e8b27aaafba9b0b9912436a1ed89",
+      "Actual": "0693201d8feddafcd12597d8581bdb37f7e0e8b27aaafba9b0b9912436a1ed89",
+      "Pass": true
+    },
+    {
+      "Path": "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\5396398652962.sav",
+      "Present": true,
+      "ExpectedPresent": true,
+      "Expected": "aef3586a459df95d7ba1f9f5d4fdea00c495106dd65117594e664c297fa828a3",
+      "Actual": "aef3586a459df95d7ba1f9f5d4fdea00c495106dd65117594e664c297fa828a3",
+      "Pass": true
+    },
+    {
+      "Path": "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\653604165658.sav",
+      "Present": true,
+      "ExpectedPresent": true,
+      "Expected": "6311199d734ea57d5de433d5707dfe98f46ad3ee248109ef79059fc3a9307434",
+      "Actual": "6311199d734ea57d5de433d5707dfe98f46ad3ee248109ef79059fc3a9307434",
+      "Pass": true
+    }
+  ],
+  "SaveInventory": [
+    "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\3569356713291.sav",
+    "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\5344611687451.sav",
+    "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\5396390254288.sav",
+    "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\5396398652962.sav",
+    "C:\\Users\\meise\\OneDrive\\Documents\\My Games\\Far Cry 2\\Saved Games\\653604165658.sav"
+  ],
+  "RemainingSwat": [],
+  "Sources": [
+    {
+      "Path": "mod/src/main.cpp",
+      "Sha256": "75509d19e7db1dd28c99fff9a441f856326d13dc972c23c0e73a3dcc945560cd"
+    },
+    {
+      "Path": "mod/src/common/menu_guard.h",
+      "Sha256": "b461f137d064d9201262ddc57c94feb0bfbe893e7785dd1c69de5740f9843e72"
+    },
+    {
+      "Path": "scripts/Test-NativeScenario.ps1",
+      "Sha256": "cfc2f0d9c211b003eec044002db44a968e0e86374dbc9aa29005c6f0d8aba9f9"
+    },
+    {
+      "Path": "scripts/NativeTestProcess.psm1",
+      "Sha256": "2c8d12068e901fe8b328793d227ba85c884980271971d813f40c17d9e7551496"
+    },
+    {
+      "Path": "mod/tests/test_native_launcher.ps1",
+      "Sha256": "f38c0ca80875afde71258a3a64261c599782ac2983a78bb7935738acf9561ba9"
+    },
+    {
+      "Path": "mod/tests/test_menu_guard.cpp",
+      "Sha256": "0c0c190bff0efdb3d53c2e94d5754ba6543e3f4078baef28f7baa1ee299395a5"
+    }
+  ]
+}

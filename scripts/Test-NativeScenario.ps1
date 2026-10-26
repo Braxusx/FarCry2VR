@@ -1,5 +1,9 @@
 param(
     [switch]$Run,
+    [switch]$StartupOnly,
+    [switch]$MenuDiagnostics,
+    [switch]$ProductionProxy,
+    [ValidateRange(0,120)][int]$MenuQuitGraceSeconds=0,
     [string]$RunRoot,
     [string]$GameBin,
     [string]$DebugDll,
@@ -17,6 +21,7 @@ param(
 )
 $ErrorActionPreference='Stop'
 if(!$Run) { Write-Output 'PLAN ONLY: one suspended/affinity-constrained launch; fresh PID-acknowledged xr-sim; bounded watchdog and hash restoration. Supply explicit paths and -Run.'; return }
+if($MenuQuitGraceSeconds -and !$StartupOnly) {throw 'Menu quit grace is only supported for startup observation'}
 foreach($name in @('RunRoot','GameBin','DebugDll','ExpectedDllSha256','Profile','SaveDir','DeclaredSave','TestIni','TestProfile','Headset','RuntimeManifest','RuntimeDll')) {
     if(! (Get-Variable -Name $name -ValueOnly)) { throw "Missing -$name" }
 }
@@ -27,13 +32,20 @@ foreach($name in @('GameBin','DebugDll','Profile','SaveDir','DeclaredSave','Test
 $gameExe=Join-Path $GameBin 'FarCry2.exe'
 function Hash($path) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function Json($name,$value) { [IO.File]::WriteAllText((Join-Path $RunRoot $name),($value|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false)) }
-function AssertNoGame { if(Get-Process -Name FarCry2 -ErrorAction SilentlyContinue) { throw 'Existing FarCry2: refusing launch or shared-file changes' } }
+function AssertNoGame {
+    foreach($candidate in @(Get-Process -Name FarCry2 -ErrorAction SilentlyContinue)) {
+        try { if(!$candidate.HasExited) { throw 'Existing FarCry2: refusing launch or shared-file changes' } }
+        finally { $candidate.Dispose() }
+    }
+}
 AssertNoGame
 if((Hash $gameExe) -ne 'b5e081fe22c09618eeee68e0e470ce29c7e539100faf849c926b77a4e2fb4db8' -or
     (Hash (Join-Path $GameBin 'Dunia.dll')) -ne '6353936a54aa841350bb30ff005727859cdef1aa10c209209b220b399e862765') { throw 'Unknown target image' }
 if($ExpectedDllSha256 -notmatch '^[a-f0-9]{64}$' -or (Hash $DebugDll) -ne $ExpectedDllSha256) { throw 'Debug artifact identity mismatch' }
 $payload=[Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($DebugDll))
-if(!$payload.Contains('crash-context-1') -or !$payload.Contains('startup-camera-1')) { throw 'Required debug build markers missing' }
+if($ProductionProxy) {
+    if(!$StartupOnly -or $MenuDiagnostics -or !$payload.Contains('menu-record-guard-2') -or $payload.Contains('crash-context-1')) {throw 'Production proxy requires startup-only, no diagnostic opt-in and verified production payload'}
+} elseif(!$payload.Contains('crash-context-1') -or !$payload.Contains('startup-camera-1')) { throw 'Required debug build markers missing' }
 $manifest=Get-Content -LiteralPath $RuntimeManifest -Raw|ConvertFrom-Json
 $manifestLibrary=$manifest.runtime.library_path
 if(![IO.Path]::IsPathRooted($manifestLibrary)) { $manifestLibrary=Join-Path (Split-Path -Parent $RuntimeManifest) $manifestLibrary }
@@ -45,7 +57,8 @@ Import-Module (Join-Path $PSScriptRoot 'NativeTestProcess.psm1') -Force
 $null=New-Item -ItemType Directory -Path $RunRoot
 foreach($name in @('backup','sim','scenarios')) { $null=New-Item -ItemType Directory -Path (Join-Path $RunRoot $name) }
 Copy-Item -LiteralPath $Headset -Destination (Join-Path $RunRoot 'sim/headset.json')
-$owned=$null;$attempted=$false;$failure='';$forced=$false;$restored=$false;$terminal=$false;$bootstrapApplied=$false
+$owned=$null;$attempted=$false;$failure='';$forced=$false;$restored=$false;$terminal=$false;$bootstrapApplied=$false;$startupSurvived=$false
+$closeRequestedUtc=$null;$closeMethod='none';$finalLogFailure=''
 $backups=@();$saveBackups=@();$savedEnvironment=@{}
 try {
     foreach($item in @(@{Path=(Join-Path $GameBin 'dinput8.dll');Name='dinput8.dll'},@{Path=(Join-Path $GameBin 'fc2vr.ini');Name='fc2vr.ini'},@{Path=$Profile;Name='GamerProfile.xml'},@{Path=(Join-Path $GameBin 'fc2vr.log');Name='fc2vr.log'},@{Path=(Join-Path $GameBin 'fc2vr_prev.log');Name='fc2vr_prev.log'})) {
@@ -58,7 +71,7 @@ try {
         Copy-Item -LiteralPath $entry.Path -Destination $entry.Backup;$saveBackups+=$entry
     }
     Copy-Item -LiteralPath $DeclaredSave -Destination (Join-Path $RunRoot 'declared-save.sav')
-    Json 'before.json' @{Files=$backups;Saves=$saveBackups;RuntimeManifest=$RuntimeManifest;RuntimeSha=(Hash $RuntimeDll);ExpectedDll=$ExpectedDllSha256;Scenario='arm-sweep';LaunchLimit=1;MaxSeconds=$MaxSeconds}
+    Json 'before.json' @{Files=$backups;Saves=$saveBackups;RuntimeManifest=$RuntimeManifest;RuntimeSha=(Hash $RuntimeDll);ExpectedDll=$ExpectedDllSha256;Scenario=if($StartupOnly){'none-startup-observation'}else{'arm-sweep'};LaunchLimit=1;MaxSeconds=$MaxSeconds}
     Copy-Item -LiteralPath $DebugDll -Destination (Join-Path $GameBin 'dinput8.dll') -Force
     Copy-Item -LiteralPath $TestIni -Destination (Join-Path $GameBin 'fc2vr.ini') -Force
     Copy-Item -LiteralPath $TestProfile -Destination $Profile -Force
@@ -70,6 +83,8 @@ try {
         if(Test-Path -LiteralPath $prior) { Move-Item -LiteralPath $prior -Destination (Join-Path $RunRoot ('prior-'+$name)) }
     }
     $environment=@{XR_RUNTIME_JSON=$RuntimeManifest;XRSIM_DIR=(Join-Path $RunRoot 'sim');XRSIM_HEADSET_CONFIG=(Join-Path $RunRoot 'sim/headset.json');XR_API_LAYER_PATH=$null;XR_ENABLE_API_LAYERS=$null;XRTAPE_DIR=$null;FC2VR_SCENARIO='arm-sweep';FC2VR_SCENARIO_ARM='ALLOW_SYNTHETIC_INPUT';FC2VR_SCENARIO_OUT=(Join-Path $RunRoot 'scenarios');FC2VR_SCENARIO_FIXTURE='native-startup-camera-1';FC2VR_SCENARIO_SAVE=(Join-Path $RunRoot 'declared-save.sav');FC2VR_SCENARIO_PROFILE=$Profile}
+    $environment.FC2VR_MENU_DIAG=if($MenuDiagnostics){'1'}else{$null}
+    if($StartupOnly) { foreach($key in @('FC2VR_SCENARIO','FC2VR_SCENARIO_ARM','FC2VR_SCENARIO_FIXTURE','FC2VR_SCENARIO_SAVE','FC2VR_SCENARIO_PROFILE')) {$environment[$key]=$null} }
     foreach($key in $environment.Keys) { $savedEnvironment[$key]=[Environment]::GetEnvironmentVariable($key,'Process');[Environment]::SetEnvironmentVariable($key,$environment[$key],'Process') }
     AssertNoGame
     $launchAt=[DateTime]::UtcNow;$deadline=$launchAt.AddSeconds($MaxSeconds)
@@ -78,7 +93,7 @@ try {
     Json 'owned.json' $owned
     Write-Output ("OWNED pid="+$owned.Id+" affinity="+$owned.Affinity+" watchdog="+$MaxSeconds+"s; exactly one launch")
     while([DateTime]::UtcNow -lt $deadline) {
-        if(!(Get-OwnedTestProcess $owned)) { throw 'Owned game exited before scenario completion' }
+        if(!(Test-OwnedTestProcess $owned)) { throw 'Owned game exited before scenario completion' }
         if(Test-Path -LiteralPath (Join-Path $RunRoot 'stop-test.txt')) { throw 'Operator stop before terminal' }
         $stateFile=Join-Path $RunRoot 'sim/state.json'
         if(!$bootstrapApplied -and (Test-Path -LiteralPath $stateFile)) {
@@ -97,7 +112,7 @@ try {
             $text=Read-NativeTestText -Path $log
             $logInfo=Get-Item -LiteralPath $log -ErrorAction SilentlyContinue
             if($null -ne $text -and $logInfo) {
-                $logFailure=Get-NativeTestLogFailure -Text $text -Fresh ($logInfo.LastWriteTimeUtc -ge $launchAt)
+                $logFailure=Get-NativeTestLogFailure -Text $text -Fresh ($logInfo.LastWriteTimeUtc -ge $launchAt) -ScenarioTesting ([int](!$ProductionProxy))
                 if($logFailure) { throw $logFailure }
             }
         }
@@ -108,30 +123,48 @@ try {
         }
         Start-Sleep -Milliseconds 250
     }
-    if(!$terminal) { throw 'Overall test watchdog (no scenario terminal)' }
-    if(!$bootstrapApplied) { throw 'No bootstrap acknowledgement' }
+    if($StartupOnly -and [DateTime]::UtcNow -ge $deadline -and (Test-OwnedTestProcess $owned)) {
+        $startupSurvived=$true;Write-Output 'STARTUP SURVIVAL WINDOW COMPLETE (not menu/gameplay/HMD acceptance)'
+    }
+    if(!$terminal -and !$startupSurvived) { throw 'Overall test watchdog (no scenario terminal)' }
+    if(!$StartupOnly -and !$bootstrapApplied) { throw 'No bootstrap acknowledgement' }
+    if($startupSurvived -and $MenuQuitGraceSeconds) {
+        # An external, state-observing UI driver can use the native Quit menu.
+        # Never infer a clean quit from process exit code or the survival flag.
+        $closeMethod='external-after-window';$closeRequestedUtc=[DateTime]::UtcNow.ToString('o')
+        Write-Output ("MENU QUIT GRACE: "+$MenuQuitGraceSeconds+' seconds after completed startup window')
+        $quitDeadline=[DateTime]::UtcNow.AddSeconds($MenuQuitGraceSeconds)
+        while((Test-OwnedTestProcess $owned) -and [DateTime]::UtcNow -lt $quitDeadline) {Start-Sleep -Milliseconds 250}
+    }
 } catch { $failure=$_.Exception.Message;Write-Output ('TEST FAILURE: '+$failure) }
 finally {
     try {
         $p=Get-OwnedTestProcess $owned
         if($p) {
-            $null=$p.CloseMainWindow();$closeUntil=[DateTime]::UtcNow.AddSeconds(12)
-            while((Get-OwnedTestProcess $owned) -and [DateTime]::UtcNow -lt $closeUntil) { Start-Sleep -Milliseconds 250 }
+            $closeMethod='window-close';$closeRequestedUtc=[DateTime]::UtcNow.ToString('o')
+            try {$null=$p.CloseMainWindow()} finally {$p.Dispose();$p=$null}
+            $closeUntil=[DateTime]::UtcNow.AddSeconds(12)
+            while((Test-OwnedTestProcess $owned) -and [DateTime]::UtcNow -lt $closeUntil) { Start-Sleep -Milliseconds 250 }
             $p=Get-OwnedTestProcess $owned
-            if($p) { $forced=$true;$p.Kill();$p.WaitForExit(8000)|Out-Null }
+            if($p) { try {$forced=$true;$p.Kill();$p.WaitForExit(8000)|Out-Null} finally {$p.Dispose();$p=$null} }
         }
-        if(Get-OwnedTestProcess $owned) { throw 'Owned game did not stop; restoration unsafe' }
+        if(Test-OwnedTestProcess $owned) { throw 'Owned game did not stop; restoration unsafe' }
         AssertNoGame
         foreach($name in @('fc2vr.log','fc2vr_prev.log')) {
             $path=Join-Path $GameBin $name
             if(Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination (Join-Path $RunRoot ('test-'+$name)) }
         }
+        $retainedLog=Join-Path $RunRoot 'test-fc2vr.log'
+        if(Test-Path -LiteralPath $retainedLog) {
+            $finalLogFailure=Get-NativeTestLogFailure -Text (Read-NativeTestText -Path $retainedLog) -Fresh $true -ScenarioTesting ([int](!$ProductionProxy))
+            if($finalLogFailure -and !$failure.Contains($finalLogFailure)) {$failure+='; final log: '+$finalLogFailure}
+        }
         foreach($entry in $backups) {
-            if($entry.Present) { Copy-Item -LiteralPath $entry.Backup -Destination $entry.Path -Force;if((Hash $entry.Path) -ne $entry.Sha256) { throw 'File restoration hash mismatch' } }
+            if($entry.Present) { Copy-NativeTestFile -Source $entry.Backup -Destination $entry.Path;if((Hash $entry.Path) -ne $entry.Sha256) { throw 'File restoration hash mismatch' } }
             elseif(Test-Path -LiteralPath $entry.Path) { Remove-Item -LiteralPath $entry.Path -Force }
         }
         foreach($entry in $saveBackups) {
-            if(!(Test-Path -LiteralPath $entry.Path) -or (Hash $entry.Path) -ne $entry.Sha256) { Copy-Item -LiteralPath $entry.Backup -Destination $entry.Path -Force }
+            if(!(Test-Path -LiteralPath $entry.Path) -or (Hash $entry.Path) -ne $entry.Sha256) { Copy-NativeTestFile -Source $entry.Backup -Destination $entry.Path }
             if((Hash $entry.Path) -ne $entry.Sha256) { throw 'Save restoration hash mismatch' }
         }
         $newSaves=@(Get-ChildItem -LiteralPath $SaveDir -File | Where-Object { $_.FullName -notin @($saveBackups|ForEach-Object {$_.Path}) })
@@ -140,11 +173,11 @@ finally {
     } catch { $failure+='; cleanup: '+$_.Exception.Message;Write-Output ('CLEANUP FAILURE: '+$_) }
     foreach($key in $savedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($key,$savedEnvironment[$key],'Process') }
     $stopped=$null
-    if($owned) { $stopped=!(Get-OwnedTestProcess $owned) }
+    if($owned) { $stopped=!(Test-OwnedTestProcess $owned) }
     elseif(!$attempted) { $stopped=$true }
     # A lost identity cannot prove a created process stopped. Preserve unknown,
     # rather than reporting !null as a false successful cleanup receipt.
-    Json 'cleanup.json' @{LaunchAttempts=[int]$attempted;Owned=$owned;ProcessStopped=$stopped;Forced=$forced;Restored=$restored;Terminal=$terminal;BootstrapAcknowledged=$bootstrapApplied;Failure=$failure;FinishedUtc=[DateTime]::UtcNow.ToString('o')}
+    Json 'cleanup.json' @{LaunchAttempts=[int]$attempted;Owned=$owned;ProcessStopped=$stopped;Forced=$forced;Restored=$restored;Terminal=$terminal;StartupOnly=[bool]$StartupOnly;StartupSurvived=$startupSurvived;BootstrapAcknowledged=$bootstrapApplied;CloseMethod=$closeMethod;CloseRequestedUtc=$closeRequestedUtc;FinalLogFailure=$finalLogFailure;Failure=$failure;FinishedUtc=[DateTime]::UtcNow.ToString('o')}
     Write-Output ("FINISHED restored=$restored forced=$forced failure=$failure")
 }
 if($failure -or !$restored -or $forced) { exit 1 }

@@ -1,0 +1,120 @@
+{
+  "pid": 141948,
+  "runtime": "xr-sim",
+  "graphics": "D3D11",
+  "system": "FC2 native scenario validation (virtual XR, not HMD acceptance)",
+  "headsetConfig": "D:\\Dev Debug\\Other VR Mods\\FarCry2VR\\out\\startup-isolation-20261026-12-production-verification\\sim\\headset.json",
+  "recommendedViews": [
+    {
+      "width": 800,
+      "height": 800,
+      "maxWidth": 4096,
+      "maxHeight": 4096
+    },
+    {
+      "width": 800,
+      "height": 800,
+      "maxWidth": 4096,
+      "maxHeight": 4096
+    }
+  ],
+  "uptimeMs": 672,
+  "frame": 2,
+  "waitFrames": 2,
+  "beginFrames": 2,
+  "endFrames": 1,
+  "frameOpen": true,
+  "framesDiscarded": 0,
+  "endsOutOfOrder": 0,
+  "sessionState": "VISIBLE",
+  "sessionRunning": true,
+  "actionsAttached": true,
+  "focusPolicy": "permissive",
+  "focusNoRender": false,
+  "focusThrottleMs": 0,
+  "layeredFrames": 1,
+  "paceMode": "free",
+  "refreshHz": 90.0,
+  "stepsPending": 0,
+  "idleBlockMs": 0,
+  "eventsDropped": 0,
+  "ipdMm": 63.0,
+  "fovDeg": {
+    "l": -47.56,
+    "r": 41.25,
+    "u": 46.98,
+    "d": -48.13
+  },
+  "head": {
+    "pos": [
+      0.0,
+      1.6,
+      0.0
+    ],
+    "ypr": [
+      -0.0,
+      0.0,
+      0.0
+    ],
+    "valid": true
+  },
+  "handL": {
+    "pos": [
+      -0.2,
+      1.3,
+      -0.35
+    ],
+    "ypr": [
+      -0.0,
+      0.0,
+      0.0
+    ],
+    "valid": true,
+    "followsHead": true
+  },
+  "handR": {
+    "pos": [
+      0.2,
+      1.3,
+      -0.35
+    ],
+    "ypr": [
+      -0.0,
+      0.0,
+      0.0
+    ],
+    "valid": true,
+    "followsHead": true
+  },
+  "controls": {
+    "a": false,
+    "b": false,
+    "x": false,
+    "y": false,
+    "menu": false,
+    "clickL": false,
+    "clickR": false,
+    "restL": false,
+    "restR": false,
+    "trigL": 0.0,
+    "trigR": 0.0,
+    "gripL": 0.0,
+    "gripR": 0.0,
+    "stickL": [
+      0.0,
+      0.0
+    ],
+    "stickR": [
+      0.0,
+      0.0
+    ]
+  },
+  "layersLastFrame": 1,
+  "projectionViews": 0,
+  "captureSeq": 0,
+  "lastCapture": "",
+  "cmdSeq": 11,
+  "lastCmd": "input clear",
+  "lastCmdError": "",
+  "errors": 0
+}

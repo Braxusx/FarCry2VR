@@ -31,6 +31,7 @@ namespace sounddiag { void Tick(); }
 #include "afw_fc2.h"
 #include "common/pose_frame.h"
 #include "common/startup_policy.h"
+#include "common/menu_guard.h"
 
 // ============================================================ logging
 static CRITICAL_SECTION g_logCs;
@@ -3333,7 +3334,7 @@ static LONG CALLBACK Veh(EXCEPTION_POINTERS* ep) {
     const auto* c=ep->ContextRecord;
     LogWrite("crash-context-1 eax=%08lx ebx=%08lx ecx=%08lx edx=%08lx esi=%08lx edi=%08lx ebp=%08lx esp=%08lx eip=%08lx flags=%08lx",
         c->Eax,c->Ebx,c->Ecx,c->Edx,c->Esi,c->Edi,c->Ebp,c->Esp,c->Eip,c->EFlags);
-    if(code==EXCEPTION_ACCESS_VIOLATION && g_base && c->Eip==A(0x10189C0C)) {
+    if(code==EXCEPTION_ACCESS_VIOLATION && g_base && (c->Eip==A(0x10189C0A) || c->Eip==A(0x10189C0C))) {
         // Exact-image static chain: receiver+48 -> old callback -> vtable[0].
         // ReadProcessMemory safely reports inaccessible ranges without raising
         // another access violation in the exception handler.
@@ -3362,6 +3363,138 @@ static LONG CALLBACK Veh(EXCEPTION_POINTERS* ep) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+#if FC2VR_SCENARIO_TESTING
+typedef void* (__fastcall *MenuItem_t)(void*,void*,int);
+static MenuItem_t o_MenuItem=nullptr;
+static bool ReadDiagnostic(uintptr_t at,void* out,size_t bytes) {
+    SIZE_T read=0;
+    return ReadProcessMemory(GetCurrentProcess(),(void*)at,out,bytes,&read)&&read==bytes;
+}
+static void* __fastcall Hook_MenuItem(void* self,void* edx,int index) {
+    const bool target=__builtin_return_address(0)==(void*)A(0x108C905C);
+    uintptr_t descriptor=0,fields[4]{};
+    if(target) {
+        const bool a=ReadDiagnostic((uintptr_t)self+12,&descriptor,4);
+        const bool b=a&&ReadDiagnostic(descriptor,fields,sizeof fields);
+        LOG("menu-callback-2 before container=%p index=%d descriptor=%08x raw=%08x,%08x,%08x,%08x readable=%d%d",
+            self,index,(unsigned)descriptor,(unsigned)fields[0],(unsigned)fields[1],(unsigned)fields[2],(unsigned)fields[3],a,b);
+        for(unsigned i=0;b&&i<6;++i) {
+            uintptr_t record[21]{};
+            const uintptr_t at=fields[1]+i*84;
+            const bool ok=ReadDiagnostic(at,record,sizeof record);
+            LOG("menu-callback-2 raw-record=%u at=%08x readable=%d words0=%08x w8=%08x w12=%08x w18=%08x",
+                i,(unsigned)at,ok,(unsigned)record[0],(unsigned)record[8],(unsigned)record[12],(unsigned)record[18]);
+            if(ok && i<fields[2] && record[14]<64) {
+                wchar_t wide[65]{};char label[260]{};
+                const uintptr_t text=record[15]<8?at+0x28:record[10];
+                if(ReadDiagnostic(text,wide,record[14]*2)) {
+                    WideCharToMultiByte(CP_UTF8,0,wide,-1,label,sizeof label,nullptr,nullptr);
+                    LOG("menu-callback-3 record=%u native-label=%s length=%u capacity=%u",i,label,(unsigned)record[14],(unsigned)record[15]);
+                }
+            }
+        }
+    }
+    void* result=o_MenuItem(self,edx,index);
+    if(target) LOG("menu-callback-2 returned=%p computed=%08x; observation only, no bounds or callback mutation",result,(unsigned)(fields[1]+index*84));
+    return result;
+}
+static void InstallMenuDiagnostic() {
+    const char* enabled=getenv("FC2VR_MENU_DIAG");
+    if(!enabled || strcmp(enabled,"1") || !g_base || gameaddr::Detect()==gameaddr::Unknown) return;
+    static const uint8_t signature[]={0x8B,0x44,0x24,0x04,0x8B,0x49,0x0C};
+    LOG("menu-callback-2 debug-only native item observation installed=%d",PatchJmpN(A(0x1018A390),signature,sizeof signature,
+        (void*)&Hook_MenuItem,(void**)&o_MenuItem));
+}
+#endif
+
+
+// Supported-image compatibility: some front-end layouts have only four native
+// records, but the optional menu-animation code unconditionally indexes record 4.
+// Guard the three owning paths, not the callback destructor or arbitrary getters.
+extern "C" {
+void* FC2MenuInitContinue=nullptr;
+void* FC2MenuInitSkip=nullptr;
+int __attribute__((force_align_arg_pointer)) __cdecl FC2MenuExtraPresent(void* self) {
+    uintptr_t descriptor=0,fields[4]{},recordVtable=0;SIZE_T read=0;
+    auto get=[&](uintptr_t at,void* out,size_t n) {
+        return ReadProcessMemory(GetCurrentProcess(),(void*)at,out,n,&read)&&read==n;
+    };
+    const bool ok=self && get((uintptr_t)self+0x118,&descriptor,4) && get(descriptor,fields,sizeof fields);
+    const bool matched=ok && fields[0]==A(0x10E289FC);
+    const bool inRange=matched && fields[2]>4 && fields[2]<=64;
+    const bool record=inRange && get(fields[1]+4*84,&recordVtable,4) && recordVtable==A(0x10E25054);
+    const bool present=fc2vr::menu::HasExtra(matched,fields[2],record);
+    static int previous=-1;
+    if(previous!=(int)present) {previous=(int)present;LOG("menu-record-guard-1 extra=%d count=%u descriptorMatched=%d recordMatched=%d; parent/list update retained",present,(unsigned)fields[2],matched,record);}
+    return present;
+}
+}
+static void __attribute__((naked)) Hook_MenuInitTail() {
+    __asm__ __volatile__(
+        "pushfl\n\tpushal\n\tpushl %esi\n\tcall _FC2MenuExtraPresent\n\taddl $4, %esp\n\ttestl %eax, %eax\n\tjz 1f\n\t"
+        "popal\n\tpopfl\n\tjmp *_FC2MenuInitContinue\n\t"
+        "1: popal\n\tpopfl\n\tjmp *_FC2MenuInitSkip\n\t");
+}
+typedef void (__fastcall *MenuReset_t)(void*,void*);
+typedef void (__fastcall *MenuTick_t)(void*,void*,float);
+static MenuReset_t o_MenuReset=nullptr;
+static MenuTick_t o_MenuTick=nullptr;
+static MenuTick_t g_menuParentTick=nullptr;
+static void __fastcall Hook_MenuReset(void* self,void* edx) {
+    if(FC2MenuExtraPresent(self)) o_MenuReset(self,edx);
+}
+static void __fastcall Hook_MenuTick(void* self,void* edx,float delta) {
+    if(FC2MenuExtraPresent(self)) o_MenuTick(self,edx,delta);
+    else g_menuParentTick(self,edx,delta); // exact original first call, once
+}
+static uintptr_t UniqueMenuCode(const uint8_t* pattern,size_t length) {
+    const auto* dos=(const IMAGE_DOS_HEADER*)g_base;
+    const auto* nt=(const IMAGE_NT_HEADERS*)(g_base+dos->e_lfanew);
+    if(nt->FileHeader.NumberOfSections>96)return 0;
+    const auto* sections=IMAGE_FIRST_SECTION(nt);
+    uintptr_t result=0;size_t matches=0;
+    for(unsigned i=0;i<nt->FileHeader.NumberOfSections;++i) {
+        const auto& s=sections[i];if(!(s.Characteristics&IMAGE_SCN_MEM_EXECUTE))continue;
+        const size_t size=s.Misc.VirtualSize;
+        if(s.VirtualAddress>nt->OptionalHeader.SizeOfImage || size>nt->OptionalHeader.SizeOfImage-s.VirtualAddress)return 0;
+        std::vector<uint8_t> code(size);SIZE_T got=0;
+        if(!ReadProcessMemory(GetCurrentProcess(),(void*)(g_base+s.VirtualAddress),code.data(),size,&got) || got!=size)return 0;
+        const auto found=fc2vr::menu::Find(code.data(),size,pattern,length);
+        matches+=found.count;if(found.count)result=g_base+s.VirtualAddress+found.offset;
+    }
+    LOG("menu-record-guard-2 signature bytes=%u matches=%u",(unsigned)length,(unsigned)matches);
+    return matches==1?result:0;
+}
+static void InstallMenuRecordGuard() {
+    char ip[MAX_PATH];snprintf(ip,sizeof ip,"%sfc2vr.ini",g_dir);
+    if(!GetPrivateProfileIntA("VR","MenuRecordGuard",1,ip)) {LOG("menu-record-guard-1 disabled by config");return;}
+    struct Site {uintptr_t va;const uint8_t* bytes;size_t n;void* hook;void** original;uintptr_t resolved;};
+    static const uint8_t init[]={0x6A,0x04,0x8D,0x8E,0x0C,0x01,0x00,0x00};
+    static const uint8_t reset[]={0x56,0x8B,0xF1,0xC7,0x86,0xC8,0x01,0x00,0x00,0x01,0x00,0x00,0x00};
+    static const uint8_t tick[]={0xD9,0x44,0x24,0x04,0x53};
+    static const uint8_t parent[]={0x56,0x57,0x8B,0xF1,0xE8,0x27,0xFF,0xFF,0xFF};
+    static const uint8_t initContext[]={0x6A,0x04,0x8D,0x8E,0x0C,0x01,0x00,0x00,0xE8,0x34,0x13,0x8C,0xFF,0x53,0x6A,0x74,0x8B,0xE8,0xE8,0xCA,0xFE,0x95,0xFF,0x8B,0xF8,0x83,0xC4,0x08,0x3B,0xFB,0x74};
+    static const uint8_t tickContext[]={0xD9,0x44,0x24,0x04,0x53,0x56,0x51,0xD9,0x1C,0x24,0x8B,0xF1,0xE8,0x3F,0x09,0x84,0xFF,0x6A};
+    static const uint8_t epilogue[]={0x5F,0x5E,0x5D,0x5B,0x83,0xC4,0x4C,0xC3};
+    if(gameaddr::Detect()!=gameaddr::Steam) {LOG("menu-record-guard-2 unsupported image, refused");return;}
+    const uintptr_t parentAt=UniqueMenuCode(parent,sizeof parent);
+    Site sites[]={{0x108C904F,init,sizeof init,(void*)&Hook_MenuInitTail,&FC2MenuInitContinue,UniqueMenuCode(initContext,sizeof initContext)},
+        {0x108C7FA0,reset,sizeof reset,(void*)&Hook_MenuReset,(void**)&o_MenuReset,UniqueMenuCode(reset,sizeof reset)},
+        {0x108C82C0,tick,sizeof tick,(void*)&Hook_MenuTick,(void**)&o_MenuTick,UniqueMenuCode(tickContext,sizeof tickContext)}};
+    bool valid=parentAt==A(0x10108C10) && !memcmp((void*)A(0x108C9086),epilogue,sizeof epilogue);
+    for(const auto& s:sites) valid=valid && s.resolved==A(s.va) && !memcmp((void*)s.resolved,s.bytes,s.n);
+    if(!valid){g_cfg.enable=0;LOG("menu-record-guard-2 nonunique/mismatched native contract; no guard patch, VR disabled");return;}
+    g_menuParentTick=(MenuTick_t)parentAt;
+    FC2MenuInitSkip=(void*)(sites[0].resolved+0x37);
+    int applied=0;
+    for(const auto& s:sites) {if(!PatchJmpN(s.resolved,s.bytes,s.n,s.hook,s.original))break;++applied;}
+    if(applied!=3) {
+        for(int i=0;i<applied;++i) {DWORD old=0;void* at=(void*)sites[i].resolved;
+            if(VirtualProtect(at,sites[i].n,PAGE_EXECUTE_READWRITE,&old)) {memcpy(at,sites[i].bytes,sites[i].n);DWORD unused;VirtualProtect(at,sites[i].n,old,&unused);FlushInstructionCache(GetCurrentProcess(),at,sites[i].n);}}
+        g_cfg.enable=0;LOG("menu-record-guard-1 incomplete cohort restored; VR disabled");return;
+    }
+    LOG("menu-record-guard-2 installed 3/3 after unique executable-section signatures; missing optional fifth record skips init/reset/animation only, no synthetic record");
+}
 
 typedef BOOL (WINAPI *TerminateProcess_t)(HANDLE, UINT);
 typedef VOID (WINAPI *ExitProcess_t)(UINT);
@@ -3493,7 +3626,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (contribution startup-camera-1/scenario-runner-2, scenarioTesting=%d, build " __DATE__ " " __TIME__ ", module=%s)", FC2VR_SCENARIO_TESTING,modulePath);
+        LOG("FC2VR loaded (contribution startup-camera-1/scenario-runner-2, scenarioTesting=%d, safety=menu-record-guard-2, build " __DATE__ " " __TIME__ ", module=%s)", FC2VR_SCENARIO_TESTING,modulePath);
         LogVA("startup");
         { LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_qpcToMs=1000.0/(double)f.QuadPart; }
         LoadConfig(); g_cullMode=g_cfg.cullMode; g_fovMode=g_cfg.symmetricFov?((g_cfg.overscanH>0 || g_cfg.overscanV>0)?2:1):0;
@@ -3534,7 +3667,13 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         HookExport("kernelbase.dll", "TerminateProcess", (void*)&Hook_TerminateProcess, (void**)&o_TerminateProcess);
         HookExport("kernel32.dll", "ExitProcess", (void*)&Hook_ExitProcess, (void**)&o_ExitProcess);
         hang::Start(g_dir, g_cfg.hangWatch != 0);
+        // Exact supported image/prologues checked as a cohort before native UI
+        // startup. This does not construct a missing asset or suppress exceptions.
         Install();   // Dunia.dll is mapped and relocated when its import (us) initialises
+        InstallMenuRecordGuard();
+#if FC2VR_SCENARIO_TESTING
+        InstallMenuDiagnostic(); // explicit process opt-in; observes only exact native caller
+#endif
     } else if (reason == DLL_PROCESS_DETACH) {
         LOG("process exiting (thread %lu); Dunia frames on this stack:", GetCurrentThreadId());
         uintptr_t esp; __asm__ volatile("movl %%esp, %0" : "=r"(esp));
