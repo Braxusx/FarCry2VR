@@ -4,7 +4,7 @@ param(
 )
 $ErrorActionPreference='Stop'
 $repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$flavor=if($ScenarioTesting) {'scenario-debug-2'} else {'scenario-production-2'}
+$flavor=if($ScenarioTesting) {'startup-camera-1-debug'} else {'startup-camera-1-production'}
 $out=Join-Path $repo ('build/'+$flavor)
 if(!(Test-Path -LiteralPath $Compiler -PathType Leaf)) { throw "Compiler not found: $Compiler" }
 New-Item -ItemType Directory -Path $out -Force | Out-Null

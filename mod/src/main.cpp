@@ -30,6 +30,7 @@
 namespace sounddiag { void Tick(); }
 #include "afw_fc2.h"
 #include "common/pose_frame.h"
+#include "common/startup_policy.h"
 
 // ============================================================ logging
 static CRITICAL_SECTION g_logCs;
@@ -2444,8 +2445,20 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     bool sizeOk = g_eyeTex ? (bb != nullptr) : (bb && bbd.Width == g_xrW && bbd.Height == g_xrH);
     if (bb && !sizeOk) { static UINT warned = 0; if (warned++ % 900 == 0) LOG("backbuffer %ux%u != XR %ux%u: eye copies skipped", bbd.Width, bbd.Height, g_xrW, g_xrH); }
     if (bb) { bb->Release(); }  // the texture object stays valid for this frame; no reference is held past it
+    // The front end has a viewport, but no observed player camera. Do not pose
+    // its camera or replay it for a second eye. Its completed UI is still shown
+    // through the existing screen-at-Present path, with normal XR menu input.
+    float startupPos[3]{}, startupHeading=0;
+    const bool worldCamera=fc2vr::startup::WorldCamera(arms::PlayerState(startupPos,&startupHeading),
+        controls::LoadingControls(),controls::MenuControls());
+    { static int previous=-1; if(previous!=(int)worldCamera) {
+        previous=(int)worldCamera;
+        LOG("startup-camera-1 world=%d loading=%d menu=%d; unowned viewport stays native single-pass",worldCamera,
+            controls::LoadingControls(),controls::MenuControls());
+    } }
+    if(!worldCamera) g_scopeOn=false;
     // Zoom detection from the game camera's horizontal FOV (radians).
-    if (begun && fv.valid && fv.positionValid && g_cfg.scopeMode && sizeOk) {
+    if (worldCamera && begun && fv.valid && fv.positionValid && g_cfg.scopeMode && sizeOk) {
         float fov = F<float>((uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam, cam::Fov);
         if (fov > 0.05f && fov < 3.0f) {
             const bool mono = controls::MonocularOut();   // v212: the game zooms all the time the monocular is out
@@ -2504,7 +2517,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     }
     // Snapshot the unposed native camera and recenter state BEFORE publishing arms
     // or posing scope/cull/eye cameras. Stateful smoothing advances once per frame.
-    const bool poseReady = begun && fv.valid && fv.positionValid && g_ref.valid;
+    const bool poseReady = worldCamera && begun && fv.valid && fv.positionValid && g_ref.valid;
     float scopeO[3]{}, scopeD[3]{};
     arms::RayContext scopeContext;
     const bool monoScope = poseReady && g_scopeOn && controls::MonocularAtFace();
@@ -3314,6 +3327,37 @@ static LONG CALLBACK Veh(EXCEPTION_POINTERS* ep) {
     LogWrite("EXCEPTION %08lx at %s thread=%lu info=%08lx %08lx", code, where, GetCurrentThreadId(),
              ep->ExceptionRecord->NumberParameters > 0 ? (unsigned long)ep->ExceptionRecord->ExceptionInformation[0] : 0ul,
              ep->ExceptionRecord->NumberParameters > 1 ? (unsigned long)ep->ExceptionRecord->ExceptionInformation[1] : 0ul);
+#if FC2VR_SCENARIO_TESTING
+    // Bounded observation only: never swallow/continue an AV or patch a native
+    // callback. A filtered stack scan alone is not a receiver or ABI proof.
+    const auto* c=ep->ContextRecord;
+    LogWrite("crash-context-1 eax=%08lx ebx=%08lx ecx=%08lx edx=%08lx esi=%08lx edi=%08lx ebp=%08lx esp=%08lx eip=%08lx flags=%08lx",
+        c->Eax,c->Ebx,c->Ecx,c->Edx,c->Esi,c->Edi,c->Ebp,c->Esp,c->Eip,c->EFlags);
+    if(code==EXCEPTION_ACCESS_VIOLATION && g_base && c->Eip==A(0x10189C0C)) {
+        // Exact-image static chain: receiver+48 -> old callback -> vtable[0].
+        // ReadProcessMemory safely reports inaccessible ranges without raising
+        // another access violation in the exception handler.
+        uintptr_t old=0,vt=0,callee=0; SIZE_T read=0;
+        bool a=ReadProcessMemory(GetCurrentProcess(),(void*)(c->Esi+0x48),&old,4,&read)&&read==4;
+        bool b=a&&ReadProcessMemory(GetCurrentProcess(),(void*)old,&vt,4,&read)&&read==4;
+        bool d=b&&ReadProcessMemory(GetCurrentProcess(),(void*)vt,&callee,4,&read)&&read==4;
+        LogWrite("crash-context-1 callback receiver=%08lx old=%08x vtable=%08x callee=%08x readable=%d%d%d",
+            c->Esi,(unsigned)old,(unsigned)vt,(unsigned)callee,a,b,d);
+        uintptr_t saved[3]{};
+        if(ReadProcessMemory(GetCurrentProcess(),(void*)c->Esp,saved,sizeof saved,&read)&&read==sizeof saved
+            && saved[1]==A(0x108C9086)) {
+            // Only this statically checked caller: saved ESI is its menu base;
+            // +10C is the indexed container, whose +C points to a descriptor.
+            // Keep raw fields labelled raw, not an invented native type.
+            uintptr_t descriptor=0,fields[4]{};
+            bool m=ReadProcessMemory(GetCurrentProcess(),(void*)(saved[0]+0x118),&descriptor,4,&read)&&read==4;
+            bool f=m&&ReadProcessMemory(GetCurrentProcess(),(void*)descriptor,fields,sizeof fields,&read)&&read==sizeof fields;
+            LogWrite("crash-context-1 menu=%08x replacement=%08x descriptor=%08x raw=%08x,%08x,%08x,%08x readable=%d%d index=4 stride=84 receiver=%08lx",
+                (unsigned)saved[0],(unsigned)saved[2],(unsigned)descriptor,(unsigned)fields[0],(unsigned)fields[1],
+                (unsigned)fields[2],(unsigned)fields[3],m,f,c->Esi);
+        }
+    }
+#endif
     LogDuniaStack((const uintptr_t*)ep->ContextRecord->Esp, 512);
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -3449,7 +3493,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (contribution scenario-runner-2, scenarioTesting=%d, build " __DATE__ " " __TIME__ ", module=%s)", FC2VR_SCENARIO_TESTING,modulePath);
+        LOG("FC2VR loaded (contribution startup-camera-1/scenario-runner-2, scenarioTesting=%d, build " __DATE__ " " __TIME__ ", module=%s)", FC2VR_SCENARIO_TESTING,modulePath);
         LogVA("startup");
         { LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_qpcToMs=1000.0/(double)f.QuadPart; }
         LoadConfig(); g_cullMode=g_cfg.cullMode; g_fovMode=g_cfg.symmetricFov?((g_cfg.overscanH>0 || g_cfg.overscanV>0)?2:1):0;
