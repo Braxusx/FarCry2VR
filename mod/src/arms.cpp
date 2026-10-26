@@ -8,6 +8,7 @@
 // The player's bullet origin/direction (0x10112600, the player branch of the bullet strategy) are replaced by the
 // controller's aim ray (keeping the game's spread).
 #include "arms.h"
+#include "scenario_runner.h"
 #include "log.h"
 #include "gameaddr.h"
 #include "xr.h"
@@ -262,6 +263,9 @@ static bool LoadHold(uint32_t key, M4& r, M4& l, int* axis, float* sign) {
     return true;
 }
 static void SaveHold(uint32_t key, const M4& r, const M4& l, int axis, float sign) {
+#if FC2VR_SCENARIO_TESTING
+    if(scenario_debug::Active()) return;
+#endif
     if (!g_ini[0]) return;
     char k[16], v[1024]; int o = 0; snprintf(k, sizeof k, "H%08X", key);
     const float* a = &r.m[0][0]; const float* b = &l.m[0][0];
@@ -893,6 +897,9 @@ static void Apply(uint8_t* skel) {
         bool manual = recapUntil > t;
         g_relCached = false;   // no automatic renewals
         bool due = g_c.steadyHands && (!g_relHave || manual) && t - tChange > 300 && t - stableSince > (manual ? 200u : 400u) && !f.map && controls::NormalControls();
+#if FC2VR_SCENARIO_TESTING
+        due=due&&!scenario_debug::Active();
+#endif
         // The weapon's own barrel: the weapon entity axis that points along the view in a normal hold differs per
         // weapon type (rifles +X, the pistol -Z), so it is learned per type and saved with the hold. A hold is taken
         // or renewed only while that axis points along the view (the relaxed gun of a cease-fire town points up);
@@ -1411,7 +1418,21 @@ static void Apply(uint8_t* skel) {
         dst[3] = w3[0]; dst[7] = w3[1]; dst[11] = w3[2]; dst[15] = w3[3];
     }
     g_prevFinalRh=Bw[rh]; g_havePrevFinal=f.handAuthority; g_finalOwner=f.owner; g_finalSource=f.source;
+#if FC2VR_SCENARIO_TESTING
+    scenario_debug::PoseRecord observedPose;
+    observedPose.source=f.source;observedPose.ownerEpoch=f.owner.epoch;observedPose.appFrame=f.frameSequence;
+    observedPose.observedMs=GetTickCount64();observedPose.namedRig=g_c.rigFix;observedPose.physical=f.handAuthority;
+    memcpy(observedPose.world,W.m,64);
+    const int slots[6]={18,17,20,14,13,12};bool observedFinite=FiniteMatrix(observedPose.world);
+    for(int i=0;i<6;++i) { const int b=g_slot[slots[i]];observedPose.indices[i]=b;
+        if(b<0||b>=n) { observedFinite=false;continue; }
+        memcpy(observedPose.model[i],bones[b].model,64);observedFinite=observedFinite&&FiniteMatrix(observedPose.model[i]);
+    }
+#endif
     Unlock();
+#if FC2VR_SCENARIO_TESTING
+    if(observedFinite) scenario_debug::Applied(observedPose); // never call another lock while g_cs is held
+#endif
     InterlockedIncrement(&g_applied);
     Lock(); g_frameUsage.haveApplied = true; g_frameUsage.appliedSequence = f.frameSequence;
     ++g_frameUsage.appliedCalls; g_frameUsage.appliedThread = GetCurrentThreadId(); Unlock();
@@ -3086,6 +3107,22 @@ static void ResetOwnerProducts() { // caller holds g_cs; only POD state, no nati
     for(auto& history:g_twist) history.Clear();
     for(auto& history:g_rigState) history.Clear();
 }
+#if FC2VR_SCENARIO_TESTING
+void ScenarioBoundary() {
+    if(!g_csInit) return;
+    Lock();
+    // Invalidate pose products without inventing a native owner change or erasing
+    // cohort-local ammo/reload observations unrelated to this test boundary.
+    g_shotValid=false;g_rayTick=g_scopeTick=0;g_support.Clear();g_havePrevFinal=false;g_maskCount=-1;
+    g_attachForced=false;g_wRestN=0;g_wRestBase=nullptr;g_wRestOwner={};
+    g_throwPend=false;g_arcValid=false;g_pendingPd=nullptr;
+    g_relHave=false;g_haveOff0=false;g_offBroken=false;g_haveForeRel[0]=g_haveForeRel[1]=false;
+    for(auto& drive:g_npcDrive) drive=NpcDrive{};
+    for(auto& history:g_twist) history.Clear();
+    for(auto& history:g_rigState) history.Clear();
+    Unlock();
+}
+#endif
 static void AttachWatch() {
     const auto owner=CurrentOwner(); M4 palm;
     if(!OwnerCurrent(owner) || !ReadFinalPalm(palm)) { Lock(); g_attachForced=false; g_wRestN=0; Unlock(); return; }
@@ -3130,6 +3167,9 @@ static void AttachWatch() {
             if(ownerChanged) { refKey=0; refEnt=nullptr; normalSince=t; }
             if (rk != refKey || ent != refEnt) { refKey = rk; refEnt = ent; haveRef = false; triedLoad = false; }
             bool normal = controls::NormalControls() && !ReloadActive() && t > g_diagUntil + 300;
+#if FC2VR_SCENARIO_TESTING
+            normal=normal&&!scenario_debug::Active();
+#endif
             if (!normal) normalSince = t;
             if (!haveRef && !triedLoad && g_ini[0]) {
                 triedLoad = true; char k[16], v[512]; snprintf(k, sizeof k, "O%08X", rk);

@@ -5,14 +5,22 @@ TC=${TC:?set TC to the llvm-mingw bin folder}
 cd "$(dirname "$0")"
 CXX=$TC/i686-w64-mingw32-clang++
 mkdir -p build
+SCENARIO_FLAGS=
+OUTPUT_DLL=build/dinput8.dll
+case "${FC2VR_SCENARIO_TESTING:-0}" in
+  0) ;;
+  1) SCENARIO_FLAGS=-DFC2VR_SCENARIO_TESTING=1; OUTPUT_DLL=build/scenario-debug/dinput8.dll ;;
+  *) echo "FC2VR_SCENARIO_TESTING must be 0 or 1"; exit 2 ;;
+esac
+mkdir -p "$(dirname "$OUTPUT_DLL")"
 $CXX -std=c++17 -O2 -Wall -Wno-unused-function -Wno-missing-braces \
-  -I third_party/openxr_include \
-  -shared -o build/dinput8.dll src/main.cpp src/xr.cpp src/perf.cpp src/hang.cpp src/controls.cpp src/arms.cpp src/dlss_fc2.cpp src/dlss_client.cpp src/afw_fc2.cpp src/gameaddr.cpp src/diag.cpp \
+  $SCENARIO_FLAGS -I third_party/openxr_include \
+  -shared -o "$OUTPUT_DLL" src/main.cpp src/xr.cpp src/perf.cpp src/hang.cpp src/controls.cpp src/arms.cpp src/dlss_fc2.cpp src/dlss_client.cpp src/afw_fc2.cpp src/gameaddr.cpp src/diag.cpp src/scenario_runner.cpp \
   -static -static-libgcc -static-libstdc++ \
   -Wl,--kill-at -Wl,--enable-stdcall-fixup \
   -ld3d11 -ldxgi -lwinmm -luuid -lgdi32
-$TC/llvm-objdump -p build/dinput8.dll | grep -E "DLL Name|DirectInput8Create" 
-ls -la build/dinput8.dll
+$TC/llvm-objdump -p "$OUTPUT_DLL" | grep -E "DLL Name|DirectInput8Create"
+ls -la "$OUTPUT_DLL"
 # the 64-bit DLSS helper: NGX SDK from https://github.com/NVIDIA/DLSS (NGX=<folder with sdk/include and sdk/lib>, plus
 # NGX/dummy = an empty folder for the MSVC import stubs); MSVC CRT shims for the static NGX lib are in src/dlss_host/msvc_shim.cpp
 if [ -z "$NGX" ]; then echo "NGX not set - DLSS helper skipped"; exit 0; fi

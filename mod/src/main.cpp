@@ -17,6 +17,7 @@
 #include <cstring>
 #include <algorithm>
 #include "xr.h"
+#include "scenario_runner.h"
 #include "controls.h"
 #include "arms.h"
 #include "common/weapon_pose.h"
@@ -2761,12 +2762,19 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 perf::GpuMark(e ? perf::G_EYE1 : perf::G_EYE0);
                 perf::SetPhase(perf::P_HOOKMISC);
                 double tR = NowMs(); (e ? g_prof.eye1 : g_prof.eye0) += tR - tE0;
+#if FC2VR_SCENARIO_TESTING
+                scenario_debug::CaptureEye(g_dev10,g_eyeTex,e,g_frame);
+#endif
                 xr::CopyEye(e, g_eyeTex);
                 g_prof.copies += NowMs() - tR;
             } else {
                 o_RenderViewport(self, edx, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13);
                 ID3D10Texture2D* cur = AcquireBackbuffer();
-                if (cur) { xr::CopyEye(e, cur); cur->Release(); }
+                if (cur) {
+#if FC2VR_SCENARIO_TESTING
+                    scenario_debug::CaptureEye(g_dev10,cur,e,g_frame);
+#endif
+                    xr::CopyEye(e, cur); cur->Release(); }
             }
         }
         for (int e = 0; e < 2; ++e) if (afwSkip[e]) {   // the held eye: rebuilt from its own last image and the fresh eye's
@@ -3422,7 +3430,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (contribution owner-gate-1, build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (contribution scenario-runner-1, scenarioTesting=%d, build " __DATE__ " " __TIME__ ", module=%s)", FC2VR_SCENARIO_TESTING,modulePath);
         LogVA("startup");
         { LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_qpcToMs=1000.0/(double)f.QuadPart; }
         LoadConfig(); g_cullMode=g_cfg.cullMode; g_fovMode=g_cfg.symmetricFov?((g_cfg.overscanH>0 || g_cfg.overscanV>0)?2:1):0;
@@ -3431,6 +3439,9 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
             return TRUE;
         }
         g_startupApproved=true;
+#if FC2VR_SCENARIO_TESTING
+        scenario_debug::Configure(g_dir);
+#endif
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
             char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir);

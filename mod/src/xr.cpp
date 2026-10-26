@@ -2,6 +2,7 @@
 #include "xr.h"
 #include "log.h"
 #include "diag.h"
+#include "scenario_runner.h"
 #include <vector>
 #include <cstdlib>
 #include <cstring>
@@ -401,6 +402,9 @@ static void PublishInput(bool synced, const XrPosef& head, bool headValid, XrTim
     }
 }
 static void InvalidateInput(const char* reason, bool clearPoses = false) {
+#if FC2VR_SCENARIO_TESTING
+    if(std::strcmp(reason,"scenario boundary")) scenario_debug::Unavailable(reason);
+#endif
     for (int h = 0; h < 2; ++h) {
         g_buttonGate[h].Clear(); g_poseGate[h].Clear();
         g_hs[h] = HandState{};
@@ -446,6 +450,9 @@ bool AcceptedInputCurrent(const InputStamp& source, int hand) {
     LeaveCriticalSection(&g_inCs); return ok;
 }
 static void RevokeViewPoses() {
+#if FC2VR_SCENARIO_TESTING
+    scenario_debug::Unavailable("view-tracking-unavailable");
+#endif
     // View location can fail AFTER SyncInput succeeded. Revoke spatial use, not
     // fresh ordinary buttons; changing authority must not renew receipt age.
     for (int h = 0; h < 2; ++h) { g_poseGate[h].Clear(); g_hs[h].poseAuthority = false; }
@@ -487,6 +494,7 @@ static void SyncInput(XrTime t) {
     XrSpaceLocation hl{XR_TYPE_SPACE_LOCATION};
     const bool headLocated = g_view && p_xrLocateSpace(g_view,g_local,t,&hl) == XR_SUCCESS;
     const bool headOk = Evidence(headLocated,headLocated,hl).Tracked();
+    HandState raw[2];
     for (int h = 0; h < 2; ++h) {
         HandState s;
         for (int k = 0; k < 2; ++k) {
@@ -497,9 +505,8 @@ static void SyncInput(XrTime t) {
             XrSpaceLocation l{XR_TYPE_SPACE_LOCATION};
             const bool located = active && p_xrLocateSpace(k ? g_aimSpace[h] : g_gripSpace[h],g_local,t,&l) == XR_SUCCESS;
             const auto evidence = Evidence(active,located,l);
-            const auto visual = g_poseCache[h][k].Resolve(l.pose,evidence,g_holdLost);
-            if (k) { s.aim = visual.pose; s.aimEvidence = evidence; s.aimValid = visual.visualValid; s.aimHeld = visual.held; }
-            else { s.grip = visual.pose; s.gripEvidence = evidence; s.gripValid = visual.visualValid; s.gripHeld = visual.held; }
+            if (k) { s.aim = l.pose; s.aimEvidence = evidence; }
+            else { s.grip = l.pose; s.gripEvidence = evidence; }
             s.active |= active;
         }
         // Buttons are independent of positional tracking and even pose-action activity.
@@ -508,6 +515,18 @@ static void SyncInput(XrTime t) {
         s.stickClick = GetB(g_aStickClick,h,&buttonsActive); s.btn1 = GetB(g_aBtn1,h,&buttonsActive); s.btn2 = GetB(g_aBtn2,h,&buttonsActive);
         s.menu = h == 0 && GetB(g_aMenu,-1,&buttonsActive);
         s.active |= buttonsActive;
+        raw[h]=s;
+    }
+#if FC2VR_SCENARIO_TESTING
+    if(scenario_debug::Raw(raw,hl.pose,headOk)) InvalidateInput("scenario boundary",true);
+#endif
+    for(int h=0;h<2;++h) {
+        HandState s=raw[h];
+        for(int k=0;k<2;++k) {
+            const auto visual=g_poseCache[h][k].Resolve(k?s.aim:s.grip,k?s.aimEvidence:s.gripEvidence,g_holdLost);
+            if(k) { s.aim=visual.pose;s.aimValid=visual.visualValid;s.aimHeld=visual.held; }
+            else { s.grip=visual.pose;s.gripValid=visual.visualValid;s.gripHeld=visual.held; }
+        }
         const bool neutral = Neutral(s);
         const bool poseNeutral = s.trigger <= 0.15f && s.squeeze <= 0.2f;   // locomotion sticks need not stop after pose-only loss
         s.poseAuthority = g_poseGate[h].Update(headOk && s.active && s.gripEvidence.Tracked() && s.aimEvidence.Tracked(),poseNeutral);
@@ -515,6 +534,9 @@ static void SyncInput(XrTime t) {
         g_hs[h] = s;
     }
     PublishInput(true,hl.pose,headOk,t);
+#if FC2VR_SCENARIO_TESTING
+    scenario_debug::Published(CurrentInputStamp(),g_hs);
+#endif
     float want[2]; EnterCriticalSection(&g_inCs); want[0] = g_rumble[0]; want[1] = g_rumble[1]; LeaveCriticalSection(&g_inCs);
     static float prev[2]{};
     for (int h = 0; h < 2; ++h) {

@@ -113,3 +113,20 @@ foreach(group keys epochs heartbeat coverage)
 endforeach()
 add_test(NAME owner_source_wiring COMMAND ${CMAKE_COMMAND}
     -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../src -P ${CMAKE_CURRENT_SOURCE_DIR}/check_owner_wiring.cmake)
+
+add_executable(scenario_tests test_scenario.cpp)
+target_compile_features(scenario_tests PRIVATE cxx_std_17)
+target_include_directories(scenario_tests PRIVATE ../src)
+if(MSVC)
+    target_compile_options(scenario_tests PRIVATE /W4 /WX)
+else()
+    target_compile_options(scenario_tests PRIVATE -Wall -Wextra -Werror)
+endif()
+foreach(group parse swap loss sweep lifecycle pair bitmap)
+    add_test(NAME scenario_${group} COMMAND scenario_tests ${group})
+endforeach()
+add_test(NAME scenario_source_wiring COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../src -P ${CMAKE_CURRENT_SOURCE_DIR}/check_scenario_wiring.cmake)
+find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+add_test(NAME scenario_receipt_controls COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_scenario_report.py)

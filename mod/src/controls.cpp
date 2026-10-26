@@ -4,6 +4,7 @@
 // so the game's gamepad bindings, hints and menus all work unchanged.
 #include "controls.h"
 #include "arms.h"
+#include "scenario_runner.h"
 #include "xr.h"
 #include "log.h"
 #include "gameaddr.h"
@@ -463,6 +464,10 @@ static DWORD WINAPI Hook_GetState(DWORD idx, XINPUT_STATE* st) {
         g_rtValue=0; g_history.fireGate.Clear();
     }
     st->dwPacketNumber = g_packet; st->Gamepad = g_last;
+#if FC2VR_SCENARIO_TESTING
+    const auto owner=arms::CurrentOwner();
+    scenario_debug::Polled(stamp,owner.valid?owner.epoch:0,st->Gamepad.bRightTrigger,g_rtValue);
+#endif
     return ERROR_SUCCESS;
 }
 static DWORD WINAPI Hook_SetState(DWORD idx, XINPUT_VIBRATION* v) {

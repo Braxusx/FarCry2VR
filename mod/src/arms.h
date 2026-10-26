@@ -158,4 +158,7 @@ bool ProjectileReloadActive();     // within the 3.5 s after a projectile weapon
 void NotifyClip(int clip, int pouch);         // the HUD clip count changed (player's weapon)               // game units along the sight ray to what the weapon points at (0 = unknown)
 bool CameraRay(float o[3], float d[3]);   // the game camera's line in the reference frame (mounted guns aim along it)
 void Stats(LONG& applied, LONG& shots);
+#if defined(FC2VR_SCENARIO_TESTING) && FC2VR_SCENARIO_TESTING
+void ScenarioBoundary(); // debug-only mod-cache reset; no native owner/epoch fabrication
+#endif
 }
