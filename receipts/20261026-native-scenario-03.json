@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "project": "FarCry2VR-Braxusx",
+  "run_id": "20261026-native-scenario-03",
+  "recorded_at": "2026-10-26T05:33:08Z",
+  "target": {
+    "name": "FC2VR startup-camera-1 debug DLL, source 08480a82ed60b4989af982440d8172aba858bab1; launcher b6dbe0a5d290222891f4570f32b5c434ffc88b22",
+    "identity_kind": "sha256",
+    "identity": "bd09ac7a2665533170c244e6301de84fd5817ca42f50840caab94f8598b7fef0"
+  },
+  "question": "Does the native startup callback crash return with the corrected stale-log launcher and an acknowledged virtual XR fixture?",
+  "claim": "Unanswered. Exactly one game was launched. The immediate managed process-path check failed before identity reached the supervisor; independent exact path, parent and creation-time observations allowed supervision of the same process without relaunch. Recovery hit a live-log sharing error, then requested graceful close and stopped that owned process after 12 seconds. Native logs reach XR extension discovery only, not a ready runtime, camera-policy decision or callback crash. No native startup or arm acceptance. Post-run pre-resume kernel-identity and shared bounded-reader fixes pass expanded non-game controls; they remain game-unverified.",
+  "evidence_grade": "LIVE",
+  "environment": "in_game",
+  "method": "One user-authorised 240-second bounded launch using Test-NativeScenario.ps1 from b6dbe0a. Same exact DLL/exe/engine and INI/profile/800x800 headset as run 02. Actual PID 74924, parent 106768, creation ticks 639285892088619563, affinity 65535 observed with Get-Process plus Win32_Process after lost initial identity. Recovery script binds this existing process and contains no CreateProcess call; original deadline retained. Recovery's first DateTime guard refused before mutation, then exact ticks were used. File.ReadAllText sharing exception caused closure; final recovered cleanup completed 2026-10-26T05:28:21.8657191Z. Original files and five saves/inventory independently hash-verified. Offline controls reproduce the old reader failure against a held-open writer, then exercise shared read/appended AV, exclusive/missing/oversize telemetry, stale/fresh markers, eight short-lived Python children and path/PID refusal. All 60 CTest groups pass; Python 3.12.3 native-data verifier exits 2/NO_DATA and review builder 1 with no output. Launcher fix 65ae9eb1f11a2737a1085fc77e6a802b71f4ac7c is offline only. Receipt template initialized with registered in-house ID, adapted to donor local identity; no fleet submission.",
+  "validity": "INVALID",
+  "mutation": "temporary",
+  "gates": {
+    "identity": {
+      "status": "PASS",
+      "reason": "Exact deployed DLL/exe/engine hashes checked by launcher. New native log identifies expected startup-camera-1/scenario-runner-2 marker and accepted engine gate. Recovered path, parent PID, creation ticks and affinity identify the same one newly created game; original caller had not retained its identity."
+    },
+    "instrument": {
+      "status": "FAIL",
+      "reason": "Post-resume managed path check lost initial ownership receipt, leaving a supervision gap. Recovery used an incompatible File.ReadAllText sharing mode. Original cleanup ProcessStopped=true came from null identity and is false evidence; recovered cleanup and independent observations are authoritative."
+    },
+    "control": {
+      "status": "FAIL",
+      "reason": "No ready runtime/state or bootstrap acknowledgement before forced closure. Non-game held-writer/short-lived-child controls validate revised mechanisms, not native XR fixture establishment."
+    },
+    "scene": {
+      "status": "FAIL",
+      "reason": "No camera-policy decision, menu, save/scene, on-foot owner, trace or palette/eye capture observed. No coverage of the original menu callback fault."
+    },
+    "restore": {
+      "status": "PASS",
+      "reason": "Recovery requested graceful closure (true), waited 12 seconds, then stopped only the path/start-time-matched process. No FarCry2 remains. Original proxy/INI/profile/logs and all five saves/inventory independently hash-match backups. Initial failed cleanup record is preserved, not treated as final success."
+    }
+  },
+  "fact_verdict": "AMBIGUOUS",
+  "baseline": {
+    "verdict": "NOT_MEASURED",
+    "reason": "About 93 seconds elapsed but cleanup stopped XR initialization before runtime-ready/menu coverage. No AV was observed in that limited window; this cannot resolve or refute the prior callback crash."
+  },
+  "limits": "Cold MainModule/PEB availability is a lead for the path mismatch; the unexpected original managed path value was not retained. This was recovered supervision, not uninterrupted launcher acceptance. No runtime-ready, acknowledged fixture, scenario, real eye pixels, arm writeback/GPU ownership or HMD evaluation. Post-run native-handle identity and shared-reader fixes are offline-tested only. Forced cleanup remains a failure-quality flag. Raw evidence and backup/game-derived bytes stay ignored/local. No release, push, PR or fleet write.",
+  "artifacts": [
+    {
+      "path": "docs/NATIVE_SCENARIO_TEST_2026-10-26_03.md",
+      "sha256": "2c85b0adee85464f7909fda616fe4322f58d0213c51bb7af88ee89b51e0a18f0",
+      "role": "Run sequence, invalidity, recovered cleanup, offline fixes and acceptance limits"
+    },
+    {
+      "path": "docs/evidence/native-scenario-20261026-03/summary.json",
+      "sha256": "cd08f4f067ac0c6982f9a9ff22bd3c963a09fd7293fd594b5325dd68c337bcd8",
+      "role": "Structured identity and invalid experiment boundary"
+    },
+    {
+      "path": "docs/evidence/native-scenario-20261026-03/controls.log",
+      "sha256": "7407ecea17c97e59eccf2f370cabdeeb523072a4ba4207e35f67a9f16c4623cc",
+      "role": "Expanded benign controls, 60 saved CTest results, no-data refusal and independent restoration"
+    },
+    {
+      "path": "out/native-scenario-20261026-03/test-fc2vr.log",
+      "sha256": "2920e60766839e5019257fddf23699b067b0cf6877f8dade6c5ce21cfaa85933",
+      "role": "Actual native log ending at XR extension discovery"
+    },
+    {
+      "path": "out/native-scenario-20261026-03/before.json",
+      "sha256": "23150fc562172a36ee0de0b5f9fd8dbce107f56e9a713e6453dc79388168420b",
+      "role": "Original file/save hash and backup metadata"
+    },
+    {
+      "path": "out/native-scenario-20261026-03/cleanup.json",
+      "sha256": "d6fbdcfcb53a561633c13f8f46dec19557d95abf3a1b10f180551ec848950b98",
+      "role": "Original failed cleanup; null identity makes its stopped=true field invalid"
+    },
+    {
+      "path": "out/native-scenario-20261026-03/owned-recovered.json",
+      "sha256": "6f3cdb5d56ec8ef354d41d3be0175bb1605fd19472bd7cda1ac2cb3b3d91ad9f",
+      "role": "Independent same-process identity, parent and creation-time binding"
+    },
+    {
+      "path": "out/native-scenario-20261026-03/cleanup-recovered.json",
+      "sha256": "5b1028248ced7f40412c66cf3148821a5ed5d10569bc167f837c98226f1bd180",
+      "role": "Authoritative recovered closure/restoration, forced flag and actual failure"
+    },
+    {
+      "path": "out/native-scenario-20261026-03/one-launch.used.ps1",
+      "sha256": "1989021dbf07e422ef56198237a34c73e5f8e7dcda67a273c7050c55f15f44fe",
+      "role": "Exact original supervisor preserved before offline fixes"
+    },
+    {
+      "path": "out/native-scenario-20261026-03/NativeTestProcess.used.psm1",
+      "sha256": "d1ca0898d64451754f6d2746611b7698781949c978f8e7ad9b931c44d1550bc5",
+      "role": "Exact original process helper before kernel-handle fix"
+    },
+    {
+      "path": "out/native-scenario-20261026-03/rescue-supervisor.ps1",
+      "sha256": "438e9db139f8c29830863054e27c51559d686e7c07bbce7fa37f4af4b5e92ed8",
+      "role": "Used tick-guarded recovery of same process, original deadline and no launch call"
+    },
+    {
+      "path": "out/native-scenario-20261026-03/recovery-supervisor.log",
+      "sha256": "f074fba23d8b9fdfe2347b6757a5683d6f96ad10aef3c3492160371685c2173d",
+      "role": "Recovery file-sharing failure and final stopped/restored receipt"
+    },
+    {
+      "path": "out/native-scenario-20261026-03/ctest-after.log",
+      "sha256": "fe2c32baa2ab39a39508c8788ac98a0259f1790090189aa3d82edbf989b9ac87",
+      "role": "Full completed 60-group non-game CTest log after launcher fixes"
+    }
+  ],
+  "routes": [],
+  "do_not_repeat": [
+    {
+      "approach": "Resume a child then require managed MainModule/Path lookup before returning its PID to the supervisor",
+      "reason": "A path mismatch/lookup failure can throw after successful creation and lose ownership; a null owned object then falsely reports stopped. Native kernel-handle identity can be captured before resume instead.",
+      "reopen_when": "Pre-resume handle identity and short-lived-child controls pass and an additional native run is separately authorised."
+    },
+    {
+      "approach": "Use File.ReadAllText's sharing mode to monitor a log or trace with its native writer still open",
+      "reason": "The runtime reader failed on the live log. A held-writer fixture independently reproduces the failure; shared capped snapshot reads succeed and retain appended-fault detection.",
+      "reopen_when": "Shared active-writer, missing/exclusive/rotating-file and oversized controls are checked, with a bounded watchdog and a separately authorised game run."
+    }
+  ],
+  "next_action": "Keep local. No further game launch in this authorisation. Use launcher fix 65ae9eb for a future explicitly authorised native run after the offline process/file controls; require runtime-ready and exact fixture acknowledgement, then establish menu survival before any arm sweep. Original callback crash remains unresolved; inspect bounded native registers/receiver if it returns."
+}

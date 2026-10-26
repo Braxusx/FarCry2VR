@@ -66,3 +66,10 @@ a stale installed-log race and stopped during early startup. The corrected
 supervisor now moves prior logs into its private run directory before launch,
 checks file freshness, and has stale/fresh-marker/runtime/AV regression controls.
 Those corrections were tested offline only. No second launch was taken.
+
+Subsequently authorised [run 03](NATIVE_SCENARIO_TEST_2026-10-26_03.md) exposed
+post-resume managed-path lookup and live-log file-sharing defects. Local launcher
+`65ae9eb` captures kernel-handle identity before ResumeThread, uses bound handles
+for owner checks, shares capped live telemetry snapshots, and preserves unknown
+cleanup state on lost identity. Held-writer and short-lived-child controls pass;
+the game experiment is still invalid, and no additional launch was taken.

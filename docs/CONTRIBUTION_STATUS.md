@@ -3,7 +3,21 @@
 Date: 2026-10-26. Branch: `codex/tracking-arms-physical-steering`.
 Base: `92a29c5b1e28a652d067262aacc59b421ed044c1` (upstream 1.0.1).
 
-## Latest native attempt: run 02 — invalid early-startup supervisor abort
+## Latest native attempt: run 03 — identity/live-log supervision defects
+
+Exactly one additional authorised launch, PID 74924; same debug DLL. The initial
+supervisor lost its PID receipt on an early managed-path mismatch. Independent
+path/parent/creation-time observations allowed supervision of that same process,
+but the recovery's live log read hit a file-sharing error. It requested graceful
+close then stopped the owned process at ~93 seconds, during XR initialization.
+Original files and five saves/inventory are restored; no game remains. No retry.
+Native crash/arms remain **unmeasured**, not fixed. Local `65ae9eb` now obtains
+kernel-handle identity before resume and shares bounded live telemetry reads;
+the old reader failure is reproduced by a held-open writer control. Expanded
+process/file controls and all 60 CTest groups pass, offline only. See
+[run 03](NATIVE_SCENARIO_TEST_2026-10-26_03.md). No push/package/PR.
+
+## Previous native attempt: run 02 — invalid early-startup supervisor abort
 
 Local implementation `08480a8` adds native single-pass front-end camera ownership,
 debug crash registers/receiver observations and a suspended/affinity-first bounded
