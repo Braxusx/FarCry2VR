@@ -73,3 +73,9 @@ post-resume managed-path lookup and live-log file-sharing defects. Local launche
 for owner checks, shares capped live telemetry snapshots, and preserves unknown
 cleanup state on lost identity. Held-writer and short-lived-child controls pass;
 the game experiment is still invalid, and no additional launch was taken.
+
+Renewed-authorisation [run 04](NATIVE_SCENARIO_TEST_2026-10-26_04.md) finally reached
+valid startup coverage: corrected supervision and acknowledged/final-observed
+virtual fixture, then native AV at 0x10189c0a in the same menu callback helper.
+The native single-pass guard was demonstrably active but insufficient. Startup
+crash confirmed; no arm acceptance, code change or further launch in that run.

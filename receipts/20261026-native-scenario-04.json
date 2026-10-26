@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "project": "FarCry2VR-Braxusx",
+  "run_id": "20261026-native-scenario-04",
+  "recorded_at": "2026-10-26T05:56:14Z",
+  "target": {
+    "name": "FC2VR startup-camera-1 debug DLL (source 08480a82ed60b4989af982440d8172aba858bab1), corrected launcher cb65e943b7ada8fe14960b5cdccf3562c50ad4fd, exact Steam Dunia image",
+    "identity_kind": "sha256",
+    "identity": "bd09ac7a2665533170c244e6301de84fd5817ca42f50840caab94f8598b7fef0"
+  },
+  "question": "Does the modded game itself still crash at native startup when the corrected launcher retains identity and the private XR fixture is acknowledged?",
+  "claim": "Yes. The owned game reached xr-sim ready/focused and acknowledged all 11 bootstrap commands; final state positively shows requested head/fixed-hand poses. With the unowned viewport's native single-pass guard active, Dunia recorded read AV c0000005 at preferred VA 0x10189c0a (ECX/read address 0x00660020) and self-terminated. The stack-word caller candidate matches the original main-menu callback helper. This confirms a native startup failure in this modded configuration, not a launcher abort or the root cause. The game is stopped and original files/five saves are restored. The separate arm experiment remains invalid/no-data.",
+  "evidence_grade": "LIVE",
+  "environment": "in_game",
+  "method": "Exactly one user-authorised bounded launch via scripts/Test-NativeScenario.ps1 at source cb65e943b7ada8fe14960b5cdccf3562c50ad4fd. Unchanged debug DLL, exact exe/engine hashes, same INI/profile/800x800 headset fixture as preceding attempts; launcher fixes are the changed variable. PID 130276 created 2026-10-26T05:54:46.4574635Z, pre-resume identity/affinity 65535, 240-second watchdog. Actual new mod log and matching private xr-sim state/11-command acknowledgement inspected; final state checked rather than assuming the immediate acknowledgement snapshot contains fresh poses. Native AV at 05:56:13.301Z followed by logged self-TerminateProcess code 0; supervisor returned failure and completed hash restoration without a forced stop. Read-only pefile 2024.8.26/Capstone 5.0.7 instruction/callsite check rerun against engine SHA-256 6353936a54aa841350bb30ff005727859cdef1aa10c209209b220b399e862765. Repeated benign launcher/live-writer controls pass. Python 3.12.3 verifier/review correctly reject empty arm data (2 and 1). Receipt template initialised using registered in-house ID then adapted to donor local identity; no fleet submission.",
+  "validity": "VALID",
+  "mutation": "temporary",
+  "gates": {
+    "identity": {
+      "status": "PASS",
+      "reason": "Launcher checks exact exe/engine/debug hashes and captures native PID/path/creation ticks before resume. Actual new mod log self-identifies the expected DLL and exact supported engine; private runtime state matches PID 130276 and xr-sim/D3D11."
+    },
+    "instrument": {
+      "status": "PASS",
+      "reason": "Corrected process-handle ownership and shared live log polling remained in control through startup. Native log retains actual AV/registers and self-termination, distinct from supervisor failure text. Benign live-writer/process positive and negative controls pass. No fresh-log or path-sharing abort."
+    },
+    "control": {
+      "status": "PASS",
+      "reason": "Same image/DLL/startup fixture with corrected launcher, exact 11-command PID/sequence/last-command/error acknowledgement, plus final head 1.7 m and fixed hands/follow disabled. Startup guard logs native single-pass world=0/eyes=0. This is adequate control for observing a native crash, not a vanilla causal A/B or rendered-pose/HMD acceptance."
+    },
+    "scene": {
+      "status": "PASS",
+      "reason": "Primary scene is native startup, not the declared on-foot save: XR ready/focused and the known native menu-construction callback helper fault were reached. No save/arm scene acceptance is claimed."
+    },
+    "restore": {
+      "status": "PASS",
+      "reason": "Game self-terminated after native AV; Forced=false. No FarCry2 remains. Original proxy, INI, graphics profile, current/previous logs and all five saves/inventory independently match backups. Process-scoped environment restored; no global runtime change."
+    }
+  },
+  "fact_verdict": "CONFIRM",
+  "baseline": {
+    "verdict": "FAIL",
+    "reason": "Actual native read access violation in the menu callback helper, then self-termination with code 0. Successful launcher control is not startup baseline health."
+  },
+  "limits": "Only this exact modded/virtual-XR startup configuration is covered. No vanilla/upstream A/B, root ownership/container proof, gameplay, declared-save load, scenario trace, palette/eye pixels, GPU-owner or HMD evaluation. The first caller entry is a filtered stack-word candidate, not a full unwind, but exact-image bytes verify its direct call. This AV is two bytes before the earlier fault; the detailed receiver probe covered only the earlier instruction, so container data was not captured. Immediate bootstrap acknowledgement has old poses; final state, not that stale snapshot, proves the requested fixture. No guessed null guard or game-code patch, rebuild, push, release or additional launch.",
+  "artifacts": [
+    {
+      "path": "docs/NATIVE_SCENARIO_TEST_2026-10-26_04.md",
+      "sha256": "04e1b9836b44250868292d2b40963155a713083a8b4b3b4cc5ac0c98523b0195",
+      "role": "Native crash confirmation and explicit startup/arm proof boundaries"
+    },
+    {
+      "path": "docs/evidence/native-scenario-20261026-04/summary.json",
+      "sha256": "ead57fadb817857b43f461590654b2aef36ea1373c07b4fab79261ed7f42ee95",
+      "role": "Structured valid-startup-failure versus invalid-arm result"
+    },
+    {
+      "path": "docs/evidence/native-scenario-20261026-04/controls.log",
+      "sha256": "0dc0fba3f32288ff2286641dec04ece531e5139634485f321e5881ebf40eea42",
+      "role": "Benign controls, actual arm no-data refusal and independent restoration"
+    },
+    {
+      "path": "out/native-scenario-20261026-04/test-fc2vr.log",
+      "sha256": "eee400d9281d4d8eeeed37cd6ee2cad55c92d011dce0ec47ca9383c24d77c152",
+      "role": "Actual new native log, startup-camera guard, AV/registers and self-termination"
+    },
+    {
+      "path": "out/native-scenario-20261026-04/owned.json",
+      "sha256": "f6e7d967a0f548fad0a2b6d0d6042ffdd2c57bc949aacb2902ea9364b5c4b857",
+      "role": "Pre-resume native process identity and affinity"
+    },
+    {
+      "path": "out/native-scenario-20261026-04/before.json",
+      "sha256": "eaa0517003b545723bbc836dbd021cef15e3b567a2aa1bfdec6dd2a06908066b",
+      "role": "Original file/save backup identities"
+    },
+    {
+      "path": "out/native-scenario-20261026-04/cleanup.json",
+      "sha256": "e785b44af393d6835894a01c76182062e53adc9dc1475f594422d7f283486fc5",
+      "role": "Game-exit failure, no forced stop, restored/stopped result"
+    },
+    {
+      "path": "out/native-scenario-20261026-04/bootstrap-ack.json",
+      "sha256": "c5d5331f3d513025b6dcd9ce889bd4fd82ada4a46b6ce07505efe30eb3767b95",
+      "role": "Exact command/PID/sequence acknowledgement; pose fields in this snapshot are still old"
+    },
+    {
+      "path": "out/native-scenario-20261026-04/sim/state.json",
+      "sha256": "52bd2f22d79b86f59024e47fa0b8a7a0a91d69854872a2abb27b8a734132dd05",
+      "role": "Final focused state with requested head/hand/follow fixture applied"
+    },
+    {
+      "path": "out/native-scenario-20261026-04/sim/xrsim.log",
+      "sha256": "cfe73c91db71ea2b8bfd565802418b70688ad3a8576c26e738e765c506cbfb25",
+      "role": "Actual virtual-runtime startup and application of all 11 commands"
+    },
+    {
+      "path": "out/native-scenario-20261026-04/one-launch.used.ps1",
+      "sha256": "400f8357b2fb91c14d182b2acadb1280bb5277994ad8487a8edcfd6c4eedf13c",
+      "role": "Used corrected supervisor, no retry"
+    },
+    {
+      "path": "out/native-scenario-20261026-04/NativeTestProcess.used.psm1",
+      "sha256": "475b58fa20ff3a752487ac2cdec38620c7c797ce67b6d97d93c5ed25626cb9a1",
+      "role": "Used pre-resume kernel identity and shared bounded telemetry reader"
+    },
+    {
+      "path": "out/native-scenario-20261026-04/static-instruction-check.txt",
+      "sha256": "cf7bd23aaf4f0ffd961e490a0d91eaf6ae0afdbe50a35bf4125960bc3584e936",
+      "role": "Exact-image instruction and direct-call check, not complete ownership proof"
+    },
+    {
+      "path": "out/native-scenario-20261026-04/inspect-crash-static.py",
+      "sha256": "6196e7098c15c6db6abd76ad9292b68e7cb1ade33dfabcaae2f7fc5590fbe4f1",
+      "role": "Read-only PE decoder reproduction with exact engine hash assertion"
+    }
+  ],
+  "routes": [],
+  "do_not_repeat": [
+    {
+      "approach": "Treat the unowned viewport's single-pass startup guard as sufficient to resolve the native menu callback crash",
+      "reason": "The guard logs world=0/eyes=0 in this valid run, yet the same helper/caller path still faults. No startup resolution or arm acceptance follows from the guard alone.",
+      "reopen_when": "Native callback/container construction and ownership are bounded by further static/register evidence, followed by a separately authorised discriminating control."
+    }
+  ],
+  "next_action": "Keep local and stop game work under the exhausted one-launch budget. Investigate native menu record/container creation and callback ownership, accounting for fault instructions 0x10189c0a and 0x10189c0c. Do not bypass the invalid callback, guess bone fixes, or promote arm/HMD acceptance. No additional native launch without authorisation."
+}

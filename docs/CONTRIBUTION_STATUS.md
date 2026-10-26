@@ -3,7 +3,19 @@
 Date: 2026-10-26. Branch: `codex/tracking-arms-physical-steering`.
 Base: `92a29c5b1e28a652d067262aacc59b421ed044c1` (upstream 1.0.1).
 
-## Latest native attempt: run 03 — identity/live-log supervision defects
+## Latest native attempt: run 04 — native startup crash confirmed
+
+The corrected launcher worked: PID 130276 stayed owned, xr-sim reached ready/focused,
+and 11 bootstrap commands plus final requested head/hand poses were observed.
+The game itself then hit read AV `c0000005` at preferred VA `0x10189c0a`, the same
+native main-menu callback helper as run 01 (two bytes before its earlier fault).
+The single-pass startup guard was active; it did not prevent the crash.
+The game self-terminated; no forced kill or retry. Original files and five saves/
+inventory are independently restored, and no game remains. Startup observation
+VALID/CONFIRM, baseline FAIL; arm scenario still INVALID/NO_DATA. No code/build
+changes, push or packaging. See [run 04](NATIVE_SCENARIO_TEST_2026-10-26_04.md).
+
+## Previous native attempt: run 03 — identity/live-log supervision defects
 
 Exactly one additional authorised launch, PID 74924; same debug DLL. The initial
 supervisor lost its PID receipt on an early managed-path mismatch. Independent

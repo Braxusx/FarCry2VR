@@ -1,0 +1,7 @@
+PASS: parse, plan-only, stale directory/log, live-writer legacy-failure/shared-read, appended AV, exclusive/missing/oversize, wrong-marker/runtime, pre-resume/short-lived identity, nonblocking native child (18.4898ms), affinity and path/PID-reuse refusal; no game launch
+NO_DATA: no scenario trace
+VERIFIER_EXIT=2
+INVALID: NO_DATA: no scenario trace
+REVIEW_EXIT=1
+REVIEW_CREATED=False
+INDEPENDENT RESTORATION PASS: original file hashes, all five saves/inventory, no FarCry2
