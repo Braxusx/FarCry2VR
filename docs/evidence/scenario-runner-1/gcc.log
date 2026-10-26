@@ -1,0 +1,8 @@
+GCC 16.2.0 (MSYS2 Rev3), x86, -std=c++17 -O2 -Wall -Wextra -Werror
+parse: 22 checks, 0 failures (environment=harness; no game acceptance)
+swap: 5 checks, 0 failures (environment=harness; no game acceptance)
+loss: 79 checks, 0 failures (environment=harness; no game acceptance)
+sweep: 30033 checks, 0 failures (environment=harness; no game acceptance)
+lifecycle: 6 checks, 0 failures (environment=harness; no game acceptance)
+pair: 6 checks, 0 failures (environment=harness; no game acceptance)
+bitmap: 9 checks, 0 failures (environment=harness; no game acceptance)

@@ -3,7 +3,24 @@
 Date: 2026-10-26. Branch: `codex/tracking-arms-physical-steering`.
 Base: `92a29c5b1e28a652d067262aacc59b421ed044c1` (upstream 1.0.1).
 
-## Latest checkpoint: owner-gate-1 (local only)
+## Latest checkpoint: scenario-runner-1 (local only, debug-only)
+
+Added bounded weapon-swap, tracking-loss/rearm and wrist/reach plans. A compile
+gate plus explicit process opt-in are required; raw synthetic inputs pass through
+normal caches/rearm/ownership checks. Completion requires downstream observations
+and matched, hashed stereo captures, not elapsed time or a requested action alone.
+The runner suppresses synthetic calibration learning and clears transient caches
+on entry/exit. Native image, palette/thread lifetime and visual acceptance are
+still unproved; no game was launched.
+
+All 57 CTest groups pass: 114,095 C++ assertions, six wiring guards and six Python
+receipt-control methods. GCC x86 new groups and three assertion-failing mutants
+were checked. Normal/debug x86 DLLs build without new warnings; the normal build
+contains no scenario arming payload. Nothing deployed, packaged, pushed or PR'd.
+`ArmRigFix=0` stays default. See the
+[scenario runbook/evidence boundary](SCENARIO_RUNNER_2026-10-26.md).
+
+## Prior checkpoint: owner-gate-1 (local only)
 
 R9 now refuses native initialization/addresses without an exact full-file identity
 and matching mapped PE headers (`1a5bc7a`). Only the measured Steam/Definitive

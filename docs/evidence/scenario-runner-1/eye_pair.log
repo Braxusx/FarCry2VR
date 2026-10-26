@@ -1,0 +1,5 @@
+pair: 6 checks, 4 failures (environment=harness; no game acceptance)
+FAIL: one eye is incomplete
+FAIL: different frames cannot form a pair
+FAIL: different source sequences cannot pair
+FAIL: different owners cannot pair

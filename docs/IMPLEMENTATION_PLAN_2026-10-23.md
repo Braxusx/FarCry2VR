@@ -335,6 +335,12 @@ automatically appropriate for FC2.
 
 ## Verification and contributor workflow
 
+The debug-only [scenario runner](SCENARIO_RUNNER_2026-10-26.md) is now built and
+offline-tested for weapon swaps, tracking loss/rearm and wrist/reach sweeps.
+It requires explicit compile/process opt-in, retains production authority gates
+and waits on native observations/capture receipts. All 57 groups pass, but no
+native run or visual acceptance is claimed. It is not a save/menu automation lane.
+
 Each PR gets focused tests against its production pure functions, with at least
 one discriminating old-behavior/negative control. Do not ship tests that only repeat
 the implementation or assert the known bug. Keep an x86 DLL build using `mod/build.sh`;

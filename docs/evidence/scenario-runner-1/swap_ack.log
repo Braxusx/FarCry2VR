@@ -1,0 +1,2 @@
+swap: 5 checks, 1 failures (environment=harness; no game acceptance)
+FAIL: button request alone never proves native swap

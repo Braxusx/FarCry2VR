@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "project": "FarCry2VR-Braxusx",
+  "run_id": "20261026-scenario-runner-1",
+  "recorded_at": "2026-10-26T01:33:55.1636797Z",
+  "target": {
+    "name": "Braxusx/FarCry2VR local contribution: compile-gated scenario runner",
+    "identity_kind": "git_commit",
+    "identity": "f277c18c72c723baf4246a3191bcea520201a92c"
+  },
+  "question": "Can an opt-in debug scenario plan require downstream swap/rearm/pose/capture observations while retaining the production input authority boundary and excluding its control payload from the normal build?",
+  "claim": "The inspected source injects only raw synthetic controller evidence before the normal pose cache and rearm gates, observes rather than fabricates owner/palette/pad state, and requires correlated stereo files. Bounded harness cases reject requested-but-unobserved swaps, missing downstream callbacks or captures and incorrect rearm. Three rebuilt mutants fail assertions. Full x86 debug and normal DLLs compile; the arming strings/debug symbols are absent from the normal DLL. This confirms source mechanisms and harness controls only, not native execution, game pixels, worker lifetimes or visual acceptance.",
+  "evidence_grade": "SOURCE",
+  "environment": "source",
+  "method": "CMake/MSBuild 18.5.4 Win32 Release: 57 CTest groups, 114095 C++ assertions, six source-wiring guards and six Python receipt-control methods. GCC 16.2.0 MSYS2 Rev3 x86: seven new groups, 30160 assertions, -Wall -Wextra -Werror. Rebuilt isolated mutants remove weapon-change evidence, capture acknowledgement or eye-pair equality and fail the intended tests. mod/build-local.ps1 built both final PE32 variants and checked DirectInput8Create plus arming-token/debug-symbol inclusion/exclusion. Both retain 31 prior warning messages. Python 3.12.3 verifies file/hash/frame/source/owner/palette and saved physical-authority correlation with harness-labelled temporary fixtures. The registered in-house receipt template was initialized in ignored build, then the donor identity was used for standalone validation; no fleet or remote writes.",
+  "validity": "VALID",
+  "mutation": "persistent",
+  "gates": {
+    "identity": {
+      "status": "PASS",
+      "reason": "Full implementation commit, stamped source/tests and exact output DLL sizes/hashes identify the inspected/built artifacts."
+    },
+    "instrument": {
+      "status": "PASS",
+      "reason": "Nonempty production-helper harness output, source-topology checks, compiler/PE/export/profile checks and expected assertion failures were inspected. No game was run."
+    },
+    "control": {
+      "status": "PASS",
+      "reason": "Complete modelled observations succeed; absent swap, poll, applied pose or capture cannot complete. Broken swap/capture/pair variants fail. Receipt tests reject missing/end/eye/file/hash/frame/source/owner and held-rearm errors."
+    },
+    "scene": {
+      "status": "NA",
+      "reason": "Offline source/harness task. No native scene, HMD, OpenXR runtime session or actual game image was tested."
+    },
+    "restore": {
+      "status": "NA",
+      "reason": "Persistent local contribution changes. Mutants stay isolated under ignored build and never enter either DLL. No deployment, runtime switch or game process required restoration."
+    }
+  },
+  "fact_verdict": "CONFIRM",
+  "baseline": {
+    "verdict": "PASS",
+    "reason": "The existing and new offline groups and both x86 builds pass. This is not an in-game or headset baseline; those were not measured."
+  },
+  "limits": "Native input acceptance, swap/menu setup, palette/job lifetime and actual rendering were not exercised. Callback/palette receipts do not prove a skinning consumer. Synthetic tracked evidence is explicitly test input, not physical controller tracking. Capture is synchronous, bounded and pre-DLSS; it may cause a freshness timeout and does not validate compositor output. AFW skipped eyes are not substituted. Legacy calibration provenance, exact GOG profile, authoritative reload acknowledgement and HMD wrist/elbow acceptance remain open. No manual reload, steering or DQS feature was added. ArmRigFix remains default-off.",
+  "artifacts": [
+    {
+      "path": "docs/SCENARIO_RUNNER_2026-10-26.md",
+      "sha256": "30f5f83f07583e24401e870267b5375d46d4fbaf85969cc808be8bbb0c336f20",
+      "role": "Scope, architecture, reproduction, activation guards, capture limits and remaining native acceptance"
+    },
+    {
+      "path": "docs/evidence/scenario-runner-1/builds.json",
+      "sha256": "fa7b3c811e7e4e478fcbfd6d5446aa8fe3082c12f340be8d290328d4ef800a88",
+      "role": "Actual normal/debug development DLL identities and compiled-profile checks"
+    },
+    {
+      "path": "docs/evidence/scenario-runner-1/ctest.log",
+      "sha256": "2dc0fdd111ef1f8070198d17949ddfac05344caf4715792ce8d2ab0627a6488b",
+      "role": "All 57 CTest group outputs, including six Python harness-control methods"
+    },
+    {
+      "path": "docs/evidence/scenario-runner-1/gcc.log",
+      "sha256": "02a94f0f409d0b6cc5eea37db2eec3a86443b28ca5adcd277eb912557bfdb8cb",
+      "role": "GCC x86 scenario group results"
+    },
+    {
+      "path": "docs/evidence/scenario-runner-1/swap_ack.log",
+      "sha256": "e9a55828992eb45fe13e920b6879c2558c004fa5db5496e0f984b5e3cf685999",
+      "role": "Assertion failure when a request is allowed to replace observed native swap evidence"
+    },
+    {
+      "path": "docs/evidence/scenario-runner-1/capture_ack.log",
+      "sha256": "d309aeed95be19432b053f453bb2b6255a6453516d5b3bb055114273588328ea",
+      "role": "Assertion failure when capture acknowledgement is omitted"
+    },
+    {
+      "path": "docs/evidence/scenario-runner-1/eye_pair.log",
+      "sha256": "8811145e0f77af0f58a153a81eef7ab68779b27ae344e3d497f152398798d88d",
+      "role": "Assertion failures for incomplete or mismatched stereo pairs"
+    },
+    {
+      "path": "mod/src/common/scenario.h",
+      "sha256": "b46d142a6ad698c7fe4954637908f0b948c4b99ee86f58f2ea46ddce284c7744",
+      "role": "Portable bounded plans and downstream observation predicates"
+    },
+    {
+      "path": "mod/src/common/scenario_capture.h",
+      "sha256": "7121160e3c8076553311b0c5a25aa39ba1ac43b1380850a5fe46aab1c5801409",
+      "role": "Bounded encoder and identity-aware eye-pair aggregator"
+    },
+    {
+      "path": "mod/src/scenario_runner.cpp",
+      "sha256": "69c60169775a28df4947a37215affc9d5b4ee34089075da82ef3f939c33f0ef4",
+      "role": "Compile-gated native adapter, output and observers"
+    },
+    {
+      "path": "mod/src/scenario_runner.h",
+      "sha256": "449be5b04b284fc427ce095c56a9c13c65f196899d8436df8e7982ccf2d33642",
+      "role": "Default-off compile gate and bounded observation interface"
+    },
+    {
+      "path": "mod/src/xr.cpp",
+      "sha256": "94845338dd88488e74ec96c78db99f5d21b204647c9729d960bdb987dbd87d83",
+      "role": "Raw input seam before the unchanged cache/rearm/receipt policy"
+    },
+    {
+      "path": "mod/src/arms.cpp",
+      "sha256": "20788a86e86762a6f1c5efe781ca2ee04b12c475991d4555498c5dd9d5bd5f88",
+      "role": "Post-writeback copy and synthetic-learning/boundary guards"
+    },
+    {
+      "path": "mod/src/controls.cpp",
+      "sha256": "60c2cdb45196c1eb6f7476ffd43a4cb7c42b9bee57380a1f23c8186ebddde3b3",
+      "role": "Observation of actual returned XInput trigger state"
+    },
+    {
+      "path": "mod/src/main.cpp",
+      "sha256": "20932ca1e9455d376006e63543df207e515e580e9617d5f389a8d5a48a2a1416",
+      "role": "Verified-startup configuration and native eye-target capture sites"
+    },
+    {
+      "path": "mod/tests/test_scenario.cpp",
+      "sha256": "e9bbde59fd4f0985d9be8ad20ff2c820f18f5b7e990149d196dad6742ccd4fd7",
+      "role": "Seven bounded C++ scenario/encoder groups"
+    },
+    {
+      "path": "mod/tests/check_scenario_wiring.cmake",
+      "sha256": "212ebf5264f87335b8e21a74f88c912107f81be9088e61e4e578a7a6242c6931",
+      "role": "Source-only gate/order checks, not execution proof"
+    },
+    {
+      "path": "mod/tests/verify_scenario_run.py",
+      "sha256": "51f77f0ac28537a0359e6e8fc5e7ffe9cf664d2ccf079a6d2b448954aabfe34b",
+      "role": "Read-only actual-file verifier and non-verdict pixel comparison"
+    },
+    {
+      "path": "mod/tests/test_scenario_report.py",
+      "sha256": "abf71170cbfb81e5f4fe1a89ec77c95f99b1f9b34e2180d9db641b5e54110116",
+      "role": "Harness-only positive, malformed and no-data receipt fixtures"
+    },
+    {
+      "path": "mod/build-local.ps1",
+      "sha256": "98e15eca1911cc46bacd7d619f704d34719348db8587fecf01852468f7cc7e58",
+      "role": "Build-only isolated flavors with PE/export/profile validation"
+    }
+  ],
+  "routes": [],
+  "do_not_repeat": [
+    {
+      "approach": "Treat emitted input, elapsed waits, a requested screenshot or a completion marker alone as a successful game playtest",
+      "reason": "Missing native swap/poll/pose/capture observations and broken image correlations are independently rejected by these offline controls.",
+      "reopen_when": "Target-proved native consumption, same-run real image evidence and appropriate visual/headset acceptance replace the current harness-only boundary."
+    }
+  ],
+  "next_action": "Keep local. Separately authorize a safe disposable-save native run, verify the loaded exact-image/debug markers, then exercise one scenario and inspect both-eye artifacts and callback timing. Do not clear ownership/visual/manual-reload gates from harness success. Fleet intake is deferred because the donor root is unregistered and the user requested local-only work."
+}

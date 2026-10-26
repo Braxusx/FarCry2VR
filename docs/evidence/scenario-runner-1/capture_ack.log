@@ -1,0 +1,3 @@
+FAIL: observed swap plus matched captures completes
+FAIL: no images cannot green baseline
+swap: 5 checks, 2 failures (environment=harness; no game acceptance)
