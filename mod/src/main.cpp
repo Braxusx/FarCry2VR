@@ -453,7 +453,28 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
         // the body, arms, hands and weapon trailed sideways behind the view (the same fix as VehicleViewPrevious).
         if (g_camBodyClock == 2 && arms::CamBoneRoot(bp, bw, true)) {
             float dx = bp[0] - gb.P.x, dy = bp[1] - gb.P.y, dz = bp[2] - gb.P.z;
-            if (dx * dx + dy * dy + dz * dz < 0.6f * 0.6f) { gb.P = { bp[0], bp[1], bp[2] }; ++g_camBodyUsed; }
+            if (dx * dx + dy * dy + dz * dz < 0.6f * 0.6f) {
+                gb.P = { bp[0], bp[1], bp[2] }; ++g_camBodyUsed;
+                // test 3: SteadyCamera works on the camera's offset from the player. Take the player's position from the SAME
+                // update (its skeleton world matrix), not the entity's newest position: mixing the two put a whole game step
+                // (or none, depending on thread timing) into the offset - the forward part passes straight through, so the
+                // view jumped ~5 cm back and forth while walking.
+                input.playerPosition = { bw[12], bw[13], bw[14] };
+                {   // test 3 diagnostic: the camera-to-player offset along the view, from the entity's newest position vs the
+                    // drawn update's skeleton; and how many skeleton updates arrive per render frame
+                    static double se = 0, se2 = 0, sw = 0, sw2 = 0; static int n = 0, upd[3] = {}; static long ls = 0; static double lt = 0;
+                    float fx = gb.F.x, fy = gb.F.y;
+                    double oe = (bp[0] - pos[0]) * fx + (bp[1] - pos[1]) * fy, ow = (bp[0] - bw[12]) * fx + (bp[1] - bw[13]) * fy;
+                    se += oe; se2 += oe * oe; sw += ow; sw2 += ow * ow; ++n;
+                    long d = seq - ls; ls = seq; ++upd[d <= 0 ? 0 : d == 1 ? 1 : 2];
+                    if (input.nowMs - lt > 10000 && n > 100) {
+                        double me = se / n, mw = sw / n;
+                        LOG("view clock 2: camera-player offset along the view - entity %.1f mm (std %.1f), drawn skeleton %.1f mm (std %.1f); skeleton updates per frame 0:%d 1:%d 2+:%d",
+                            me * 1000, sqrt(fmax(0, se2 / n - me * me)) * 1000, mw * 1000, sqrt(fmax(0, sw2 / n - mw * mw)) * 1000, upd[0], upd[1], upd[2]);
+                        lt = input.nowMs; se = se2 = sw = sw2 = 0; n = 0; upd[0] = upd[1] = upd[2] = 0;
+                    }
+                }
+            }
         } else if (g_camBodyClock == 1 && seq != lastSeq && arms::CamBonePos(bp)) {
             float dx = bp[0] - gb.P.x, dy = bp[1] - gb.P.y, dz = bp[2] - gb.P.z;
             if (dx * dx + dy * dy + dz * dz < 0.6f * 0.6f) { gb.P = { bp[0], bp[1], bp[2] }; ++g_camBodyUsed; }
@@ -3903,7 +3924,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 2: game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 3: game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
