@@ -63,6 +63,7 @@ struct Config {
     int   macheteSound = 1;      // MacheteSwingSound: the game's machete swoosh plays on a fast VR swing
     int   noColorFilter = 0;  // NoColorFilter: 1 = no colour grading / desaturation ("brown filter") - v223
     int   noRimLight = 0;     // NoRimLight: 1 = no rim lighting on characters - v223
+    int   gameAimAssist = 0;  // GameAimAssist (v234): 0 = the game's gamepad aim assist off (it turned the view by itself)
     float flashRange = 30.0f, flashInner = 18.0f, flashOuter = 32.0f;   // v220 Flashlight: FlashlightRange (m), FlashlightInnerAngle / OuterAngle (deg)
     float flashBright = 1.0f, flashForward = 0.10f;   // FlashlightBrightness (colour scale), FlashlightForward (m in front of the head)
     float macheteSoundSpeed = 6.0f; // MacheteSoundSpeed: blade-tip m/s that counts as a swing for the sound

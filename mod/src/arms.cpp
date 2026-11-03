@@ -3287,6 +3287,23 @@ static void __fastcall Hook_EnvLight(void* env, void* edx, float t, uint8_t* out
     static int nl = 0; if (nl++ < 2) LOG("rim light off (was %.2f)", *(float*)(out + 0x60));
     *(float*)(out + 0x60) = 0.0f;
 }
+// v234 the game's gamepad aim assist. The mod plays through a synthesised pad, so the right-thumb PadFilter's helpers
+// (Config\InputActionMap*.xml: StickyHelper, FollowEnemyHelper - strafeStrength 1.0 in the "look" map, IronSightHelper,
+// ShootCorrectionHelper) turned the view toward nearby enemies by themselves, most noticeably while strafing.
+// CActionMapPadFilter apply = 0x107DA700 (thiscall filter, 3 args, ret 0Ch); its enable flags are bytes +0x15C follow
+// enemy, +0x15D sticky, +0x15E iron sight, +0x15F shoot correction (set by the XML loader 0x107DB1E0).
+typedef void (__fastcall *AimHelp_t)(void* f, void* edx, void* a, void* b, void* c);
+static AimHelp_t o_AimHelp = nullptr;
+static void __fastcall Hook_AimHelp(void* f, void* edx, void* a, void* b, void* c) {
+    if (!g_c.gameAimAssist && f && !IsBadWritePtr((uint8_t*)f + 0x15C, 4)) {
+        uint8_t* fl = (uint8_t*)f + 0x15C;
+        if (fl[0] | fl[1] | fl[2] | fl[3]) {
+            static int nl = 0; if (nl++ < 4) LOG("aim assist: the game's pad aim helpers off (filter %p: follow enemy %d, sticky %d, iron sight %d, shoot correction %d)", f, fl[0], fl[1], fl[2], fl[3]);
+            fl[0] = fl[1] = fl[2] = fl[3] = 0;
+        }
+    }
+    o_AimHelp(f, edx, a, b, c);
+}
 // ---------------------------------------------------------------- install
 void Install(uintptr_t base, const Config& c, PatchFn patch) {
     g_base = base; g_c = c;
@@ -3305,6 +3322,8 @@ void Install(uintptr_t base, const Config& c, PatchFn patch) {
     if (c.noColorFilter) { static const uint8_t proB[5] = { 0x83, 0xEC, 0x08, 0x56, 0x57 };   // sub esp,8; push esi; push edi
         LOG("arms: colour filter off hook %d", patch(A(0x101177D0), proB, 5, (void*)&Hook_EnvBloom, (void**)&o_EnvBloom)); }
     if (c.noRimLight) LOG("arms: rim light off hook %d", patch(A(0x10119100), pro, 6, (void*)&Hook_EnvLight, (void**)&o_EnvLight));
+    if (!c.gameAimAssist) { static const uint8_t proH[10] = { 0x8B, 0x44, 0x24, 0x04, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00 };   // mov eax,[esp+4]; sub esp,80h
+        LOG("arms: game aim assist off hook %d", patch(A(0x107DA700), proH, 10, (void*)&Hook_AimHelp, (void**)&o_AimHelp)); }
     {   static const uint8_t proP[6] = { 0x83, 0xEC, 0x18, 0x56, 0x8B, 0xF1 };   // sub esp,18h; push esi; mov esi,ecx
         bool m1 = patch(A(0x1072C260), pro, 6, (void*)&Hook_MonoUpd, (void**)&o_MonoUpd);
         bool m2 = patch(A(0x1010D780), proP, 6, (void*)&Hook_AimPos, (void**)&o_AimPos);

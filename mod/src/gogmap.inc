@@ -126,6 +126,7 @@ static const uint32_t kGogMap[][2] = {
     { 0x106EFB40, 0x106E2420 },   // CGadgetMapStrategy::EquipMonocular (v213)
     { 0x1072C260, 0x1071ED80 },   // binoculars update (v216)
     { 0x1072DFD0, 0x10720B10 },
+    { 0x107DA700, 0x107CDE30 },   // pad aim helpers apply (v234)
     { 0x1080AF10, 0x107FE190 },
     { 0x1080BB30, 0x107FEDB0 },
     { 0x10831C30, 0x108251A0 },
