@@ -100,6 +100,7 @@ struct Config {
     float throwScale = 1.3f;      // ThrowScale: hand speed at release x this = throw speed
     float throwMaxSpeed = 25.0f;  // ThrowMaxSpeed (m/s)
     float useReach = 0.9f;
+    float useCenter = 20.0f;      // UseCenter (v234): objects are offered only when their use point is this close to the view centre (deg; 0 = any)
     float useCone = 30.0f;        // UseCone (v234): while the game asks a candidate, the aim line points at it if it is this close to the view (deg; 0 = view centre only)
     int useDiag = 1;              // UseDiag (v234 test): log what the interaction monitor finds
     int useFromHead = 1;          // UseFromHead (v234): the game's interaction target follows the head (box, sphere, aim ray)

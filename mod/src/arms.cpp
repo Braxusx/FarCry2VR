@@ -3418,6 +3418,47 @@ static void UsePlayerState(uint32_t by, int v, uint8_t* comp) {
     if (strcmp(last, line) && n < 200) { strcpy(last, line); ++n; LOG("use pickup check %s", line); }
     (void)by;
 }
+// v234: pickups such as diamond cases decide "can be taken" in 0x106C4E90 (thiscall comp, arg -> asker handle ptr,
+// ret 4, AL) from the player's view angles (pawn data +0x2D0, then +0x54 (flag 4 at +4) or +0x38: pitch, roll, yaw in rad;
+// forward = (-cos p sin y, cos p cos y, sin p)) - facing the case's front, the case inside its look cone - and reach from
+// aim slot 3. In VR those were the body's level view. Both when the prompt is chosen and when use is pressed, the check
+// sees the head: its position for slot 3 and its view, aimed at the case when it is within UseCone.
+typedef bool (__fastcall *CaseCheck_t)(uint8_t* comp, void* edx, void* arg);
+static CaseCheck_t o_CaseCheck = nullptr;
+static bool __fastcall Hook_CaseCheck(uint8_t* comp, void* edx, void* arg) {
+    uint8_t* h = arg && !IsBadReadPtr(arg, 4) ? *(uint8_t**)arg : nullptr;
+    uint8_t* asker = h && !IsBadReadPtr(h + 0xC, 4) ? *(uint8_t**)(h + 0xC) : nullptr;
+    if (!g_c.useFromHead || !asker || asker != g_playerEntR || GetTickCount64() - g_useHeadTick > 250 || !A(0x10FDE39C)) return o_CaseCheck(comp, edx, arg);
+    typedef uint8_t* (__fastcall *PComp_t)(void*, void*, void*);
+    uint8_t* pc = ((PComp_t)A(0x104E2CC0))(g_playerEntR, nullptr, (void*)A(0x10FDE39C));
+    uint8_t* pd = pc && !IsBadReadPtr(pc + 0x10, 4) ? *(uint8_t**)(pc + 0x10) : nullptr;
+    uint8_t* vs = pd && !IsBadReadPtr(pd + 0x2D0, 0x60) ? pd + 0x2D0 : nullptr;
+    if (!vs) return o_CaseCheck(comp, edx, arg);
+    float d[3]; memcpy(d, g_useHeadD, 12);
+    {   // the pickup's own entity (comp +8 handle): aim at it when it is near the view
+        uint8_t* ph = !IsBadReadPtr(comp + 8, 4) ? *(uint8_t**)(comp + 8) : nullptr;
+        uint8_t* pe = ph && !IsBadReadPtr(ph + 0xC, 4) ? *(uint8_t**)(ph + 0xC) : nullptr;
+        if (pe && !IsBadReadPtr(pe + 0x60, 12) && g_c.useCone > 0) {
+            const float* p0 = (const float*)(pe + 0x60);
+            float v[3] = { p0[0] - g_useHeadO[0], p0[1] - g_useHeadO[1], p0[2] + 0.1f - g_useHeadO[2] };
+            float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            if (l > 0.05f) {
+                float a = acosf(fmaxf(-1.0f, fminf(1.0f, (v[0] * d[0] + v[1] * d[1] + v[2] * d[2]) / l))) * 57.29578f;
+                if (a <= g_c.useCone) for (int k = 0; k < 3; ++k) d[k] = v[k] / l;
+            }
+        }
+    }
+    float* ang = (float*)(vs + ((vs[4] & 4) ? 0x54 : 0x38)); float saved[3]; memcpy(saved, ang, 12);
+    ang[0] = asinf(fmaxf(-1.0f, fminf(1.0f, d[2]))); ang[1] = 0; ang[2] = atan2f(-d[0], d[1]);
+    DWORD prevThread = g_useThread; bool prevCand = g_useCandOn;
+    g_useThread = GetCurrentThreadId(); g_useCandOn = false; g_useInCheck = true;   // AimPos slot 3 -> the head
+    bool r = o_CaseCheck(comp, edx, arg);
+    g_useInCheck = false; g_useCandOn = prevCand; g_useThread = prevThread;
+    memcpy(ang, saved, 12);
+    static int nl = 0; if (nl < 6) { ++nl; LOG("interaction: case check from the head %s (view pitch %.0f yaw %.0f, game had %.0f %.0f)%s", r ? "yes" : "no",
+        asinf(fmaxf(-1.0f, fminf(1.0f, d[2]))) * 57.29578f, atan2f(-d[0], d[1]) * 57.29578f, saved[0] * 57.29578f, saved[2] * 57.29578f, prevThread ? "" : " - use pressed"); }
+    return r;
+}
 // candidate box in front of the body: {vtbl, flag, half extents[3], centre[3], rotation quaternion[4]} - turned to the head
 typedef void (__fastcall *ShapeQuery_t)(void* world, void* edx, float* shape, void* filter, void* results, int z);
 static void __fastcall Use_BoxQuery(void* world, void* edx, float* shape, void* filter, void* results, int z) {
@@ -3465,31 +3506,17 @@ static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usa
         }
     }
     int asks0 = g_useAimAsks; g_useSetN = 0; g_useRec = true;
-    // v234: pickups (e.g. diamond cases, 0x106C4E90) test the player's view angles - pawn data +0x2D0, then +0x54 (flag 4 at
-    // +4) or +0x38: pitch, roll, yaw (rad; forward = (-cos p sin y, cos p cos y, sin p)). In VR those are the body's level
-    // view. During the check they are the head's, aimed at the candidate when it is within UseCone.
-    float* ang = nullptr; float saved[3];
-    typedef uint8_t* (__fastcall *PComp_t)(void*, void*, void*);
-    uint8_t* pc = g_useThread == GetCurrentThreadId() && g_playerEntR && A(0x10FDE39C) ? ((PComp_t)A(0x104E2CC0))(g_playerEntR, nullptr, (void*)A(0x10FDE39C)) : nullptr;
-    if (pc && !IsBadReadPtr(pc + 0x10, 4)) {
-        uint8_t* pd = *(uint8_t**)(pc + 0x10);
-        uint8_t* vs = pd && !IsBadReadPtr(pd + 0x2D0, 0x60) ? pd + 0x2D0 : nullptr;
-        if (vs) {
-            ang = (float*)(vs + ((vs[4] & 4) ? 0x54 : 0x38)); memcpy(saved, ang, 12);
-            float d[3];
-            if (g_useCandOn) { float v[3] = { g_useCandPt[0] - g_useHeadO[0], g_useCandPt[1] - g_useHeadO[1], g_useCandPt[2] - g_useHeadO[2] };
-                float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); for (int k = 0; k < 3; ++k) d[k] = l > 1e-3f ? v[k] / l : g_useHeadD[k]; }
-            else memcpy(d, g_useHeadD, 12);
-            ang[0] = asinf(fmaxf(-1.0f, fminf(1.0f, d[2]))); ang[1] = 0; ang[2] = atan2f(-d[0], d[1]);
-            static int nl = 0; if (nl++ < 3) LOG("interaction: view angles for the check pitch %.1f yaw %.1f (game had %.1f %.1f %.1f deg)",
-                ang[0] * 57.29578f, ang[2] * 57.29578f, saved[0] * 57.29578f, saved[1] * 57.29578f, saved[2] * 57.29578f);
+    bool r = ((IsUsable_t)A(0x1009D480))(self, edx, cand, usage, pos);
+    g_useRec = false;
+    // v234: only offer what is near the centre of the view (the use point the object reports, within UseCenter)
+    if (r && pos && g_c.useCenter > 0 && g_useThread == GetCurrentThreadId()) {
+        float v[3] = { pos[0] - g_useHeadO[0], pos[1] - g_useHeadO[1], pos[2] - g_useHeadO[2] };
+        float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        if (l > 0.05f) {
+            float a = acosf(fmaxf(-1.0f, fminf(1.0f, (v[0] * g_useHeadD[0] + v[1] * g_useHeadD[1] + v[2] * g_useHeadD[2]) / l))) * 57.29578f;
+            if (a > g_c.useCenter) r = false;
         }
     }
-    g_useInCheck = true;
-    bool r = ((IsUsable_t)A(0x1009D480))(self, edx, cand, usage, pos);
-    g_useInCheck = false;
-    if (ang) memcpy(ang, saved, 12);
-    g_useRec = false;
     bool aimed = g_useCandOn; g_useCandOn = false;
     int asked = g_useAimAsks - asks0;
     if (g_c.useDiag && g_useThread == GetCurrentThreadId() && g_useDiagLen < (int)sizeof g_useDiagLine - 160) {
@@ -3547,6 +3574,8 @@ void Install(uintptr_t base, const Config& c, PatchFn patch) {
         bool u2 = u1 && PatchCallSite(0x1009CF12, 0x1048DCE0, (void*)&Use_BoxQuery, "interaction box");
         bool u3 = u1 && PatchCallSite(0x1009D010, 0x1048DCB0, (void*)&Use_SphereQuery, "interaction sphere");
         bool u4 = u1 && PatchCallSite(0x1009DC8C, 0x1009D480, (void*)&Use_IsUsable, "interaction usable check");
+        { static const uint8_t proC[7] = { 0x8B, 0x44, 0x24, 0x04, 0x83, 0xEC, 0x60 };   // mov eax,[esp+4]; sub esp,60h
+          LOG("arms: pickup view check from the head %d", patch(A(0x106C4E90), proC, 7, (void*)&Hook_CaseCheck, (void**)&o_CaseCheck)); }
         if (c.useDiag) { static const uint8_t proS[7] = { 0x8A, 0x44, 0x24, 0x04, 0x88, 0x41, 0x34 };
             LOG("arms: usable-answer probe %d", patch(A(0x102DC380), proS, 7, (void*)&Hook_SetUsable, (void**)&o_SetUsable)); }
         LOG("arms: interaction from the head: monitor %d, box %d, sphere %d, check %d (diagnostic %d)", u1, u2, u3, u4, c.useDiag);
