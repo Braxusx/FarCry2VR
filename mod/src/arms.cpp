@@ -3490,6 +3490,31 @@ static void __fastcall Use_SphereQuery(void* world, void* edx, float* point, flo
 }
 // v234 test 8 diagnostic (UseDiag=1): what the interaction monitor finds and what each candidate answers
 typedef bool (__fastcall *IsUsable_t)(void* self, void* edx, void* cand, void* usage, float* pos);
+// angle (deg) from the view centre to the candidate's bounds: 0 when the view ray passes through them
+static float UseViewAngle(void* cand, const float* pos) {
+    uint8_t* h = cand && !IsBadReadPtr(cand, 4) ? *(uint8_t**)cand : nullptr;
+    uint8_t* e = h && !IsBadReadPtr(h + 0xC, 4) ? *(uint8_t**)(h + 0xC) : nullptr;
+    float c[3], rad = 0; bool have = false;
+    uint8_t* pc = e && *(uint32_t*)A(0x10FDE930) ? (uint8_t*)GetComp(e, 0x10FDE940) : nullptr;   // physics component: world box (vtable +0xC4)
+    if (pc && !IsBadReadPtr(pc, 4)) {
+        typedef void (__fastcall *Box_t)(void* comp, void* edx, float* mn, float* mx);
+        float mn[3] = { 0, 0, 0 }, mx[3] = { 0, 0, 0 };
+        ((Box_t)(*(void***)pc)[0xC4 / 4])(pc, nullptr, mn, mx);
+        if (std::isfinite(mn[0]) && std::isfinite(mx[0]) && mx[0] >= mn[0] && mx[1] >= mn[1] && mx[2] >= mn[2] && mx[0] - mn[0] < 30.0f && mx[2] - mn[2] < 30.0f) {
+            float ex[3] = { mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2] };
+            for (int k = 0; k < 3; ++k) c[k] = 0.5f * (mn[k] + mx[k]);
+            rad = 0.4f * sqrtf(ex[0] * ex[0] + ex[1] * ex[1] + ex[2] * ex[2]);   // a little inside the corners (boxes are loose)
+            have = true;
+        }
+    }
+    if (!have && pos) { memcpy(c, pos, 12); rad = 0.15f; have = true; }
+    if (!have) return 1e9f;
+    float v[3] = { c[0] - g_useHeadO[0], c[1] - g_useHeadO[1], c[2] - g_useHeadO[2] };
+    float d = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (d <= rad) return 0;
+    float a = acosf(fmaxf(-1.0f, fminf(1.0f, (v[0] * g_useHeadD[0] + v[1] * g_useHeadD[1] + v[2] * g_useHeadD[2]) / d))) * 57.29578f;
+    return fmaxf(0.0f, a - asinf(rad / d) * 57.29578f);
+}
 static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usage, float* pos) {
     float cone = -1;
     if (g_useThread == GetCurrentThreadId() && g_c.useCone > 0) {
@@ -3508,14 +3533,12 @@ static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usa
     int asks0 = g_useAimAsks; g_useSetN = 0; g_useRec = true;
     bool r = ((IsUsable_t)A(0x1009D480))(self, edx, cand, usage, pos);
     g_useRec = false;
-    // v234: only offer what is near the centre of the view (the use point the object reports, within UseCenter)
-    if (r && pos && g_c.useCenter > 0 && g_useThread == GetCurrentThreadId()) {
-        float v[3] = { pos[0] - g_useHeadO[0], pos[1] - g_useHeadO[1], pos[2] - g_useHeadO[2] };
-        float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-        if (l > 0.05f) {
-            float a = acosf(fmaxf(-1.0f, fminf(1.0f, (v[0] * g_useHeadD[0] + v[1] * g_useHeadD[1] + v[2] * g_useHeadD[2]) / l))) * 57.29578f;
-            if (a > g_c.useCenter) r = false;
-        }
+    // v234: only offer what the view centre is on or near: the angle from the view centre to the object's bounds (the
+    // physics box when it has one, else the use point it reports) must be within UseCenter - the same margin on all sides
+    if (r && g_c.useCenter > 0 && g_useThread == GetCurrentThreadId()) {
+        float a = UseViewAngle(cand, pos);
+        if (a > g_c.useCenter) r = false;
+        static int nl = 0; if (nl < 20 && a < 1e8f) { ++nl; LOG("use: candidate %.0f deg outside its bounds from the view centre -> %s", a, r ? "offered" : "not offered"); }
     }
     bool aimed = g_useCandOn; g_useCandOn = false;
     int asked = g_useAimAsks - asks0;
