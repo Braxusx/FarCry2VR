@@ -2752,9 +2752,34 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             put(af.aimB, frame.ReferenceDirection(QRot(rh.aim.orientation, { 0, 0, 1 })));
             put(af.gripO, frame.ReferencePosition(ToV3(rh.grip.position)));
         }
-        const xr::HandState lh = SmoothHand(0, fv.displayTime);
+        xr::HandState lh = SmoothHand(0, fv.displayTime);
+        {   // v234 two-handed grip through tracking dropouts. Holding the rifle puts the left controller right next to the
+            // right one, where the headset's cameras often lose its position (tracked bit off, the pose only estimated) -
+            // most of all while the hand is still. That revoked the left hand's authority and the grip let go. While
+            // both hands are tracked, the left grip / aim pose is kept relative to the right grip; while the grip is held
+            // and only the left hand is lost, the left hand is put back there, on the weapon.
+            static bool haveRel = false; static XrVector3f relP, relAimP; static XrQuaternionf relQg, relQa; static int nLost = 0;
+            auto qmul = [](const XrQuaternionf& a, const XrQuaternionf& b) { return XrQuaternionf{
+                a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+                a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z }; };
+            auto qcon = [](const XrQuaternionf& q) { return XrQuaternionf{ -q.x, -q.y, -q.z, q.w }; };
+            auto v3 = [](V3 v) { return XrVector3f{ v.x, v.y, v.z }; };
+            const XrPosef& rg = rh.grip;
+            if (af.handAuthority && af.leftAuthority && rh.gripValid && lh.gripValid && lh.aimValid) {
+                XrQuaternionf ic = qcon(rg.orientation);
+                relP = v3(QRot(ic, ToV3(lh.grip.position) - ToV3(rg.position)));
+                relAimP = v3(QRot(ic, ToV3(lh.aim.position) - ToV3(rg.position)));
+                relQg = qmul(ic, lh.grip.orientation); relQa = qmul(ic, lh.aim.orientation); haveRel = true;
+            } else if (g_twoHandGrip && haveRel && af.handAuthority && rh.gripValid && !af.leftAuthority && lh.squeeze > 0.35f) {
+                lh.grip.position = v3(ToV3(rg.position) + QRot(rg.orientation, ToV3(relP)));
+                lh.aim.position = v3(ToV3(rg.position) + QRot(rg.orientation, ToV3(relAimP)));
+                lh.grip.orientation = qmul(rg.orientation, relQg); lh.aim.orientation = qmul(rg.orientation, relQa);
+                lh.gripValid = lh.aimValid = true; af.leftSynth = true;
+                if (nLost++ % 300 == 0) LOG("arms: left controller untracked - its hand held on the weapon (%d frames)", nLost);
+            }
+        }
         af.leftValid = lh.aimValid && lh.gripValid;
-        af.lSqueeze = af.leftAuthority ? lh.squeeze : 0; af.rSqueeze = af.handAuthority ? rh.squeeze : 0;
+        af.lSqueeze = (af.leftAuthority || af.leftSynth) ? lh.squeeze : 0; af.rSqueeze = af.handAuthority ? rh.squeeze : 0;
         af.machete = controls::MacheteSelected(); af.map = controls::MapOpen();
         if (af.leftValid) {
             put(af.laimO, frame.ReferencePosition(ToV3(lh.aim.position)));
@@ -2796,10 +2821,14 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             static void* gripWeapon = nullptr; static xr::InputStamp gripSource;
             bool g = lh.squeeze > (gripDown ? 0.35f : 0.6f);
             if (gripWeapon != af.weapon || gripSource.generation != af.source.generation
-                || gripSource.handGeneration[0] != af.source.handGeneration[0] || gripSource.handGeneration[1] != af.source.handGeneration[1]) {
+                || (gripSource.handGeneration[0] != af.source.handGeneration[0] && !(grabbing && af.leftSynth))
+                || gripSource.handGeneration[1] != af.source.handGeneration[1]) {
+                if (grabbing) LOG("arms: two-handed grip ended (%s)", gripWeapon != af.weapon ? "weapon changed" : gripSource.generation != af.source.generation ? "input reset" : gripSource.handGeneration[1] != af.source.handGeneration[1] ? "right controller lost tracking" : "left controller lost tracking");
                 grabbing = false; gripDown = g; gripWeapon = af.weapon; gripSource = af.source;
             }
-            if (!af.handAuthority || !af.leftAuthority) grabbing = false;
+            if (grabbing && af.leftSynth) gripSource.handGeneration[0] = af.source.handGeneration[0];   // v234: the held left hand keeps the grip
+            if (grabbing && (!af.handAuthority || (!af.leftAuthority && !af.leftSynth))) LOG("arms: two-handed grip ended (%s controller not tracked)", !af.handAuthority ? "right" : "left");
+            if (!af.handAuthority || (!af.leftAuthority && !af.leftSynth)) grabbing = false;
             float fg[3]; bool oneH = true;
             if (g && !gripDown && af.handAuthority && af.leftAuthority && arms::Foregrip(fg, oneH)) {
                 V3 d = V3{ af.lgripO[0] - fg[0], af.lgripO[1] - fg[1], af.lgripO[2] - fg[2] };
@@ -2807,6 +2836,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
                 if (dist < g_cfg.grabDistance * s) { grabbing = true; xr::Haptic(0, 0.5f, 0.05f); LOG("arms: two-handed grip (%s, %.2f m, hand span %.2f)", oneH ? "pistol" : "rifle", dist / s, arms::LastHandSpan()); }
                 else LOG("arms: left grip %.2f m from the weapon (span %.2f, %s): not grabbing", dist / s, arms::LastHandSpan(), oneH ? "pistol" : "rifle");
             }
+            if (!g && grabbing) LOG("arms: two-handed grip released (grip button)");
             if (!g) grabbing = false;
             gripDown = g;
             af.twoHand = grabbing;
@@ -3924,7 +3954,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 3: game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 4: two-handed grip held through left tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

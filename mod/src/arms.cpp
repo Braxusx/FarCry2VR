@@ -2634,14 +2634,14 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
     if (!xr::InputCurrent()) controls::CancelPendingInput();
     // Keep presentation fallback out of gameplay, including when render publication stops.
     f.handValid = f.handValid && f.handAuthority && xr::InputCurrent(f.source,1);
-    f.leftValid = f.leftValid && f.leftAuthority && xr::InputCurrent(f.source,0);
+    f.leftValid = f.leftValid && (f.leftSynth || (f.leftAuthority && xr::InputCurrent(f.source,0)));   // v234: a held two-handed grip survives the left controller's tracking dropouts
     f.headValid = f.headValid && f.headAuthority && xr::HeadCurrent(f.source);
     static fc2vr::authority::Stamp previousInput;
     for (int hnd = 0; hnd < 2; ++hnd) {
         if (previousInput.generation != f.source.generation || previousInput.handGeneration[hnd] != f.source.handGeneration[hnd]) {
             // A short dropout can occur entirely between game ticks. Cancel old
             // holds/history once even if the newest sample is tracked again.
-            if (hnd) f.handValid = false; else f.leftValid = false;
+            if (hnd) f.handValid = false; else if (!f.leftSynth) f.leftValid = false;
             g_hist[hnd].n = 0; g_gripPrev[hnd] = true;
             Lock(); g_npcDrive[hnd] = NpcDrive{}; Unlock();
         }
