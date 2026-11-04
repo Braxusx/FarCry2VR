@@ -3374,11 +3374,47 @@ static void __fastcall Hook_UseMon(uint8_t* self, void* edx, uint32_t a, uint32_
 static uint32_t g_useSetBy[6]; static uint8_t g_useSetVal[6]; static int g_useSetN = 0; static bool g_useRec = false;
 typedef void (__fastcall *SetUsable_t)(uint8_t* ev, void* edx, int v);
 static SetUsable_t o_SetUsable = nullptr;
+static void UsePlayerState(uint32_t by, int v, uint8_t* comp);
 static void __fastcall Hook_SetUsable(uint8_t* ev, void* edx, int v) {
+    uint8_t* comp; asm volatile("mov %%esi, %0" : "=r"(comp));   // the answering component (esi in the pickup handler)
     ev[0x34] = (uint8_t)v;
+    {   uint32_t by = (uint32_t)(uintptr_t)__builtin_return_address(0) - (uint32_t)g_base + 0x10000000u;
+        if (g_useThread == GetCurrentThreadId() && (by == 0x10147F19 || by == 0x10147D4E)) UsePlayerState(by, v, comp); }
     if (g_useRec && g_useThread == GetCurrentThreadId() && g_useSetN < 6) {
         g_useSetBy[g_useSetN] = (uint32_t)(uintptr_t)__builtin_return_address(0) - (uint32_t)g_base + 0x10000000u; g_useSetVal[g_useSetN] = (uint8_t)v; ++g_useSetN;
     }
+}
+// the pickup check's player-side conditions (0x10146BF0), read directly, logged when they change
+static void UsePlayerState(uint32_t by, int v, uint8_t* comp) {
+    if (!g_playerEntR) return;
+    typedef uint8_t* (__fastcall *PComp_t)(void*, void*, void*);
+    uint8_t* pawn = ((PComp_t)A(0x104E2CC0))(g_playerEntR, nullptr, (void*)A(0x10FDE39C));   // as the pickup check finds it
+    if (!pawn || IsBadReadPtr(pawn + 0x10, 4)) return;
+    uint8_t* pd = *(uint8_t**)(pawn + 0x10); if (!pd || IsBadReadPtr(pd + 0x4F4, 4)) return;
+    int dead = pd[0x499], st = IsBadReadPtr(pd + 0xD8 + 0x50, 1) ? -1 : pd[0xD8 + 0x50];
+    int tag = -1, busy = -1, veh = -1, itemCount = -9;
+    {   void** vt = *(void***)pawn; typedef void* (__fastcall *Get_t)(void*, void*); typedef bool (__fastcall *Has_t)(void*, void*, void*);
+        void* list = ((Get_t)vt[0x78 / 4])(pawn, nullptr);
+        if (list) tag = ((Has_t)A(0x1029DBA0))(list, nullptr, (void*)A(0x10FE4C7C)) ? 1 : 0; }
+    if (g_playerEntR) {   typedef void* (__fastcall *Comp_t)(void*, void*, void*); typedef bool (__fastcall *B_t)(void*, void*);
+        void* c = ((Comp_t)A(0x104E2CC0))(g_playerEntR, nullptr, (void*)A(0x10FDEAC0));
+        if (c) busy = ((B_t)(*(void***)c)[0x7C / 4])(c, nullptr) ? 1 : 0; }
+    {   typedef void* (__cdecl *V_t)(void*); veh = ((V_t)A(0x100E7330))(pawn) ? 1 : 0; }
+    {   uint8_t* inv = pd + 0x4F0; uint8_t* m = !IsBadReadPtr(inv + 4, 4) ? *(uint8_t**)(inv + 4) : nullptr;
+        uint8_t* h = m && !IsBadReadPtr(m + 0x10, 4) ? *(uint8_t**)(m + 0x10) : nullptr;
+        uint8_t* e = h && !IsBadReadPtr(h + 0xC, 4) ? *(uint8_t**)(h + 0xC) : nullptr;
+        typedef uint8_t* (__fastcall *Comp_t)(void*, void*, void*);
+        uint8_t* wc = e ? ((Comp_t)A(0x104E2CC0))(e, nullptr, (void*)A(0x10FE01F8)) : nullptr;
+        uint8_t* q = wc && !IsBadReadPtr(wc + 0x24, 4) ? *(uint8_t**)(wc + 0x24) : nullptr;
+        itemCount = q && !IsBadReadPtr(q + 0x18, 4) ? *(int*)(q + 0x18) : (e ? -2 : -1); }
+    uint32_t cvt = comp && !IsBadReadPtr(comp, 4) ? *(uint32_t*)comp : 0;
+    uint32_t f8c = cvt && !IsBadReadPtr((void*)(uintptr_t)(cvt + 0x8C), 4) ? *(uint32_t*)(uintptr_t)(cvt + 0x8C) : 0;
+    char line[256]; snprintf(line, sizeof line, "%s: dead %d state %d tag %d busy %d vehicle %d hands-item count %d | pickup comp vt %08x (+8c %08x) flags %d %d %d +7c %d",
+        v ? "yes" : "no", dead, st, tag, busy, veh, itemCount, cvt ? cvt - (uint32_t)g_base + 0x10000000u : 0, f8c ? f8c - (uint32_t)g_base + 0x10000000u : 0,
+        comp ? comp[0x14] : -1, comp ? comp[0x15] : -1, comp ? comp[0x16] : -1, comp && !IsBadReadPtr(comp + 0x7C, 4) ? *(int*)(comp + 0x7C) : -1);
+    static char last[256] = ""; static int n = 0;
+    if (strcmp(last, line) && n < 200) { strcpy(last, line); ++n; LOG("use pickup check %s", line); }
+    (void)by;
 }
 // candidate box in front of the body: {vtbl, flag, half extents[3], centre[3], rotation quaternion[4]} - turned to the head
 typedef void (__fastcall *ShapeQuery_t)(void* world, void* edx, float* shape, void* filter, void* results, int z);
