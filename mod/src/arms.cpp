@@ -528,9 +528,18 @@ static float g_useHeadO[3], g_useHeadD[3], g_useHand[3] = { 1e9f, 1e9f, 1e9f }; 
 static volatile DWORD g_useThread = 0;   // the thread inside the player's interaction update (0 = none)
 static int g_useDiagN = 0; static ULONGLONG g_useDiagLast = 0; static char g_useDiagLine[2048]; static int g_useDiagLen = 0;
 static uint32_t g_useBoxHits = 0, g_useSphereHits = 0; static float g_useBox[6];
+// while one candidate is asked, the aim line points at it (within UseCone of the view): small objects need the line on them
+static float g_useCandPt[3]; static bool g_useCandOn = false; static int g_useAimAsks = 0;
 static bool UseAimRay(float o[3], float d[3]) {
     if (!g_useThread || GetCurrentThreadId() != g_useThread) return false;
-    memcpy(o, g_useHeadO, 12); memcpy(d, g_useHeadD, 12); return true;
+    memcpy(o, g_useHeadO, 12);
+    if (g_useCandOn) {
+        ++g_useAimAsks;
+        float v[3] = { g_useCandPt[0] - g_useHeadO[0], g_useCandPt[1] - g_useHeadO[1], g_useCandPt[2] - g_useHeadO[2] };
+        float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        if (l > 1e-3f) { for (int k = 0; k < 3; ++k) d[k] = v[k] / l; return true; }
+    }
+    memcpy(d, g_useHeadD, 12); return true;
 }
 // the aim rotation the game uses: a quaternion turning +Y onto d (the game's own rotation decides the convention)
 static void AimQuatFromDir(const float* dIn, float* out, const char* who) {
@@ -3393,7 +3402,24 @@ static void __fastcall Use_SphereQuery(void* world, void* edx, float* point, flo
 // v234 test 8 diagnostic (UseDiag=1): what the interaction monitor finds and what each candidate answers
 typedef bool (__fastcall *IsUsable_t)(void* self, void* edx, void* cand, void* usage, float* pos);
 static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usage, float* pos) {
+    float cone = -1;
+    if (g_useThread == GetCurrentThreadId() && g_c.useCone > 0) {
+        uint8_t* h0 = cand && !IsBadReadPtr(cand, 4) ? *(uint8_t**)cand : nullptr;
+        uint8_t* e0 = h0 && !IsBadReadPtr(h0 + 0xC, 4) ? *(uint8_t**)(h0 + 0xC) : nullptr;
+        if (e0 && !IsBadReadPtr(e0 + 0x60, 12)) {
+            const float* p0 = (const float*)(e0 + 0x60);
+            float v[3] = { p0[0] - g_useHeadO[0], p0[1] - g_useHeadO[1], p0[2] + 0.1f - g_useHeadO[2] };
+            float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            if (l > 0.05f && l < 4.0f) {
+                cone = acosf(fmaxf(-1.0f, fminf(1.0f, (v[0] * g_useHeadD[0] + v[1] * g_useHeadD[1] + v[2] * g_useHeadD[2]) / l))) * 57.29578f;
+                if (cone <= g_c.useCone) { g_useCandPt[0] = p0[0]; g_useCandPt[1] = p0[1]; g_useCandPt[2] = p0[2] + 0.1f; g_useCandOn = true; }
+            }
+        }
+    }
+    int asks0 = g_useAimAsks;
     bool r = ((IsUsable_t)A(0x1009D480))(self, edx, cand, usage, pos);
+    bool aimed = g_useCandOn; g_useCandOn = false;
+    int asked = g_useAimAsks - asks0;
     if (g_c.useDiag && g_useThread == GetCurrentThreadId() && g_useDiagLen < (int)sizeof g_useDiagLine - 160) {
         uint8_t* h = cand && !IsBadReadPtr(cand, 4) ? *(uint8_t**)cand : nullptr;
         uint8_t* e = h && !IsBadReadPtr(h + 0xC, 4) ? *(uint8_t**)(h + 0xC) : nullptr;
@@ -3407,8 +3433,8 @@ static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usa
         uint32_t vt = e && !IsBadReadPtr(e, 4) ? *(uint32_t*)e : 0;
         float hd = -1; if (ep) { float hx = ep[0] - g_useHand[0], hy = ep[1] - g_useHand[1], hz = ep[2] - g_useHand[2]; hd = sqrtf(hx * hx + hy * hy + hz * hz); }
         (void)vt;
-        g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " | %p %s %.2f m dz %+.2f %.0f deg off view, %.2f m from right hand",
-                                 (void*)e, r ? "USABLE" : "no", d, dz, ad, hd);
+        g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " | %p %s %.2f m dz %+.2f %.0f deg off view, %.2f m from right hand, aim %s (asked %d)",
+                                 (void*)e, r ? "USABLE" : "no", d, dz, ad, hd, aimed ? "on it" : "view", asked);
     }
     return r;
 }
