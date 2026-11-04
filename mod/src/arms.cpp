@@ -529,7 +529,7 @@ static volatile DWORD g_useThread = 0;   // the thread inside the player's inter
 static int g_useDiagN = 0; static ULONGLONG g_useDiagLast = 0; static char g_useDiagLine[2048]; static int g_useDiagLen = 0;
 static uint32_t g_useBoxHits = 0, g_useSphereHits = 0; static float g_useBox[6];
 // while one candidate is asked, the aim line points at it (within UseCone of the view): small objects need the line on them
-static float g_useCandPt[3]; static bool g_useCandOn = false; static int g_useAimAsks = 0;
+static float g_useCandPt[3]; static bool g_useCandOn = false, g_useInCheck = false; static int g_useAimAsks = 0;
 static bool UseAimRay(float o[3], float d[3]) {
     if (!g_useThread || GetCurrentThreadId() != g_useThread) return false;
     memcpy(o, g_useHeadO, 12);
@@ -562,7 +562,9 @@ static void AimQuatFromDir(const float* dIn, float* out, const char* who) {
 static AimPos_t o_AimPos = nullptr;
 static void __fastcall Hook_AimPos(void* self, void* edx, int slot, float* out) {
     o_AimPos(self, edx, slot, out);
-    float o[3], d[3]; if (slot == 0 && out && (UseAimRay(o, d) || MonoAimRay(o, d))) memcpy(out, o, 12);
+    float o[3], d[3];
+    if (out && slot == 3 && g_useInCheck && UseAimRay(o, d)) { memcpy(out, o, 12); return; }   // v234: pickups measure reach from aim slot 3
+    if (slot == 0 && out && (UseAimRay(o, d) || MonoAimRay(o, d))) memcpy(out, o, 12);
 }
 typedef void (__fastcall *AimRot_t)(void* self, void* edx, int slot, float* out);
 static AimRot_t o_AimRot = nullptr;
@@ -3463,7 +3465,30 @@ static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usa
         }
     }
     int asks0 = g_useAimAsks; g_useSetN = 0; g_useRec = true;
+    // v234: pickups (e.g. diamond cases, 0x106C4E90) test the player's view angles - pawn data +0x2D0, then +0x54 (flag 4 at
+    // +4) or +0x38: pitch, roll, yaw (rad; forward = (-cos p sin y, cos p cos y, sin p)). In VR those are the body's level
+    // view. During the check they are the head's, aimed at the candidate when it is within UseCone.
+    float* ang = nullptr; float saved[3];
+    typedef uint8_t* (__fastcall *PComp_t)(void*, void*, void*);
+    uint8_t* pc = g_useThread == GetCurrentThreadId() && g_playerEntR && A(0x10FDE39C) ? ((PComp_t)A(0x104E2CC0))(g_playerEntR, nullptr, (void*)A(0x10FDE39C)) : nullptr;
+    if (pc && !IsBadReadPtr(pc + 0x10, 4)) {
+        uint8_t* pd = *(uint8_t**)(pc + 0x10);
+        uint8_t* vs = pd && !IsBadReadPtr(pd + 0x2D0, 0x60) ? pd + 0x2D0 : nullptr;
+        if (vs) {
+            ang = (float*)(vs + ((vs[4] & 4) ? 0x54 : 0x38)); memcpy(saved, ang, 12);
+            float d[3];
+            if (g_useCandOn) { float v[3] = { g_useCandPt[0] - g_useHeadO[0], g_useCandPt[1] - g_useHeadO[1], g_useCandPt[2] - g_useHeadO[2] };
+                float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); for (int k = 0; k < 3; ++k) d[k] = l > 1e-3f ? v[k] / l : g_useHeadD[k]; }
+            else memcpy(d, g_useHeadD, 12);
+            ang[0] = asinf(fmaxf(-1.0f, fminf(1.0f, d[2]))); ang[1] = 0; ang[2] = atan2f(-d[0], d[1]);
+            static int nl = 0; if (nl++ < 3) LOG("interaction: view angles for the check pitch %.1f yaw %.1f (game had %.1f %.1f %.1f deg)",
+                ang[0] * 57.29578f, ang[2] * 57.29578f, saved[0] * 57.29578f, saved[1] * 57.29578f, saved[2] * 57.29578f);
+        }
+    }
+    g_useInCheck = true;
     bool r = ((IsUsable_t)A(0x1009D480))(self, edx, cand, usage, pos);
+    g_useInCheck = false;
+    if (ang) memcpy(ang, saved, 12);
     g_useRec = false;
     bool aimed = g_useCandOn; g_useCandOn = false;
     int asked = g_useAimAsks - asks0;
