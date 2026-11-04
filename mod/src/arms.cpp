@@ -524,7 +524,7 @@ typedef void (__fastcall *AimPos_t)(void* self, void* edx, int slot, float* out)
 // it, so low cases (diamonds) in tight spots were hard to get a prompt for. While the player's monitor updates (same
 // thread only), the box is turned to the head's heading, the sphere is put just in front of the eyes, and the aim ray
 // is the head's. UseFromHead=0 restores the game's behaviour.
-static float g_useHeadO[3], g_useHeadD[3]; static volatile ULONGLONG g_useHeadTick = 0;
+static float g_useHeadO[3], g_useHeadD[3], g_useHand[3] = { 1e9f, 1e9f, 1e9f }; static volatile ULONGLONG g_useHeadTick = 0;
 static volatile DWORD g_useThread = 0;   // the thread inside the player's interaction update (0 = none)
 static int g_useDiagN = 0; static ULONGLONG g_useDiagLast = 0; static char g_useDiagLine[2048]; static int g_useDiagLen = 0;
 static uint32_t g_useBoxHits = 0, g_useSphereHits = 0; static float g_useBox[6];
@@ -2681,6 +2681,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
         float o[3], d[3]; toWorld(f.headO, o, true); toWorld(f.headF, d, false);
         float l = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
         if (l > 1e-4f) { for (float& x : d) x /= l; memcpy(g_useHeadO, o, 12); memcpy(g_useHeadD, d, 12); g_useHeadTick = GetTickCount64(); }
+        if (f.handValid) toWorld(f.gripO, g_useHand, true);
     }
     ReloadInputTick();
     {   // the held weapon's graphic component, as the projectile code finds it (entity -> component 0x104E2CC0 with
@@ -3404,8 +3405,10 @@ static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usa
             if (d > 1e-3f) ad = acosf(fmaxf(-1.0f, fminf(1.0f, (dx * g_useHeadD[0] + dy * g_useHeadD[1] + dz * g_useHeadD[2]) / d))) * 57.29578f;
         }
         uint32_t vt = e && !IsBadReadPtr(e, 4) ? *(uint32_t*)e : 0;
-        g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " | %p(vt %08x) %s %.2f m dz %+.2f %.0f deg off view",
-                                 (void*)e, vt, r ? "USABLE" : "no", d, dz, ad);
+        float hd = -1; if (ep) { float hx = ep[0] - g_useHand[0], hy = ep[1] - g_useHand[1], hz = ep[2] - g_useHand[2]; hd = sqrtf(hx * hx + hy * hy + hz * hz); }
+        (void)vt;
+        g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " | %p %s %.2f m dz %+.2f %.0f deg off view, %.2f m from right hand",
+                                 (void*)e, r ? "USABLE" : "no", d, dz, ad, hd);
     }
     return r;
 }
