@@ -100,6 +100,7 @@ struct Config {
     float throwScale = 1.3f;      // ThrowScale: hand speed at release x this = throw speed
     float throwMaxSpeed = 25.0f;  // ThrowMaxSpeed (m/s)
     float useReach = 0.9f;
+    int useFromHead = 1;          // UseFromHead (v234): the game's interaction target follows the head (box, sphere, aim ray)
     float mouthReach = 0.18f;     // MouthReach: food/water consumed this close to the mouth (m)        // UseReach: hand to the game's interaction point (m)
     float backpackFwd = 0.0f, backpackUp = -0.25f;   // BackpackZoneFwd/Up: over the shoulder, relative to the head (m)
     uint32_t grabMask = 0x4A7;    // GrabQueryMask: physics query layers

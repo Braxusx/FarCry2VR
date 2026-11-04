@@ -516,18 +516,23 @@ static void __fastcall Hook_MonoUpd(void* self, void* edx) {
 }
 static bool MonoAimRay(float o[3], float d[3]);
 typedef void (__fastcall *AimPos_t)(void* self, void* edx, int slot, float* out);
-static AimPos_t o_AimPos = nullptr;
-static void __fastcall Hook_AimPos(void* self, void* edx, int slot, float* out) {
-    o_AimPos(self, edx, slot, out);
-    float o[3], d[3]; if (slot == 0 && out && MonoAimRay(o, d)) memcpy(out, o, 12);
+// v234 interaction from the head. The game's interaction monitor (CPawnInteractionMonitor update, Steam 0x1009E460,
+// thiscall, 2 args, ret 8) gathers usable objects in a box in front of the BODY (body yaw; physics box query 0x1048DCE0
+// called at 0x1009CF12) and a 1 m sphere ahead of the chest (0x1048DCB0 at 0x1009D010), asks each one whether it is
+// usable, then scores them against the pawn's aim ray (AimPos 0x1010D780 / AimRot 0x1010D850, slot 0) in 0x1014DBB0.
+// In VR the body yaw and the game's level aim ignore where the player looks, and crouching in the room does not lower
+// it, so low cases (diamonds) in tight spots were hard to get a prompt for. While the player's monitor updates (same
+// thread only), the box is turned to the head's heading, the sphere is put just in front of the eyes, and the aim ray
+// is the head's. UseFromHead=0 restores the game's behaviour.
+static float g_useHeadO[3], g_useHeadD[3]; static volatile ULONGLONG g_useHeadTick = 0;
+static volatile DWORD g_useThread = 0;   // the thread inside the player's interaction update (0 = none)
+static bool UseAimRay(float o[3], float d[3]) {
+    if (!g_useThread || GetCurrentThreadId() != g_useThread) return false;
+    memcpy(o, g_useHeadO, 12); memcpy(d, g_useHeadD, 12); return true;
 }
-typedef void (__fastcall *AimRot_t)(void* self, void* edx, int slot, float* out);
-static AimRot_t o_AimRot = nullptr;
-static void __fastcall Hook_AimRot(void* self, void* edx, int slot, float* out) {
-    o_AimRot(self, edx, slot, out);
-    float o[3], d[3];
-    if (slot != 0 || !out || !MonoAimRay(o, d)) return;
-    float l = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]); if (l < 1e-6f) return;
+// the aim rotation the game uses: a quaternion turning +Y onto d (the game's own rotation decides the convention)
+static void AimQuatFromDir(const float* dIn, float* out, const char* who) {
+    float d[3] = { dIn[0], dIn[1], dIn[2] }; float l = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]); if (l < 1e-6f) return;
     for (float& x : d) x /= l;
     alignas(16) float q[4] = { d[2], 0.0f, -d[0], 1.0f + d[1] };   // shortest turn from +Y to d
     if (q[3] < 1e-4f) { q[0] = 0; q[1] = 0; q[2] = 1; q[3] = 0; }
@@ -538,10 +543,25 @@ static void __fastcall Hook_AimRot(void* self, void* edx, int slot, float* out) 
         alignas(16) float v[4] = { 0, 1, 0, 0 }, r[4] = {};
         ((Rot_t)A(0x10032EE0))(q, nullptr, r, v);
         conv = (r[0] * d[0] + r[1] * d[1] + r[2] * d[2]) > 0.9f ? 1 : -1;
-        LOG("monocular: tag ray rotation %s (check %.2f)", conv > 0 ? "as built" : "conjugated", r[0] * d[0] + r[1] * d[1] + r[2] * d[2]);
+        LOG("%s: aim rotation %s (check %.2f)", who, conv > 0 ? "as built" : "conjugated", r[0] * d[0] + r[1] * d[1] + r[2] * d[2]);
     }
     if (conv < 0) { q[0] = -q[0]; q[1] = -q[1]; q[2] = -q[2]; }
     memcpy(out, q, 16);
+}
+static AimPos_t o_AimPos = nullptr;
+static void __fastcall Hook_AimPos(void* self, void* edx, int slot, float* out) {
+    o_AimPos(self, edx, slot, out);
+    float o[3], d[3]; if (slot == 0 && out && (UseAimRay(o, d) || MonoAimRay(o, d))) memcpy(out, o, 12);
+}
+typedef void (__fastcall *AimRot_t)(void* self, void* edx, int slot, float* out);
+static AimRot_t o_AimRot = nullptr;
+static void __fastcall Hook_AimRot(void* self, void* edx, int slot, float* out) {
+    o_AimRot(self, edx, slot, out);
+    float o[3], d[3];
+    if (slot != 0 || !out) return;
+    if (UseAimRay(o, d)) { AimQuatFromDir(d, out, "interaction"); return; }
+    if (!MonoAimRay(o, d)) return;
+    AimQuatFromDir(d, out, "monocular");
     static int nl = 0; if (nl++ < 3) LOG("monocular: tag ray from the head (dir %.2f %.2f %.2f)", d[0], d[1], d[2]);
 }   // v215: the game's render camera and the scope camera posed from the head
 typedef void (__fastcall *EquipMono_t)(void* self, void* edx);
@@ -2655,6 +2675,11 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
     g_pawn = pawn;
     uint8_t* playerEnt = player ? player->ent : nullptr;
     g_playerEntR = playerEnt;
+    if (f.headValid) {   // v234: head ray for the game's interaction target (UseFromHead)
+        float o[3], d[3]; toWorld(f.headO, o, true); toWorld(f.headF, d, false);
+        float l = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        if (l > 1e-4f) { for (float& x : d) x /= l; memcpy(g_useHeadO, o, 12); memcpy(g_useHeadD, d, 12); g_useHeadTick = GetTickCount64(); }
+    }
     ReloadInputTick();
     {   // the held weapon's graphic component, as the projectile code finds it (entity -> component 0x104E2CC0 with
         // the type id at 0x10FDF1AC; muzzle bones are read from it with 0x1051D2F0, world matrix at +0x170)
@@ -3304,6 +3329,60 @@ static void __fastcall Hook_AimHelp(void* f, void* edx, void* a, void* b, void* 
     }
     o_AimHelp(f, edx, a, b, c);
 }
+// v234 interaction from the head (see UseAimRay): the player's interaction monitor update
+typedef void (__fastcall *UseMon_t)(uint8_t* self, void* edx, uint32_t a, uint32_t b);
+static UseMon_t o_UseMon = nullptr;
+static void __fastcall Hook_UseMon(uint8_t* self, void* edx, uint32_t a, uint32_t b) {
+    bool mine = false;
+    if (g_c.useFromHead && GetTickCount64() - g_useHeadTick < 250 && g_playerEntR && !IsBadReadPtr(self + 4, 4)) {
+        static const int kOffs[2] = { 4, 0xC };
+        for (int off : kOffs) {   // owner handles (-> entity at +0xC)
+            uint8_t* h = *(uint8_t**)(self + off);
+            if (h && !IsBadReadPtr(h + 0xC, 4) && *(uint8_t**)(h + 0xC) == g_playerEntR) mine = true;
+        }
+        static int nd = 0; if (!mine && nd++ < 3) LOG("interaction: monitor %p is not the player's (player entity %p)", self, g_playerEntR);
+    }
+    if (!mine) { o_UseMon(self, edx, a, b); return; }
+    static int nl = 0; if (nl++ == 0) LOG("interaction: the game's use target follows the head (monitor %p)", self);
+    g_useThread = GetCurrentThreadId();
+    o_UseMon(self, edx, a, b);
+    g_useThread = 0;
+}
+// candidate box in front of the body: {vtbl, flag, half extents[3], centre[3], rotation quaternion[4]} - turned to the head
+typedef void (__fastcall *ShapeQuery_t)(void* world, void* edx, float* shape, void* filter, void* results, int z);
+static void __fastcall Use_BoxQuery(void* world, void* edx, float* shape, void* filter, void* results, int z) {
+    if (shape && UseAimRay(g_useHeadO, g_useHeadD)) {
+        // the game put the box (half depth hy) hy + 0.2 m ahead of the body along the body's heading (the box's own +Y)
+        float* c = shape + 5; float* q = shape + 8; const float L = shape[3] + 0.2f;
+        typedef float* (__fastcall *Rot_t)(const float* q, void* edx, float* out, const float* v);
+        alignas(16) float qq[4], v[4] = { 0, 1, 0, 0 }, fb[4] = {}; memcpy(qq, q, 16);
+        ((Rot_t)A(0x10032EE0))(qq, nullptr, fb, v);
+        float f[3] = { g_useHeadD[0], g_useHeadD[1], 0 }; float fl = sqrtf(f[0] * f[0] + f[1] * f[1]);
+        if (fl > 0.2f && L > 0.05f && L < 3.0f && fabsf(fb[0] * fb[0] + fb[1] * fb[1] - 1.0f) < 0.1f) {
+            f[0] /= fl; f[1] /= fl;
+            float px = c[0] - fb[0] * L, py = c[1] - fb[1] * L;   // the body
+            c[0] = px + f[0] * L; c[1] = py + f[1] * L;
+            alignas(16) float nq[4]; AimQuatFromDir(f, nq, "interaction box"); memcpy(q, nq, 16);
+            static int nl = 0; if (nl++ < 2) LOG("interaction: candidate box turned to the head (%.2f m ahead, body heading %.2f %.2f, head %.2f %.2f)", L, fb[0], fb[1], f[0], f[1]);
+        }
+    }
+    ((ShapeQuery_t)A(0x1048DCE0))(world, edx, shape, filter, results, z);
+}
+// candidate sphere ahead of the chest: put just in front of the eyes
+typedef void (__fastcall *SphereQuery_t)(void* world, void* edx, float* point, float radius, void* results, void* filter, int z);
+static void __fastcall Use_SphereQuery(void* world, void* edx, float* point, float radius, void* results, void* filter, int z) {
+    float o[3], d[3];
+    if (point && UseAimRay(o, d)) for (int k = 0; k < 3; ++k) point[k] = o[k] + d[k] * 0.5f;
+    ((SphereQuery_t)A(0x1048DCB0))(world, edx, point, radius, results, filter, z);
+}
+static bool PatchCallSite(uintptr_t va, uintptr_t callee, void* fn, const char* what) {   // va: a "call callee" (Steam VAs)
+    uint8_t* p = (uint8_t*)A(va); uintptr_t want = A(callee);
+    if (!p || !want || p[0] != 0xE8 || (uintptr_t)p + 5 + *(int32_t*)(p + 1) != want) { LOG("%s: unexpected bytes, not applied", what); return false; }
+    DWORD old; VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &old);
+    *(int32_t*)(p + 1) = (int32_t)((uintptr_t)fn - ((uintptr_t)p + 5));
+    VirtualProtect(p, 5, old, &old); FlushInstructionCache(GetCurrentProcess(), p, 5);
+    return true;
+}
 // ---------------------------------------------------------------- install
 void Install(uintptr_t base, const Config& c, PatchFn patch) {
     g_base = base; g_c = c;
@@ -3324,6 +3403,13 @@ void Install(uintptr_t base, const Config& c, PatchFn patch) {
     if (c.noRimLight) LOG("arms: rim light off hook %d", patch(A(0x10119100), pro, 6, (void*)&Hook_EnvLight, (void**)&o_EnvLight));
     if (!c.gameAimAssist) { static const uint8_t proH[10] = { 0x8B, 0x44, 0x24, 0x04, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00 };   // mov eax,[esp+4]; sub esp,80h
         LOG("arms: game aim assist off hook %d", patch(A(0x107DA700), proH, 10, (void*)&Hook_AimHelp, (void**)&o_AimHelp)); }
+    if (c.useFromHead) {
+        static const uint8_t proU[6] = { 0x81, 0xEC, 0xC4, 0x00, 0x00, 0x00 };   // sub esp,0C4h
+        bool u1 = patch(A(0x1009E460), proU, 6, (void*)&Hook_UseMon, (void**)&o_UseMon);
+        bool u2 = u1 && PatchCallSite(0x1009CF12, 0x1048DCE0, (void*)&Use_BoxQuery, "interaction box");
+        bool u3 = u1 && PatchCallSite(0x1009D010, 0x1048DCB0, (void*)&Use_SphereQuery, "interaction sphere");
+        LOG("arms: interaction from the head: monitor %d, box %d, sphere %d", u1, u2, u3);
+    }
     {   static const uint8_t proP[6] = { 0x83, 0xEC, 0x18, 0x56, 0x8B, 0xF1 };   // sub esp,18h; push esi; mov esi,ecx
         bool m1 = patch(A(0x1072C260), pro, 6, (void*)&Hook_MonoUpd, (void**)&o_MonoUpd);
         bool m2 = patch(A(0x1010D780), proP, 6, (void*)&Hook_AimPos, (void**)&o_AimPos);

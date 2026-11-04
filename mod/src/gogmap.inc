@@ -7,6 +7,9 @@ static const uint32_t kGogMap[][2] = {
     { 0x10050F30, 0x10050E30 },
     { 0x10060890, 0x10060050 },
     { 0x1007F3E0, 0x1007EB00 },
+    { 0x1009CF12, 0x1009C182 },   // interaction box query call (v234)
+    { 0x1009D010, 0x1009C280 },   // interaction sphere query call (v234)
+    { 0x1009E460, 0x1009D640 },   // interaction monitor update (v234)
     { 0x100A0460, 0x1009F640 },
     { 0x100A04E0, 0x1009F6C0 },
     { 0x100D7B10, 0x100D6B20 },
@@ -98,6 +101,7 @@ static const uint32_t kGogMap[][2] = {
     { 0x10459550, 0x10445EF0 },   // light manager: free
     { 0x104596F0, 0x1044BB40 },   // light manager: get
     { 0x1048DCB0, 0x10480120 },
+    { 0x1048DCE0, 0x10480150 },   // physics box query (v234)
     { 0x1048DD30, 0x104801A0 },
     { 0x1048E790, 0x10480C00 },
     { 0x1048EC40, 0x104810D0 },
