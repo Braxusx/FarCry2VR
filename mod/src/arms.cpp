@@ -526,7 +526,7 @@ typedef void (__fastcall *AimPos_t)(void* self, void* edx, int slot, float* out)
 // is the head's. UseFromHead=0 restores the game's behaviour.
 static float g_useHeadO[3], g_useHeadD[3]; static volatile ULONGLONG g_useHeadTick = 0;
 static volatile DWORD g_useThread = 0;   // the thread inside the player's interaction update (0 = none)
-static int g_useDiagN = 0; static ULONGLONG g_useDiagLast = 0; static char g_useDiagLine[1024]; static int g_useDiagLen = 0;
+static int g_useDiagN = 0; static ULONGLONG g_useDiagLast = 0; static char g_useDiagLine[2048]; static int g_useDiagLen = 0;
 static uint32_t g_useBoxHits = 0, g_useSphereHits = 0; static float g_useBox[6];
 static bool UseAimRay(float o[3], float d[3]) {
     if (!g_useThread || GetCurrentThreadId() != g_useThread) return false;
@@ -3351,7 +3351,7 @@ static void __fastcall Hook_UseMon(uint8_t* self, void* edx, uint32_t a, uint32_
     o_UseMon(self, edx, a, b);
     g_useThread = 0;
     if (g_c.useDiag && g_useBoxHits != 0xFFFFFFFF && g_useDiagN < 600) {
-        static char last[1024] = ""; ULONGLONG now = GetTickCount64();
+        static char last[2048] = ""; ULONGLONG now = GetTickCount64();
         if (strcmp(last, g_useDiagLine) != 0 || now - g_useDiagLast > 3000) {
             strcpy(last, g_useDiagLine); g_useDiagLast = now; ++g_useDiagN;
             const float* hb = g_useBox; float pitch = asinf(fmaxf(-1.0f, fminf(1.0f, g_useHeadD[2]))) * 57.29578f;
@@ -3393,13 +3393,19 @@ static void __fastcall Use_SphereQuery(void* world, void* edx, float* point, flo
 typedef bool (__fastcall *IsUsable_t)(void* self, void* edx, void* cand, void* usage, float* pos);
 static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usage, float* pos) {
     bool r = ((IsUsable_t)A(0x1009D480))(self, edx, cand, usage, pos);
-    if (g_c.useDiag && g_useThread == GetCurrentThreadId() && g_useDiagLen < (int)sizeof g_useDiagLine - 96) {
+    if (g_c.useDiag && g_useThread == GetCurrentThreadId() && g_useDiagLen < (int)sizeof g_useDiagLine - 160) {
         uint8_t* h = cand && !IsBadReadPtr(cand, 4) ? *(uint8_t**)cand : nullptr;
         uint8_t* e = h && !IsBadReadPtr(h + 0xC, 4) ? *(uint8_t**)(h + 0xC) : nullptr;
-        float d = -1, dz = 0;
-        if (r && pos) { float dx = pos[0] - g_useHeadO[0], dy = pos[1] - g_useHeadO[1]; dz = pos[2] - g_useHeadO[2]; d = sqrtf(dx * dx + dy * dy + dz * dz); }
-        g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " | %p %s", (void*)e, r ? "usable" : "no");
-        if (r) g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " %.2f m (dz %+.2f)", d, dz);
+        float d = -1, dz = 0, ad = -1;
+        const float* ep = (e && !IsBadReadPtr(e + 0x60, 12)) ? (const float*)(e + 0x60) : nullptr;   // entity world matrix translation
+        if (r && pos) ep = pos;
+        if (ep) {
+            float dx = ep[0] - g_useHeadO[0], dy = ep[1] - g_useHeadO[1]; dz = ep[2] - g_useHeadO[2]; d = sqrtf(dx * dx + dy * dy + dz * dz);
+            if (d > 1e-3f) ad = acosf(fmaxf(-1.0f, fminf(1.0f, (dx * g_useHeadD[0] + dy * g_useHeadD[1] + dz * g_useHeadD[2]) / d))) * 57.29578f;
+        }
+        uint32_t vt = e && !IsBadReadPtr(e, 4) ? *(uint32_t*)e : 0;
+        g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " | %p(vt %08x) %s %.2f m dz %+.2f %.0f deg off view",
+                                 (void*)e, vt, r ? "USABLE" : "no", d, dz, ad);
     }
     return r;
 }
