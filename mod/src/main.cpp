@@ -81,7 +81,9 @@ struct Config {
     int   uiMode = 1;             // 1 = per-eye UI viewport: centred on the gun's aim point, scaled (fixes doubled reticle/menus)
     float uiDepth = 6.0f;         // metres: distance at which the UI converges (aim point)
     float uiScale = 0.7f;         // UI size relative to the eye image
-    char  uiSkipTex[512] = "256x512x71v18";   // UI textures (WxHxFormat, comma-separated) not drawn into the layer
+    char  uiSkipTex[512] = "256x512x71v18";
+    int   uiPromptCenter = 1;     // v234: the interaction hand icon is drawn at the centre of the view (over the object)
+    char  uiPromptTex[64] = "64x64x77v6#4b9ead2e";   // UI textures (WxHxFormat, comma-separated) not drawn into the layer
     int   reticleTexMax = 256;      // UI draws whose texture has at most this many texels go to the aim-locked reticle layer
     int   fixBouncingNpcs = 1, npcFixThreads = 1, npcFixJobThreads = 1;
     int   scopeMode = 1;              // flat screen for binoculars / scopes
@@ -192,6 +194,8 @@ static void LoadConfig() {
     g_cfg.minSizeMul = IniF("MinSizeMul", 0.5f);
     g_cfg.reticleTexMax = (int)IniF("ReticleTexMax", 256);
     { char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "UiSkipTex", "256x512x71v18", g_cfg.uiSkipTex, sizeof g_cfg.uiSkipTex, path); }
+    { char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "UiPromptTex", "64x64x77v6#4b9ead2e", g_cfg.uiPromptTex, sizeof g_cfg.uiPromptTex, path);
+      g_cfg.uiPromptCenter = (int)IniF("UiPromptCenter", 1); }
     g_cfg.shareShadows = (int)IniF("ShareShadows", 1);
     g_cfg.cullMode = (int)IniF("CullMode", 1); if (g_cfg.cullMode < 0 || g_cfg.cullMode > 3) g_cfg.cullMode = 1;
     if (g_cfg.uiMode) g_cfg.hudLayer = 0;
@@ -951,8 +955,58 @@ static uint32_t UiTexHash(ID3D10Texture2D* t, const D3D10_TEXTURE2D_DESC& td) {
     C& c = n < 512 ? cache[n++] : cache[next++ % 512]; c.p = t; c.h = h;
     return h;
 }
+// v234: the interaction hand icon, drawn by the game at a fixed HUD spot below the centre, is moved to the centre of the
+// view - over the object the view centre is on. Its spot is measured once (layer pixels before / after its first draw),
+// then each of its draws gets the viewport shifted by the difference and restored at the next draw.
+static bool g_pIconRestore = false, g_pIconHave = false; static int g_pIconMeasure = 0; static D3D10_VIEWPORT g_pIconVp;
+static int g_pIconDx = 0, g_pIconDy = 0; static ID3D10Texture2D* g_pSt[2] = { nullptr, nullptr };
+static ID3D10Texture2D* PromptLayerTex() {
+    if (!g_uiLayerRTV) return nullptr; ID3D10Resource* r = nullptr; g_uiLayerRTV->GetResource(&r); if (!r) return nullptr;
+    ID3D10Texture2D* t = nullptr; r->QueryInterface(__uuidof(ID3D10Texture2D), (void**)&t); r->Release(); return t;   // caller releases
+}
+static void PromptIconAfter() {
+    if (g_pIconRestore) { if (t_RSSetVP) t_RSSetVP(g_vtDev, 1, &g_pIconVp); g_pIconRestore = false; }
+    if (g_pIconMeasure != 1) return;
+    g_pIconMeasure = 2;
+    ID3D10Texture2D* lt = PromptLayerTex(); if (!lt || !g_pSt[0]) { if (lt) lt->Release(); return; }
+    if (!g_pSt[1]) { D3D10_TEXTURE2D_DESC d; g_pSt[0]->GetDesc(&d); if (FAILED(g_vtDev->CreateTexture2D(&d, nullptr, &g_pSt[1]))) g_pSt[1] = nullptr; }
+    if (g_pSt[1]) g_vtDev->CopyResource(g_pSt[1], lt);
+    lt->Release();
+    if (!g_pSt[1]) return;
+    D3D10_TEXTURE2D_DESC d; g_pSt[0]->GetDesc(&d);
+    D3D10_MAPPED_TEXTURE2D m0{}, m1{};
+    if (SUCCEEDED(g_pSt[0]->Map(0, D3D10_MAP_READ, 0, &m0)) && SUCCEEDED(g_pSt[1]->Map(0, D3D10_MAP_READ, 0, &m1))) {
+        int x0 = 1 << 30, y0 = 1 << 30, x1 = -1, y1 = -1;
+        for (UINT y = 0; y < d.Height; y += 2) {
+            const uint32_t* a = (const uint32_t*)((const uint8_t*)m0.pData + (size_t)y * m0.RowPitch), *b = (const uint32_t*)((const uint8_t*)m1.pData + (size_t)y * m1.RowPitch);
+            for (UINT x = 0; x < d.Width; x += 2) if (a[x] != b[x]) { if ((int)x < x0) x0 = x; if ((int)x > x1) x1 = x; if ((int)y < y0) y0 = y; if ((int)y > y1) y1 = y; }
+        }
+        g_pSt[1]->Unmap(0); g_pSt[0]->Unmap(0);
+        if (x1 >= 0 && x1 - x0 < (int)d.Width / 4 && y1 - y0 < (int)d.Height / 4) {
+            float cx = 0.5f * (x0 + x1), cy = 0.5f * (y0 + y1);
+            g_pIconDx = (int)lroundf(d.Width * 0.5f - cx); g_pIconDy = (int)lroundf(d.Height * 0.5f - cy); g_pIconHave = true;
+            LOG("UI: interaction icon drawn at %d-%d, %d-%d of the %ux%u layer (centre %.3f, %.3f) - moved to the centre (%+d, %+d px)",
+                x0, x1, y0, y1, d.Width, d.Height, cx / d.Width, cy / d.Height, g_pIconDx, g_pIconDy);
+        } else { LOG("UI: interaction icon not measured (changed %d-%d, %d-%d) - trying again", x0, x1, y0, y1); g_pIconMeasure = 0; }
+    } else { g_pIconMeasure = 0; }
+    if (g_pIconHave) for (auto& t : g_pSt) if (t) { t->Release(); t = nullptr; }
+}
+static void PromptIconDraw() {
+    if (g_pIconHave) {
+        UINT n = 1; D3D10_VIEWPORT vp; g_vtDev->RSGetViewports(&n, &vp);
+        if (n && t_RSSetVP) { g_pIconVp = vp; vp.TopLeftX += g_pIconDx; vp.TopLeftY += g_pIconDy; t_RSSetVP(g_vtDev, 1, &vp); g_pIconRestore = true; }
+        return;
+    }
+    if (g_pIconMeasure != 0) return;
+    ID3D10Texture2D* lt = PromptLayerTex(); if (!lt) return;
+    if (!g_pSt[0]) { D3D10_TEXTURE2D_DESC sd; lt->GetDesc(&sd); sd.Usage = D3D10_USAGE_STAGING; sd.BindFlags = 0; sd.CPUAccessFlags = D3D10_CPU_ACCESS_READ; sd.MiscFlags = 0; sd.MipLevels = 1; sd.ArraySize = 1;
+        if (FAILED(g_vtDev->CreateTexture2D(&sd, nullptr, &g_pSt[0]))) g_pSt[0] = nullptr; }
+    if (g_pSt[0]) { g_vtDev->CopyResource(g_pSt[0], lt); g_pIconMeasure = 1; }
+    lt->Release();
+}
 static int g_drawPolicy(uintptr_t* sp, int slot) {
     if (g_cfg.uiMode == 2) {
+        if (g_pIconRestore || g_pIconMeasure == 1) PromptIconAfter();
         if (!g_uiShift || !g_uiOnEye || !g_uiLayerRTV) return 0;
         uint32_t c[2] = { 0, 0 }; int found = 0;
         for (int i = 0; i < 300 && found < 2; ++i) { uintptr_t v = sp[i]; if (v > g_base + 0x1000 && v < g_base + 0xE00000) c[found++] = (uint32_t)(v - g_base + 0x10000000); }
@@ -971,7 +1025,7 @@ static int g_drawPolicy(uintptr_t* sp, int slot) {
         if (g_uiCurEye != g_uiPrimary) return 1;           // the other eye skips the UI
         if (g_capState == 2) UiProbe(ord - 1);
         // Reticle: drawn with a tiny texture (8x16 in the default crosshair).
-        bool ret = false, skip = false;
+        bool ret = false, skip = false, promptIcon = false;
         {
             ID3D10ShaderResourceView* srv = nullptr; g_vtDev->PSGetShaderResources(0, 1, &srv);
             if (srv) { ID3D10Resource* r = nullptr; srv->GetResource(&r); ID3D10Texture2D* t = nullptr;
@@ -986,6 +1040,7 @@ static int g_drawPolicy(uintptr_t* sp, int slot) {
                     char k3[64]; snprintf(k3, sizeof k3, ",%ux%ux%dv%u#%08x,", td.Width, td.Height, (int)td.Format, (unsigned)sp[2], th);
                     char k4[64]; snprintf(k4, sizeof k4, ",%ux%ux%dv%u@r,", td.Width, td.Height, (int)td.Format, (unsigned)sp[2]);   // only while a weapon reticle is up
                     if (g_cfg.uiSkipTex[0] && (strstr(list, k2) || strstr(list, k3) || (g_reticleOnUi && strstr(list, k4)))) skip = true;
+                    if (g_cfg.uiPromptCenter && g_cfg.uiPromptTex[0]) { char pk[72]; snprintf(pk, sizeof pk, ",%s,", g_cfg.uiPromptTex); promptIcon = !strcmp(k3, pk); }
                     t->Release(); }
                 if (r) r->Release(); srv->Release(); }
         }
@@ -1000,6 +1055,7 @@ static int g_drawPolicy(uintptr_t* sp, int slot) {
         }
         if (g_uiBoundLayer != want) { t_OMSetRT(g_vtDev, 1, &want, g_uiSavedEyeDSV); g_uiBoundLayer = want; }
         if (ret) g_uiRetFresh = true;
+        if (promptIcon) PromptIconDraw();
         // alpha fix for additive draws
         {
             ID3D10BlendState* bs = nullptr; FLOAT bf[4]; UINT sm = 0; g_vtDev->OMGetBlendState(&bs, bf, &sm);
@@ -2409,6 +2465,7 @@ extern "C" void __cdecl OnUiBegin() {
 extern "C" void __cdecl OnUiEnd() {
     if (g_capState == 2) TraceMark("UI tail end (before 0x1037F860)");
     if (g_uiShift && g_cfg.uiMode == 2) {
+        if (g_pIconRestore || g_pIconMeasure == 1) PromptIconAfter();
         if (g_uiRedirect && g_uiSavedEyeRTV) t_OMSetRT(g_dev10, 1, &g_uiSavedEyeRTV, g_uiSavedEyeDSV);
         if (g_blendSetFixed) {
             ID3D10BlendState* bs = nullptr; FLOAT bf[4]; UINT sm = 0; g_dev10->OMGetBlendState(&bs, bf, &sm);
@@ -4026,7 +4083,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 16: prompt when the view centre is on or near the object's bounds (UseCenter); predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 17: interaction hand icon at the view centre (UiPromptCenter); predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
