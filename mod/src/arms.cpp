@@ -3370,6 +3370,16 @@ static void __fastcall Hook_UseMon(uint8_t* self, void* edx, uint32_t a, uint32_
         }
     }
 }
+// v234 test 12: who answers the usable question (event->SetUsable(bool) 0x102DC380: mov al,[esp+4]; mov [ecx+34h],al; ret 4)
+static uint32_t g_useSetBy[6]; static uint8_t g_useSetVal[6]; static int g_useSetN = 0; static bool g_useRec = false;
+typedef void (__fastcall *SetUsable_t)(uint8_t* ev, void* edx, int v);
+static SetUsable_t o_SetUsable = nullptr;
+static void __fastcall Hook_SetUsable(uint8_t* ev, void* edx, int v) {
+    ev[0x34] = (uint8_t)v;
+    if (g_useRec && g_useThread == GetCurrentThreadId() && g_useSetN < 6) {
+        g_useSetBy[g_useSetN] = (uint32_t)(uintptr_t)__builtin_return_address(0) - (uint32_t)g_base + 0x10000000u; g_useSetVal[g_useSetN] = (uint8_t)v; ++g_useSetN;
+    }
+}
 // candidate box in front of the body: {vtbl, flag, half extents[3], centre[3], rotation quaternion[4]} - turned to the head
 typedef void (__fastcall *ShapeQuery_t)(void* world, void* edx, float* shape, void* filter, void* results, int z);
 static void __fastcall Use_BoxQuery(void* world, void* edx, float* shape, void* filter, void* results, int z) {
@@ -3416,8 +3426,9 @@ static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usa
             }
         }
     }
-    int asks0 = g_useAimAsks;
+    int asks0 = g_useAimAsks; g_useSetN = 0; g_useRec = true;
     bool r = ((IsUsable_t)A(0x1009D480))(self, edx, cand, usage, pos);
+    g_useRec = false;
     bool aimed = g_useCandOn; g_useCandOn = false;
     int asked = g_useAimAsks - asks0;
     if (g_c.useDiag && g_useThread == GetCurrentThreadId() && g_useDiagLen < (int)sizeof g_useDiagLine - 160) {
@@ -3433,8 +3444,11 @@ static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usa
         uint32_t vt = e && !IsBadReadPtr(e, 4) ? *(uint32_t*)e : 0;
         float hd = -1; if (ep) { float hx = ep[0] - g_useHand[0], hy = ep[1] - g_useHand[1], hz = ep[2] - g_useHand[2]; hd = sqrtf(hx * hx + hy * hy + hz * hz); }
         (void)vt;
-        g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " | %p %s %.2f m dz %+.2f %.0f deg off view, %.2f m from right hand, aim %s (asked %d)",
+        g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " | %p %s %.2f m dz %+.2f %.0f deg off view, %.2f m from right hand, aim %s (asked %d), answered by",
                                  (void*)e, r ? "USABLE" : "no", d, dz, ad, hd, aimed ? "on it" : "view", asked);
+        for (int k = 0; k < g_useSetN && g_useDiagLen < (int)sizeof g_useDiagLine - 24; ++k)
+            g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " %08x=%d", g_useSetBy[k], g_useSetVal[k]);
+        if (!g_useSetN) g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " nobody");
     }
     return r;
 }
@@ -3472,6 +3486,8 @@ void Install(uintptr_t base, const Config& c, PatchFn patch) {
         bool u2 = u1 && PatchCallSite(0x1009CF12, 0x1048DCE0, (void*)&Use_BoxQuery, "interaction box");
         bool u3 = u1 && PatchCallSite(0x1009D010, 0x1048DCB0, (void*)&Use_SphereQuery, "interaction sphere");
         bool u4 = u1 && PatchCallSite(0x1009DC8C, 0x1009D480, (void*)&Use_IsUsable, "interaction usable check");
+        if (c.useDiag) { static const uint8_t proS[7] = { 0x8A, 0x44, 0x24, 0x04, 0x88, 0x41, 0x34 };
+            LOG("arms: usable-answer probe %d", patch(A(0x102DC380), proS, 7, (void*)&Hook_SetUsable, (void**)&o_SetUsable)); }
         LOG("arms: interaction from the head: monitor %d, box %d, sphere %d, check %d (diagnostic %d)", u1, u2, u3, u4, c.useDiag);
     }
     {   static const uint8_t proP[6] = { 0x83, 0xEC, 0x18, 0x56, 0x8B, 0xF1 };   // sub esp,18h; push esi; mov esi,ecx
