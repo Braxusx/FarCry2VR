@@ -526,6 +526,8 @@ typedef void (__fastcall *AimPos_t)(void* self, void* edx, int slot, float* out)
 // is the head's. UseFromHead=0 restores the game's behaviour.
 static float g_useHeadO[3], g_useHeadD[3]; static volatile ULONGLONG g_useHeadTick = 0;
 static volatile DWORD g_useThread = 0;   // the thread inside the player's interaction update (0 = none)
+static int g_useDiagN = 0; static ULONGLONG g_useDiagLast = 0; static char g_useDiagLine[1024]; static int g_useDiagLen = 0;
+static uint32_t g_useBoxHits = 0, g_useSphereHits = 0; static float g_useBox[6];
 static bool UseAimRay(float o[3], float d[3]) {
     if (!g_useThread || GetCurrentThreadId() != g_useThread) return false;
     memcpy(o, g_useHeadO, 12); memcpy(d, g_useHeadD, 12); return true;
@@ -3345,8 +3347,18 @@ static void __fastcall Hook_UseMon(uint8_t* self, void* edx, uint32_t a, uint32_
     if (!mine) { o_UseMon(self, edx, a, b); return; }
     static int nl = 0; if (nl++ == 0) LOG("interaction: the game's use target follows the head (monitor %p)", self);
     g_useThread = GetCurrentThreadId();
+    g_useDiagLen = 0; g_useDiagLine[0] = 0; g_useBoxHits = g_useSphereHits = 0xFFFFFFFF;
     o_UseMon(self, edx, a, b);
     g_useThread = 0;
+    if (g_c.useDiag && g_useBoxHits != 0xFFFFFFFF && g_useDiagN < 600) {
+        static char last[1024] = ""; ULONGLONG now = GetTickCount64();
+        if (strcmp(last, g_useDiagLine) != 0 || now - g_useDiagLast > 3000) {
+            strcpy(last, g_useDiagLine); g_useDiagLast = now; ++g_useDiagN;
+            const float* hb = g_useBox; float pitch = asinf(fmaxf(-1.0f, fminf(1.0f, g_useHeadD[2]))) * 57.29578f;
+            LOG("use: head z %.2f pitch %+.0f | box half %.2f %.2f %.2f at z %.2f (%+.2f from head) | box %u sphere %u candidates%s",
+                g_useHeadO[2], pitch, hb[0], hb[1], hb[2], hb[5], hb[5] - g_useHeadO[2], g_useBoxHits, g_useSphereHits, g_useDiagLine[0] ? g_useDiagLine : " | none asked");
+        }
+    }
 }
 // candidate box in front of the body: {vtbl, flag, half extents[3], centre[3], rotation quaternion[4]} - turned to the head
 typedef void (__fastcall *ShapeQuery_t)(void* world, void* edx, float* shape, void* filter, void* results, int z);
@@ -3367,6 +3379,7 @@ static void __fastcall Use_BoxQuery(void* world, void* edx, float* shape, void* 
         }
     }
     ((ShapeQuery_t)A(0x1048DCE0))(world, edx, shape, filter, results, z);
+    if (g_useThread == GetCurrentThreadId() && results && shape) { g_useBoxHits = ((uint32_t*)results)[1]; memcpy(g_useBox, shape + 2, 24); }
 }
 // candidate sphere ahead of the chest: put just in front of the eyes
 typedef void (__fastcall *SphereQuery_t)(void* world, void* edx, float* point, float radius, void* results, void* filter, int z);
@@ -3374,6 +3387,21 @@ static void __fastcall Use_SphereQuery(void* world, void* edx, float* point, flo
     float o[3], d[3];
     if (point && UseAimRay(o, d)) for (int k = 0; k < 3; ++k) point[k] = o[k] + d[k] * 0.5f;
     ((SphereQuery_t)A(0x1048DCB0))(world, edx, point, radius, results, filter, z);
+    if (g_useThread == GetCurrentThreadId() && results) g_useSphereHits = ((uint32_t*)results)[1];
+}
+// v234 test 8 diagnostic (UseDiag=1): what the interaction monitor finds and what each candidate answers
+typedef bool (__fastcall *IsUsable_t)(void* self, void* edx, void* cand, void* usage, float* pos);
+static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usage, float* pos) {
+    bool r = ((IsUsable_t)A(0x1009D480))(self, edx, cand, usage, pos);
+    if (g_c.useDiag && g_useThread == GetCurrentThreadId() && g_useDiagLen < (int)sizeof g_useDiagLine - 96) {
+        uint8_t* h = cand && !IsBadReadPtr(cand, 4) ? *(uint8_t**)cand : nullptr;
+        uint8_t* e = h && !IsBadReadPtr(h + 0xC, 4) ? *(uint8_t**)(h + 0xC) : nullptr;
+        float d = -1, dz = 0;
+        if (r && pos) { float dx = pos[0] - g_useHeadO[0], dy = pos[1] - g_useHeadO[1]; dz = pos[2] - g_useHeadO[2]; d = sqrtf(dx * dx + dy * dy + dz * dz); }
+        g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " | %p %s", (void*)e, r ? "usable" : "no");
+        if (r) g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " %.2f m (dz %+.2f)", d, dz);
+    }
+    return r;
 }
 static bool PatchCallSite(uintptr_t va, uintptr_t callee, void* fn, const char* what) {   // va: a "call callee" (Steam VAs)
     uint8_t* p = (uint8_t*)A(va); uintptr_t want = A(callee);
@@ -3408,7 +3436,8 @@ void Install(uintptr_t base, const Config& c, PatchFn patch) {
         bool u1 = patch(A(0x1009E460), proU, 6, (void*)&Hook_UseMon, (void**)&o_UseMon);
         bool u2 = u1 && PatchCallSite(0x1009CF12, 0x1048DCE0, (void*)&Use_BoxQuery, "interaction box");
         bool u3 = u1 && PatchCallSite(0x1009D010, 0x1048DCB0, (void*)&Use_SphereQuery, "interaction sphere");
-        LOG("arms: interaction from the head: monitor %d, box %d, sphere %d", u1, u2, u3);
+        bool u4 = u1 && PatchCallSite(0x1009DC8C, 0x1009D480, (void*)&Use_IsUsable, "interaction usable check");
+        LOG("arms: interaction from the head: monitor %d, box %d, sphere %d, check %d (diagnostic %d)", u1, u2, u3, u4, c.useDiag);
     }
     {   static const uint8_t proP[6] = { 0x83, 0xEC, 0x18, 0x56, 0x8B, 0xF1 };   // sub esp,18h; push esi; mov esi,ecx
         bool m1 = patch(A(0x1072C260), pro, 6, (void*)&Hook_MonoUpd, (void**)&o_MonoUpd);

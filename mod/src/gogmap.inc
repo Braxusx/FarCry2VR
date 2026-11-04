@@ -9,6 +9,8 @@ static const uint32_t kGogMap[][2] = {
     { 0x1007F3E0, 0x1007EB00 },
     { 0x1009CF12, 0x1009C182 },   // interaction box query call (v234)
     { 0x1009D010, 0x1009C280 },   // interaction sphere query call (v234)
+    { 0x1009D480, 0x1009C690 },   // interaction: ask one candidate (v234)
+    { 0x1009DC8C, 0x1009CE6C },   // interaction: usable check call (v234)
     { 0x1009E460, 0x1009D640 },   // interaction monitor update (v234)
     { 0x100A0460, 0x1009F640 },
     { 0x100A04E0, 0x1009F6C0 },
