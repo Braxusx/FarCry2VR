@@ -1340,6 +1340,60 @@ static char __fastcall Hook_ConsoleCmd(void* self, void* edx, uint8_t* str) {
     }
     return o_ConsoleCmd(self, edx, str);
 }
+// ============================================================ v234 game content fixes
+// Bonus content the retail and Steam releases ship but leave locked, and the Jackal tape bug from patch 1.03. All in
+// memory (Dunia.dll on disk is untouched); each checks the game's bytes first and is skipped if they differ.
+//  - Predecessor missions (7 "Intel" missions from the anonymous caller): gated by a partner / pre-order key check.
+//    GOG (retail 1.03) asks HKCU\Software\Ubisoft\Far Cry 2\PartnerKey1 / PartnerKey2 == 1; the Steam (Fortune's)
+//    build asks its UniqueKey manager for key 1000 instead. Steam 0x100488B0 / GOG 0x10048900, one argument (the key
+//    number), ret 4, true in AL. Our hook answers yes for this check only (the game's other key checks are untouched).
+//  - Bonus machetes (Options > Game > Machete Type: Primitive, Homemade): HKCU\...\MachetesKey == 1.
+//    Steam 0x100488D0 / GOG 0x100489A0, no arguments, true in AL. Our hook answers yes.
+//  - Jackal tapes: picking up a tape walks the list of 17 tapes (0x78 bytes each, +0x74 taken, +0x75 from the first
+//    map) for the first untaken tape of the current map. Since 1.03 a taken tape falls through to the map test, so on
+//    the second map tape #9 "Stealing Boots" plays again and again and the later tapes are never marked. The jump
+//    taken by an already-taken tape (Steam 0x1074E464 / GOG 0x10740F54: jne +0Ah) is pointed at the "next tape" step
+//    (+14h). (Problem analysed publicly by FoxAhead; this is our own implementation.)
+static int s_partnerAsks = 0, s_macheteAsks = 0;
+static uint32_t __stdcall Hook_PartnerKey(int key) {
+    if (s_partnerAsks++ < 4) LOG("game fixes: partner content key %d asked - unlocked (predecessor missions)", key);
+    return 1;
+}
+static uint32_t Hook_MachetesKey() {
+    if (s_macheteAsks++ < 2) LOG("game fixes: bonus machetes asked - unlocked");
+    return 1;
+}
+static bool PatchByte(uintptr_t at, const uint8_t* expect, size_t n, size_t index, uint8_t value) {
+    if (!at) return false;
+    uint8_t* p = (uint8_t*)at;
+    if (p[index] == value && memcmp(p, expect, index) == 0 && memcmp(p + index + 1, expect + index + 1, n - index - 1) == 0) return true;   // already fixed (patched DLL)
+    if (memcmp(p, expect, n) != 0) { LOG("patch %08x: unexpected bytes %02x %02x %02x %02x %02x %02x", (unsigned)at, p[0], p[1], p[2], p[3], p[4], p[5]); return false; }
+    DWORD old; VirtualProtect(p + index, 1, PAGE_EXECUTE_READWRITE, &old);
+    p[index] = value;
+    VirtualProtect(p + index, 1, old, &old); FlushInstructionCache(GetCurrentProcess(), p + index, 1);
+    return true;
+}
+static void InstallGameFixes() {
+    const bool gog = gameaddr::Detect() == gameaddr::GOG;
+    void* unused = nullptr;
+    if (IniF("PredecessorMissions", 1) != 0) {
+        static const uint8_t steamPro[8] = { 0xC7, 0x44, 0x24, 0x04, 0xE8, 0x03, 0x00, 0x00 };   // mov dword [esp+4],1000 (key id)
+        static const uint8_t gogPro[6] = { 0x81, 0xEC, 0x10, 0x01, 0x00, 0x00 };                // sub esp,110h
+        bool ok = gog ? PatchJmpN(A(0x100488B0), gogPro, 6, (void*)&Hook_PartnerKey, &unused)
+                      : PatchJmpN(A(0x100488B0), steamPro, 8, (void*)&Hook_PartnerKey, &unused);
+        LOG("game fixes: predecessor missions unlock %s", ok ? "on" : "not applied");
+    } else LOG("game fixes: predecessor missions unlock off (PredecessorMissions=0)");
+    if (IniF("BonusMachetes", 1) != 0) {
+        static const uint8_t pro[8] = { 0x83, 0xEC, 0x10, 0x53, 0x8D, 0x44, 0x24, 0x08 };     // sub esp,10h; push ebx; lea eax,[esp+8]
+        bool ok = PatchJmpN(A(0x100488D0), pro, 8, (void*)&Hook_MachetesKey, &unused);
+        LOG("game fixes: bonus machetes unlock %s", ok ? "on" : "not applied");
+    } else LOG("game fixes: bonus machetes unlock off (BonusMachetes=0)");
+    if (IniF("JackalTapeFix", 1) != 0) {
+        static const uint8_t site[6] = { 0x75, 0x0A, 0x3B, 0xCA, 0x75, 0x0A };   // jne +0A (taken); cmp ecx,edx; jne +0A
+        uintptr_t at = A(0x1074E465); bool ok = at && PatchByte(at - 1, site, 6, 1, 0x14);
+        LOG("game fixes: Jackal tape fix %s", ok ? "on" : "not applied");
+    } else LOG("game fixes: Jackal tape fix off (JackalTapeFix=0)");
+}
 static void InstallDevConsole() {
     if (!g_cfg.devConsole) return;
     uint8_t* site = (uint8_t*)A(0x1029741B);
@@ -3928,6 +3982,7 @@ static void Install() {
         if (cc.enable) { arms::Install(g_base, ac, &PatchJmpN); arms::SetUseCallback(&controls::PulseUse); }
     }
     InstallDevConsole();
+    InstallGameFixes();
     static const uint8_t rsPrologue[8] = { 0x51, 0x56, 0x8B, 0xF1, 0x83, 0x7E, 0x40, 0x00 };  // push ecx; push esi; mov esi,ecx; cmp [esi+40],0
     bool ok4 = PatchJmpN(A(0x104204A0), rsPrologue, 8, (void*)&Hook_DrvReset, (void**)&o_DrvReset);
     static const uint8_t tlPrologue[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8 };   // push ebp; mov ebp,esp; and esp,-8
@@ -3971,7 +4026,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 5: two-handed grip held through left, right and both-hand tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 6: predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

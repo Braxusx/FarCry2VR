@@ -1,6 +1,8 @@
 // generated from the offline Steam->GOG Dunia.dll map (scratchpad/gog/map1.txt); sorted by Steam VA
 static const uint32_t kGogMap[][2] = {
     { 0x10032EE0, 0x10033010 },   // quat rotate vec (v216)
+    { 0x100488B0, 0x10048900 },   // partner (pre-order) content check - predecessor missions (v234)
+    { 0x100488D0, 0x100489A0 },   // bonus machetes check (v234)
     { 0x100506F0, 0x100505F0 },
     { 0x10050F30, 0x10050E30 },
     { 0x10060890, 0x10060050 },
@@ -126,6 +128,7 @@ static const uint32_t kGogMap[][2] = {
     { 0x106EFB40, 0x106E2420 },   // CGadgetMapStrategy::EquipMonocular (v213)
     { 0x1072C260, 0x1071ED80 },   // binoculars update (v216)
     { 0x1072DFD0, 0x10720B10 },
+    { 0x1074E465, 0x10740F55 },   // Jackal tape pick-up: 'already taken' branch (v234)
     { 0x107DA700, 0x107CDE30 },   // pad aim helpers apply (v234)
     { 0x1080AF10, 0x107FE190 },
     { 0x1080BB30, 0x107FEDB0 },
