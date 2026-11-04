@@ -119,6 +119,7 @@ struct Frame {
     float aimO[3], aimR[3], aimU[3], aimB[3];   // right controller aim pose (ref)
     float gripO[3];               // right controller grip position (ref)
     bool leftValid = false, twoHand = false, headValid = false;
+    bool handSynth = false;       // v234: the right hand's pose is held on the weapon (two-handed grip, right or both controllers untracked)
     bool leftSynth = false;       // v234: the left hand's pose is held on the weapon (two-handed grip, left controller untracked)
     float lSqueeze = 0, rSqueeze = 0;
     bool machete = false, map = false;   // machete in hand; map/GPS out

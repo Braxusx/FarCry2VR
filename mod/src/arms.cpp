@@ -84,7 +84,7 @@ static void* volatile g_reloadState = nullptr; static volatile DWORD g_reloadT =
 static float g_lastSpan = 0; static float g_rayRefO[3], g_rayRefD[3]; static DWORD g_rayTick = 0;
 static float g_foregripRef[3]; static bool g_foregripValid = false, g_oneHanded = true;
 static float g_shotO[3], g_shotF[3], g_camFwdNow[3], g_camRefO[3], g_camRefD[3]; static bool g_shotValid = false;
-static fc2vr::authority::Stamp g_shotSource; static void* g_shotWeapon = nullptr;
+static fc2vr::authority::Stamp g_shotSource; static void* g_shotWeapon = nullptr; static bool g_shotSynth = false;   // v234: aim from a held (synthesized) right hand
 
 
 // v231 rotation helpers (row-vector matrices: rows 0..2 are the basis vectors)
@@ -124,7 +124,7 @@ bool ReadFrameUsage(FrameUsage& out) {
 void SubmitFrame(const Frame& f) {
     if (!g_csInit) return;
     Lock(); g_frame = f; Unlock();
-    if (!f.valid || !f.handAuthority) { Lock(); g_shotValid = false; g_rayTick = 0; g_scopeTick = 0; Unlock(); }
+    if (!f.valid || !(f.handAuthority || f.handSynth)) { Lock(); g_shotValid = false; g_rayTick = 0; g_scopeTick = 0; Unlock(); }
     // Learn how the Camera bone's axes map onto the game camera's rows (right, forward, up) once both are known.
     if (!g_permOk && f.valid && g_camBoneSeq > 30) {
         float B[3][3]; Lock(); memcpy(B, g_camBoneRot, sizeof B); Unlock();
@@ -279,7 +279,7 @@ static void SaveHold(uint32_t key, const M4& r, const M4& l, int axis, float sig
 }
  static void* volatile g_curWeapon = nullptr;
 static bool ShotCurrent(const fc2vr::authority::Stamp& source, void* weapon) {
-    return fc2vr::authority::SameOwner(weapon,g_curWeapon) && xr::InputCurrent(source,1);
+    return fc2vr::authority::SameOwner(weapon,g_curWeapon) && (xr::InputCurrent(source,1) || (g_shotSynth && xr::InputCurrent(source,-1)));
 }
 static bool ReadAim(float o[3], float d[3], float* cameraForward = nullptr) {
     fc2vr::authority::Stamp shotSource,scopeSource; void* shotWeapon; void* scopeWeapon;
@@ -1101,9 +1101,9 @@ static void Apply(uint8_t* skel) {
       Normalize(sf);
       float sr[3], sfr[3]; Put3(sfr, f.game.ReferenceDirection(Read3(sf))); toRef(so, sr);
       float cro[3], crd[3]; Put3(crd, f.game.ReferenceDirection(Read3(cf))); toRef(co, cro);   // raw native camera line: turrets still aim along it
-      const bool authority = f.handAuthority && f.weapon && f.weapon == g_curWeapon && xr::InputCurrent(f.source,1);
+      const bool authority = (f.handSynth || (f.handAuthority && xr::InputCurrent(f.source,1))) && f.weapon && f.weapon == g_curWeapon;
       Lock(); if (g_shotWeapon != f.weapon) g_scopeTick = 0;
-      g_shotSource = f.source; g_shotWeapon = f.weapon;
+      g_shotSource = f.source; g_shotWeapon = f.weapon; g_shotSynth = f.handSynth;
       for (int k = 0; k < 3; ++k) so[k] += O[k];
       memcpy(g_shotO, so, 12); memcpy(g_shotF, sf, 12); memcpy(g_camFwdNow, cf, 12); g_shotValid = authority; memcpy(g_rayRefO, sr, 12); memcpy(g_rayRefD, sfr, 12);
       memcpy(g_camRefO, cro, 12); memcpy(g_camRefD, crd, 12); g_rayTick = GetTickCount(); Unlock(); }
@@ -2633,7 +2633,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
     if (!f.valid || g_camBoneSeq == 0) return;
     if (!xr::InputCurrent()) controls::CancelPendingInput();
     // Keep presentation fallback out of gameplay, including when render publication stops.
-    f.handValid = f.handValid && f.handAuthority && xr::InputCurrent(f.source,1);
+    f.handValid = f.handValid && (f.handSynth || (f.handAuthority && xr::InputCurrent(f.source,1)));
     f.leftValid = f.leftValid && (f.leftSynth || (f.leftAuthority && xr::InputCurrent(f.source,0)));   // v234: a held two-handed grip survives the left controller's tracking dropouts
     f.headValid = f.headValid && f.headAuthority && xr::HeadCurrent(f.source);
     static fc2vr::authority::Stamp previousInput;
@@ -2641,7 +2641,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
         if (previousInput.generation != f.source.generation || previousInput.handGeneration[hnd] != f.source.handGeneration[hnd]) {
             // A short dropout can occur entirely between game ticks. Cancel old
             // holds/history once even if the newest sample is tracked again.
-            if (hnd) f.handValid = false; else if (!f.leftSynth) f.leftValid = false;
+            if (hnd) { if (!f.handSynth) f.handValid = false; } else if (!f.leftSynth) f.leftValid = false;
             g_hist[hnd].n = 0; g_gripPrev[hnd] = true;
             Lock(); g_npcDrive[hnd] = NpcDrive{}; Unlock();
         }
