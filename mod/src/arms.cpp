@@ -3553,10 +3553,11 @@ static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usa
             if (d > 1e-3f) ad = acosf(fmaxf(-1.0f, fminf(1.0f, (dx * g_useHeadD[0] + dy * g_useHeadD[1] + dz * g_useHeadD[2]) / d))) * 57.29578f;
         }
         uint32_t vt = e && !IsBadReadPtr(e, 4) ? *(uint32_t*)e : 0;
+        int eflag = e && !IsBadReadPtr(e + 0x70, 4) ? (int)((*(uint32_t*)(e + 0x70) >> 4) & 1) : -1;   // the monitor's own skip flag (0x1009D480)
         float hd = -1; if (ep) { float hx = ep[0] - g_useHand[0], hy = ep[1] - g_useHand[1], hz = ep[2] - g_useHand[2]; hd = sqrtf(hx * hx + hy * hy + hz * hz); }
         (void)vt;
-        g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " | %p %s %.2f m dz %+.2f %.0f deg off view, %.2f m from right hand, aim %s (asked %d), answered by",
-                                 (void*)e, r ? "USABLE" : "no", d, dz, ad, hd, aimed ? "on it" : "view", asked);
+        g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " | %p %s %.2f m dz %+.2f %.0f deg off view, %.2f m from right hand, aim %s (asked %d), skip flag %d, answered by",
+                                 (void*)e, r ? "USABLE" : "no", d, dz, ad, hd, aimed ? "on it" : "view", asked, eflag);
         for (int k = 0; k < g_useSetN && g_useDiagLen < (int)sizeof g_useDiagLine - 24; ++k)
             g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " %08x=%d", g_useSetBy[k], g_useSetVal[k]);
         if (!g_useSetN) g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " nobody");
