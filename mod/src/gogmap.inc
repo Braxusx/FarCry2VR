@@ -6,7 +6,9 @@ static const uint32_t kGogMap[][2] = {
     { 0x100506F0, 0x100505F0 },
     { 0x10050F30, 0x10050E30 },
     { 0x10060890, 0x10060050 },
+    { 0x10067170, 0x100669A0 },   // vehicle ApplyHealthDamage (v234)
     { 0x1007F3E0, 0x1007EB00 },
+    { 0x1007F440, 0x1007EB60 },   // entity -> CVehicle (v234)
     { 0x1009CF12, 0x1009C182 },   // interaction box query call (v234)
     { 0x1009D010, 0x1009C280 },   // interaction sphere query call (v234)
     { 0x1009D480, 0x1009C690 },   // interaction: ask one candidate (v234)
@@ -16,6 +18,9 @@ static const uint32_t kGogMap[][2] = {
     { 0x100A04E0, 0x1009F6C0 },
     { 0x100D7B10, 0x100D6B20 },
     { 0x100EA6C0, 0x100E9490 },
+    { 0x101075F0, 0x10106840 },   // vehicle engine explode (v234)
+    { 0x10107B00, 0x10106D50 },   // vehicle engine kill (v234)
+    { 0x10107BF0, 0x10106E40 },   // vehicle explosion trigger (v234)
     { 0x1010D780, 0x1010CA50 },   // aim bone position (v216)
     { 0x1010D850, 0x1010CB20 },   // aim bone rotation (v216)
     { 0x10112600, 0x10111900 },

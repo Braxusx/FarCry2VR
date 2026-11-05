@@ -1623,6 +1623,45 @@ static bool RedirectCall(uintptr_t site, uintptr_t target, void* hook, void** or
     VirtualProtect(p, 5, old, &old); FlushInstructionCache(GetCurrentProcess(), p, 5);
     return true;
 }
+// v234: indestructible buggy / hang glider (optional). Every health loss of a vehicle goes through
+// CVehiclePhysComponent::ApplyHealthDamage (Steam 0x10067170, thiscall phys, float dmg, ret 4); explosions through the
+// engine's explosion trigger 0x10107BF0 (ret 4) and explode 0x101075F0 (ret 8, also run by explosion events); engine
+// death 0x10107B00. For a protected vehicle these return at once. Vehicle: entity -> CVehicle (0x1007F440, ecx = entity);
+// CVehicle+0x14 vehicle type (2 = paraglider); buggy = colour index (Implementation +0x1DC) 1-4, 27 or 34.
+typedef void* (__fastcall *GetVehicle_t)(void* ent, void* edx);
+static bool s_protBuggy = false, s_protGlider = false;
+static uint8_t* VehEntFromPhys(uint8_t* phys) {
+    if (!phys || IsBadReadPtr(phys + 8, 4)) return nullptr; uint8_t* h = *(uint8_t**)(phys + 8);
+    if (!h || IsBadReadPtr(h + 0xC, 4)) return nullptr; return *(uint8_t**)(h + 0xC);
+}
+static uint8_t* VehEntFromEngine(uint8_t* eng) {
+    if (!eng || IsBadReadPtr(eng + 4, 4)) return nullptr; return VehEntFromPhys(*(uint8_t**)(eng + 4));
+}
+static bool VehProtected(uint8_t* ent, const char* why) {
+    if (!ent || IsBadReadPtr(ent, 0x10)) return false;
+    uint8_t* veh = (uint8_t*)((GetVehicle_t)A(0x1007F440))(ent, nullptr);
+    if (!veh || IsBadReadPtr(veh + 0x10, 8)) return false;
+    int type = *(int*)(veh + 0x14); uint8_t* impl = *(uint8_t**)(veh + 0x10);
+    int colour = impl && !IsBadReadPtr(impl + 0x1DC, 4) ? *(int*)(impl + 0x1DC) : -1;
+    bool glider = type == 2, buggy = colour == 1 || colour == 2 || colour == 3 || colour == 4 || colour == 27 || colour == 34;
+    bool prot = (glider && s_protGlider) || (buggy && s_protBuggy);
+    static void* seen[48]; static int nSeen = 0; bool known = false;
+    for (int i = 0; i < nSeen; ++i) if (seen[i] == ent) { known = true; break; }
+    if (!known && nSeen < 48) { seen[nSeen++] = ent; LOG("vehicles: %s on vehicle %p: type %d colour %d -> %s%s", why, (void*)ent, type, colour, glider ? "hang glider" : buggy ? "buggy" : "other", prot ? " (protected)" : ""); }
+    return prot;
+}
+typedef void (__fastcall *VehDmg_t)(uint8_t* phys, void* edx, float dmg);
+typedef void (__fastcall *VehBoom_t)(uint8_t* eng, void* edx, int a);
+typedef void (__fastcall *VehExplode_t)(uint8_t* eng, void* edx, int a, int b);
+typedef void (__fastcall *VehKill_t)(uint8_t* eng, void* edx);
+static VehDmg_t o_VehDmg; static VehBoom_t o_VehBoom; static VehExplode_t o_VehExplode; static VehKill_t o_VehKill;
+static void __fastcall Hook_VehDmg(uint8_t* phys, void* edx, float dmg) {
+    if (VehProtected(VehEntFromPhys(phys), "damage")) return;
+    o_VehDmg(phys, edx, dmg);
+}
+static void __fastcall Hook_VehBoom(uint8_t* eng, void* edx, int a) { if (VehProtected(VehEntFromEngine(eng), "explosion")) return; o_VehBoom(eng, edx, a); }
+static void __fastcall Hook_VehExplode(uint8_t* eng, void* edx, int a, int b) { if (VehProtected(VehEntFromEngine(eng), "explode")) return; o_VehExplode(eng, edx, a, b); }
+static void __fastcall Hook_VehKill(uint8_t* eng, void* edx) { if (VehProtected(VehEntFromEngine(eng), "engine kill")) return; o_VehKill(eng, edx); }
 static void InstallGameFixes() {
     const bool gog = gameaddr::Detect() == gameaddr::GOG;
     void* unused = nullptr;
@@ -1647,6 +1686,16 @@ static void InstallGameFixes() {
     if (s_noMalaria || s_pillsUnlimited) {
         bool ok = RedirectCall(A(0x106A94B0), A(0x106A9130), (void*)&Hook_MalariaUpd, (void**)&o_MalariaUpd);
         LOG("game fixes: malaria - timed attacks %s, unlimited pills %s (%s)", s_noMalaria ? "off" : "on", s_pillsUnlimited ? "on" : "off", ok ? "applied" : "not applied");
+    }
+    s_protBuggy = IniF("IndestructibleBuggy", 0) != 0; s_protGlider = IniF("IndestructibleGlider", 0) != 0;
+    if (s_protBuggy || s_protGlider) {
+        static const uint8_t pDmg[7] = { 0x80, 0xB9, 0x02, 0x01, 0x00, 0x00, 0x00 }, pBoom[6] = { 0x83, 0xEC, 0x54, 0x56, 0x8B, 0xF1 },
+                             pExp[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF0 }, pKill[9] = { 0x56, 0x8B, 0xF1, 0x8B, 0x86, 0x18, 0x01, 0x00, 0x00 };
+        bool a = PatchJmpN(A(0x10067170), pDmg, 7, (void*)&Hook_VehDmg, (void**)&o_VehDmg);
+        bool b = PatchJmpN(A(0x10107BF0), pBoom, 6, (void*)&Hook_VehBoom, (void**)&o_VehBoom);
+        bool c = PatchJmpN(A(0x101075F0), pExp, 6, (void*)&Hook_VehExplode, (void**)&o_VehExplode);
+        bool d = PatchJmpN(A(0x10107B00), pKill, 9, (void*)&Hook_VehKill, (void**)&o_VehKill);
+        LOG("game fixes: indestructible buggy %s, hang glider %s (damage %d, explosion %d/%d, engine kill %d)", s_protBuggy ? "on" : "off", s_protGlider ? "on" : "off", a, b, c, d);
     }
 }
 static void InstallDevConsole() {
@@ -4308,7 +4357,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 31: optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 32: optional indestructible buggy / hang glider; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
