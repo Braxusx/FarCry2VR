@@ -82,7 +82,7 @@ struct Config {
     float uiDepth = 6.0f;         // metres: distance at which the UI converges (aim point)
     float uiScale = 0.7f;         // UI size relative to the eye image
     char  uiSkipTex[512] = "256x512x71v18";
-    int   uiBoxProbe = 0;         // v234 test: log where small HUD draws land
+    int   uiBoxProbe = 0, uiBoxProbe2 = 1;         // v234 test: log where small HUD draws land
     int   uiPromptCenter = 1;     // v234: the interaction hand icon is drawn at the centre of the view (over the object)
     char  uiPromptTex[160] = "64x64x77v6#4b9ead2e";   // the hand print first (measured), then any draws that always move with it   // UI textures (WxHxFormat, comma-separated) not drawn into the layer
     int   reticleTexMax = 256;      // UI draws whose texture has at most this many texels go to the aim-locked reticle layer
@@ -196,7 +196,7 @@ static void LoadConfig() {
     g_cfg.reticleTexMax = (int)IniF("ReticleTexMax", 256);
     { char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "UiSkipTex", "256x512x71v18", g_cfg.uiSkipTex, sizeof g_cfg.uiSkipTex, path); }
     { char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "UiPromptTex", "64x64x77v6#4b9ead2e", g_cfg.uiPromptTex, sizeof g_cfg.uiPromptTex, path);
-      g_cfg.uiPromptCenter = (int)IniF("UiPromptCenter", 1); g_cfg.uiBoxProbe = (int)IniF("UiBoxProbe", 0); }
+      g_cfg.uiPromptCenter = (int)IniF("UiPromptCenter", 1); g_cfg.uiBoxProbe = (int)IniF("UiBoxProbe", 0); g_cfg.uiBoxProbe2 = (int)IniF("UiElementDump", 1); }
     g_cfg.shareShadows = (int)IniF("ShareShadows", 1);
     g_cfg.cullMode = (int)IniF("CullMode", 1); if (g_cfg.cullMode < 0 || g_cfg.cullMode > 3) g_cfg.cullMode = 1;
     if (g_cfg.uiMode) g_cfg.hudLayer = 0;
@@ -1852,6 +1852,30 @@ static void HudTick() {   // every frame
         }
     }
     for (int i = 0; i < nHide; ++i) if (!IsBadReadPtr(hide[i], 0x4C)) hide[i][0x48] &= ~1;
+    if (g_cfg.uiBoxProbe2) {   // v234 test 21: dump the prompt / ammo elements (to find their position fields), when found and when shown
+        static const char* dn[] = { "hudprompt", "interact", "InteractionSwitchGroup", "CurrentInteractionIcon", "TargetInteractionIcon",
+                                    "CurrentInteractionIconFade", "TargetInteractionIconFade", "GrenadeGroup", "AmmoCount", "ReloadPrompt", "GrenadeCountGroup" };
+        const int nd = (int)(sizeof dn / sizeof dn[0]);
+        static uint8_t* de[16] = {}; static uint8_t lastVis[16] = {}; static int dumps[16] = {}; static double nextFind = 0; static uint8_t* droot = nullptr;
+        if (droot != root) { droot = root; memset(de, 0, sizeof de); memset(dumps, 0, sizeof dumps); nextFind = 0; }
+        if (now >= nextFind) { nextFind = now + 2000.0; for (int i = 0; i < nd; ++i) if (!de[i]) de[i] = UiFind(root, UiHash(dn[i]), 0); }
+        for (int i = 0; i < nd; ++i) {
+            uint8_t* e = de[i]; if (!e || IsBadReadPtr(e, 0x140)) continue;
+            uint8_t v = e[0x48] & 1;
+            if ((dumps[i] == 0 || (v && !lastVis[i])) && dumps[i] < 3) {
+                ++dumps[i];
+                char line[1600]; int o = snprintf(line, sizeof line, "HUD element %s (%p) vis %d:", dn[i], (void*)e, v);
+                for (int k = 0; k < 0x140 && o < (int)sizeof line - 40; k += 4) {
+                    uint32_t u = *(uint32_t*)(e + k); float f; memcpy(&f, &u, 4);
+                    if (std::isfinite(f) && fabsf(f) > 1e-4f && fabsf(f) < 1e5f && (u & 0x7F800000) != 0) o += snprintf(line + o, sizeof line - o, " +%02X=%.4g", k, f);
+                    else if (u) o += snprintf(line + o, sizeof line - o, " +%02X:%08x", k, u);
+                }
+                LOG("%s", line);
+                uint8_t **b, **en; if (UiChildren(e, b, en)) { char kids[400]; int q = 0; for (uint8_t** c = b; c < en && q < 360; ++c) if (*c && !IsBadReadPtr(*c, 12)) q += snprintf(kids + q, sizeof kids - q, " %08x(%p)", *(uint32_t*)(*c + 8), (void*)*c); LOG("HUD element %s children:%s", dn[i], kids); }
+            }
+            lastVis[i] = v;
+        }
+    }
     // the HUD's reticle update (0x1080AF10) keeps the current weapon's reticle at +0x188 (0 = this weapon has none)
     bool req = !IsBadReadPtr(hud + 0x188, 4) && *(uint32_t*)(hud + 0x188) != 0;
     static bool lastReq = false; if (req != lastReq) { lastReq = req; LOG("HUD: game reticle %s", req ? "on" : "off"); }
@@ -4185,7 +4209,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 20: the whole interaction prompt row (hand, glows, weapon-swap icons) at the view centre; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 21: prompt row at the view centre + HUD element dump; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
