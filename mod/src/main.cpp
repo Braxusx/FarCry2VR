@@ -576,42 +576,50 @@ static void ShowToast(const char* t);
 namespace cbcap { void NoteBuffer(ID3D10Buffer* b); void HookCreateVS(void** vt); void Install(void** vt); void Arm(); void Present(const char* dir); void NoteBones(const float* W, const float* models, int n); }
 // v234: a CPU copy of the HUD's dynamic vertex buffer (every HUD piece's corners as screen fractions, 24-byte vertices),
 // filled from the game's own writes (ID3D10Buffer::Map / Unmap), so each HUD draw can be placed before it is drawn
-struct VbShadow { ID3D10Buffer* b; uint8_t* data; UINT size; uint8_t cover[1024]; uint32_t stamp[1024]; void* mapped; UINT lastEnd, mapStart, win; int maps, mapsLast; };
+struct VbShadow { ID3D10Buffer* b; uint8_t* data; UINT size; uint8_t cover[1024]; uint32_t stamp[1024]; void* mapped; UINT lastEnd; bool synced; int maps, mapsLast; };
 static VbShadow g_vbs[8]; static int g_vbN = 0; static ID3D10Buffer* g_uiVB = nullptr;   // g_uiVB: any followed buffer (the HUD is on)
 static uint32_t g_vbFrameNo = 1; static uint64_t g_vbBytesFrame = 0;
 static int g_vbStatDraws = 0, g_vbStatMoved = 0, g_vbStatStale = 0, g_vbStatOther = 0, g_vbStatFrames = 0; static uint64_t g_vbStatBytes = 0; static int g_vbStatMaps = 0;
 static VbShadow* VbFind(ID3D10Buffer* b) { for (int i = 0; i < g_vbN; ++i) if (g_vbs[i].b == b) return &g_vbs[i]; return nullptr; }
-static void VbOnMap(ID3D10Buffer* b, int mapType, void* p) {
-    VbShadow* v = VbFind(b); if (!v || !p) return;
-    if (mapType == D3D10_MAP_WRITE_DISCARD) { memset(v->cover, 0, sizeof v->cover); v->lastEnd = 0; }
-    v->mapped = p; v->mapStart = v->lastEnd & ~255u; ++v->maps;
-}
+// v234 test 29: the game writes the followed HUD buffers into our own (cached, write-watched) copy instead of the GPU
+// memory; at Unmap only the 4 KB pages it touched are forwarded to the real buffer. No slow reads of GPU upload memory,
+// and the copy always holds exactly what the GPU draws.
+static bool g_vbRedirect = true;
 // read write-combined (GPU upload) memory with streaming loads: a plain memcpy reads it uncached, many times slower
 __attribute__((target("sse4.1"))) static void VbReadWC(uint8_t* dst, const uint8_t* src, UINT n) {
-    if (((uintptr_t)src & 15) == 0) {
-        UINT i = 0;
-        for (; i + 64 <= n; i += 64) {
-            __m128i a = _mm_stream_load_si128((__m128i*)(src + i)), b = _mm_stream_load_si128((__m128i*)(src + i + 16));
-            __m128i c = _mm_stream_load_si128((__m128i*)(src + i + 32)), d = _mm_stream_load_si128((__m128i*)(src + i + 48));
-            _mm_storeu_si128((__m128i*)(dst + i), a); _mm_storeu_si128((__m128i*)(dst + i + 16), b); _mm_storeu_si128((__m128i*)(dst + i + 32), c); _mm_storeu_si128((__m128i*)(dst + i + 48), d);
-        }
-        if (i < n) memcpy(dst + i, src + i, n - i);
-    } else memcpy(dst, src, n);
+    UINT i = 0;
+    if (((uintptr_t)src & 15) == 0) for (; i + 64 <= n; i += 64) {
+        __m128i a = _mm_stream_load_si128((__m128i*)(src + i)), b = _mm_stream_load_si128((__m128i*)(src + i + 16));
+        __m128i c = _mm_stream_load_si128((__m128i*)(src + i + 32)), d = _mm_stream_load_si128((__m128i*)(src + i + 48));
+        _mm_storeu_si128((__m128i*)(dst + i), a); _mm_storeu_si128((__m128i*)(dst + i + 16), b); _mm_storeu_si128((__m128i*)(dst + i + 32), c); _mm_storeu_si128((__m128i*)(dst + i + 48), d);
+    }
+    if (i < n) memcpy(dst + i, src + i, n - i);
 }
-static void VbCopy(VbShadow* v, UINT from, UINT to) {
-    if (to > v->size) to = v->size; if (from >= to) return;
-    static int sse41 = -1; if (sse41 < 0) sse41 = __builtin_cpu_supports("sse4.1") ? 1 : 0;
-    if (sse41) VbReadWC(v->data + from, (const uint8_t*)v->mapped + from, to - from); else memcpy(v->data + from, (const uint8_t*)v->mapped + from, to - from);
-    g_vbBytesFrame += to - from;
-    for (UINT k = from / 256; k < (to + 255) / 256 && k < 1024; ++k) { v->cover[k] = 1; v->stamp[k] = g_vbFrameNo; }
+static bool VbSseOk() { static int k = -1; if (k < 0) k = __builtin_cpu_supports("sse4.1") ? 1 : 0; return k == 1; }
+static void* VbOnMap(ID3D10Buffer* b, int mapType, void* p) {
+    VbShadow* v = VbFind(b); if (!v || !p) return p;
+    if (!g_vbRedirect) return p;
+    if (mapType == D3D10_MAP_WRITE_DISCARD) { memset(v->cover, 0, sizeof v->cover); v->synced = true; }
+    ++v->maps;
+    if (!v->synced) {   // first write since we started following: take the buffer's current contents once (the GPU may still draw them)
+        if (VbSseOk()) VbReadWC(v->data, (const uint8_t*)p, v->size); else memcpy(v->data, p, v->size);
+        g_vbBytesFrame += v->size; v->synced = true; memset(v->cover, 1, sizeof v->cover);
+    }
+    ResetWriteWatch(v->data, v->size);   // start clean
+    v->mapped = p;
+    return v->data;
 }
-// v234 test 28: copy only a small window where the game writes next (it appends after its last draw), never the whole buffer;
-// the window grows by itself when a draw reaches past it (up to 32 KB)
 static void VbOnUnmap(ID3D10Buffer* b) {
     VbShadow* v = VbFind(b); if (!v || !v->mapped) return;
-    if (v->win < 4096) v->win = 4096;
-    VbCopy(v, v->mapStart, v->mapStart + v->win);
-    if (v->mapStart + v->win > v->size) VbCopy(v, 0, v->win);   // the game may wrap to the start
+    void* pages[64]; ULONG_PTR n = 64; DWORD g = 4096;
+    if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, v->data, v->size, pages, &n, &g) != 0 || n == 64) {   // failed / too many: forward everything
+        memcpy(v->mapped, v->data, v->size); g_vbBytesFrame += v->size;
+        for (UINT k = 0; k < v->size / 256 && k < 1024; ++k) { v->cover[k] = 1; v->stamp[k] = g_vbFrameNo; }
+    } else for (ULONG_PTR i = 0; i < n; ++i) {
+        UINT off = (UINT)((uint8_t*)pages[i] - v->data), len = g; if (off >= v->size) continue; if (off + len > v->size) len = v->size - off;
+        memcpy((uint8_t*)v->mapped + off, v->data + off, len); g_vbBytesFrame += len;
+        for (UINT k = off / 256; k < (off + len) / 256 && k < 1024; ++k) { v->cover[k] = 1; v->stamp[k] = g_vbFrameNo; }
+    }
     v->mapped = nullptr;
 }
 static void VbFrame() {
@@ -1107,7 +1115,7 @@ static bool DrawInPromptRow(uintptr_t* sp, const char* key) {
     if (!v) {   // a HUD vertex buffer not followed yet (the game rotates several)
         D3D10_BUFFER_DESC bd; vb->GetDesc(&bd);
         if (g_vbN < 8 && bd.Usage == D3D10_USAGE_DYNAMIC && (bd.BindFlags & D3D10_BIND_VERTEX_BUFFER) && bd.ByteWidth <= 256 * 1024 && stride == 24) {
-            uint8_t* d = (uint8_t*)calloc(bd.ByteWidth, 1);
+            uint8_t* d = (uint8_t*)VirtualAlloc(nullptr, (bd.ByteWidth + 4095) & ~4095u, MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH, PAGE_READWRITE);
             if (d) { v = &g_vbs[g_vbN++]; memset(v, 0, sizeof *v); v->b = vb; v->data = d; v->size = bd.ByteWidth; g_uiVB = vb; LOG("UI: HUD vertex buffer %d: %p (%u bytes) followed", g_vbN, (void*)vb, bd.ByteWidth); }
         }
     }
@@ -1120,8 +1128,8 @@ static bool DrawInPromptRow(uintptr_t* sp, const char* key) {
     ++g_vbStatDraws;
     // unreadable this frame (not copied since the game wrote it): repeat what this draw (same place in the draw order) did last frame
     static uint8_t lastDecision[512]; int ord = g_uiDrawOrd - 1;
-    bool fresh = true; for (UINT k = a / 256; k <= (e - 1) / 256; ++k) if (!v->cover[k] || v->stamp[k] != g_vbFrameNo) { fresh = false; break; }
-    if (!fresh) { ++g_vbStatStale; if (a >= v->mapStart && e - v->mapStart + 1024 > v->win && v->win < 32768) { v->win = (e - v->mapStart + 1024 + 4095) & ~4095u; if (v->win > 32768) v->win = 32768; } bool r = ord >= 0 && ord < 512 && lastDecision[ord]; if (r) ++g_vbStatMoved; return r; }
+    bool fresh = true; for (UINT k = a / 256; k <= (e - 1) / 256; ++k) if (!v->cover[k]) { fresh = false; break; }
+    if (!fresh) { ++g_vbStatStale; bool r = ord >= 0 && ord < 512 && lastDecision[ord]; if (r) ++g_vbStatMoved; return r; }
     float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
     for (UINT q = 0; q < cnt; ++q) { const float* f = (const float*)(v->data + a + q * 24); if (!std::isfinite(f[0]) || !std::isfinite(f[1])) return false;
         if (f[0] < x0) x0 = f[0]; if (f[0] > x1) x1 = f[0]; if (f[1] < y0) y0 = f[1]; if (f[1] > y1) y1 = f[1]; }
@@ -1281,7 +1289,7 @@ static void STDMETHODCALLTYPE I_UpdSub(ID3D10Device* d, ID3D10Resource* r, UINT 
 }
 static HRESULT STDMETHODCALLTYPE I_Map(ID3D10Buffer* b, D3D10_MAP t, UINT f, void** pp) {
     HRESULT hr = t_Map(b, t, f, pp);
-    if (SUCCEEDED(hr) && pp && t != D3D10_MAP_READ) VbOnMap(b, (int)t, *pp);
+    if (SUCCEEDED(hr) && pp && t != D3D10_MAP_READ) *pp = VbOnMap(b, (int)t, *pp);
     if (On() && SUCCEEDED(hr) && pp && *pp && t != D3D10_MAP_READ) { EnterCriticalSection(&cs); for (auto& m : maps) if (!m.b || m.b == b) { m.b = b; m.p = *pp; break; } LeaveCriticalSection(&cs); }
     return hr;
 }

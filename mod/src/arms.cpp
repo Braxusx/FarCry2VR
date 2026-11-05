@@ -3373,7 +3373,7 @@ static void __fastcall Hook_UseMon(uint8_t* self, void* edx, uint32_t a, uint32_
     }
 }
 // v234 test 12: who answers the usable question (event->SetUsable(bool) 0x102DC380: mov al,[esp+4]; mov [ecx+34h],al; ret 4)
-static uint32_t g_useSetBy[6]; static uint8_t g_useSetVal[6]; static int g_useSetN = 0; static bool g_useRec = false;
+static uint32_t g_useSetBy[6], g_useSetVt[6]; static uint8_t g_useSetVal[6]; static int g_useSetN = 0; static bool g_useRec = false;
 typedef void (__fastcall *SetUsable_t)(uint8_t* ev, void* edx, int v);
 static SetUsable_t o_SetUsable = nullptr;
 static void UsePlayerState(uint32_t by, int v, uint8_t* comp);
@@ -3383,7 +3383,8 @@ static void __fastcall Hook_SetUsable(uint8_t* ev, void* edx, int v) {
     {   uint32_t by = (uint32_t)(uintptr_t)__builtin_return_address(0) - (uint32_t)g_base + 0x10000000u;
         if (g_useThread == GetCurrentThreadId() && (by == 0x10147F19 || by == 0x10147D4E)) UsePlayerState(by, v, comp); }
     if (g_useRec && g_useThread == GetCurrentThreadId() && g_useSetN < 6) {
-        g_useSetBy[g_useSetN] = (uint32_t)(uintptr_t)__builtin_return_address(0) - (uint32_t)g_base + 0x10000000u; g_useSetVal[g_useSetN] = (uint8_t)v; ++g_useSetN;
+        g_useSetBy[g_useSetN] = (uint32_t)(uintptr_t)__builtin_return_address(0) - (uint32_t)g_base + 0x10000000u; g_useSetVal[g_useSetN] = (uint8_t)v;
+        g_useSetVt[g_useSetN] = comp && !IsBadReadPtr(comp, 4) && *(uint32_t*)comp ? *(uint32_t*)comp - (uint32_t)g_base + 0x10000000u : 0; ++g_useSetN;
     }
 }
 // the pickup check's player-side conditions (0x10146BF0), read directly, logged when they change
@@ -3559,7 +3560,7 @@ static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usa
         g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " | %p %s %.2f m dz %+.2f %.0f deg off view, %.2f m from right hand, aim %s (asked %d), skip flag %d, answered by",
                                  (void*)e, r ? "USABLE" : "no", d, dz, ad, hd, aimed ? "on it" : "view", asked, eflag);
         for (int k = 0; k < g_useSetN && g_useDiagLen < (int)sizeof g_useDiagLine - 24; ++k)
-            g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " %08x=%d", g_useSetBy[k], g_useSetVal[k]);
+            g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " %08x=%d (comp vt %08x)", g_useSetBy[k], g_useSetVal[k], g_useSetVt[k]);
         if (!g_useSetN) g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " nobody");
     }
     return r;
