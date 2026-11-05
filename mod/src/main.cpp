@@ -576,8 +576,8 @@ static void ShowToast(const char* t);
 namespace cbcap { void NoteBuffer(ID3D10Buffer* b); void HookCreateVS(void** vt); void Install(void** vt); void Arm(); void Present(const char* dir); void NoteBones(const float* W, const float* models, int n); }
 // v234: a CPU copy of the HUD's dynamic vertex buffer (every HUD piece's corners as screen fractions, 24-byte vertices),
 // filled from the game's own writes (ID3D10Buffer::Map / Unmap), so each HUD draw can be placed before it is drawn
-struct VbShadow { ID3D10Buffer* b; uint8_t* data; UINT size; uint8_t cover[1024]; uint32_t stamp[1024]; void* mapped; UINT lastEnd; bool synced; int maps, mapsLast; };
-static VbShadow g_vbs[8]; static int g_vbN = 0; static ID3D10Buffer* g_uiVB = nullptr;   // g_uiVB: any followed buffer (the HUD is on)
+struct VbShadow { ID3D10Buffer* b; uint8_t* data; UINT size; uint8_t cover[1024]; uint32_t stamp[1024]; void* mapped; UINT lastEnd; bool synced; int maps, mapsLast; uint32_t lastUse; };
+static const int kVbMax = 32; static VbShadow g_vbs[kVbMax]; static int g_vbN = 0; static ID3D10Buffer* g_uiVB = nullptr;   // g_uiVB: any followed buffer (the HUD is on)
 static uint32_t g_vbFrameNo = 1; static uint64_t g_vbBytesFrame = 0;
 static int g_vbStatDraws = 0, g_vbStatMoved = 0, g_vbStatStale = 0, g_vbStatOther = 0, g_vbStatFrames = 0; static uint64_t g_vbStatBytes = 0; static int g_vbStatMaps = 0;
 static VbShadow* VbFind(ID3D10Buffer* b) { for (int i = 0; i < g_vbN; ++i) if (g_vbs[i].b == b) return &g_vbs[i]; return nullptr; }
@@ -599,6 +599,13 @@ static bool VbSseOk() { static int k = -1; if (k < 0) k = __builtin_cpu_supports
 static void* VbOnMap(ID3D10Buffer* b, int mapType, void* p) {
     VbShadow* v = VbFind(b); if (!v || !p) return p;
     if (!g_vbRedirect) return p;
+    {   D3D10_BUFFER_DESC bd; b->GetDesc(&bd);   // the game freed it and a different buffer got the same address
+        if (bd.ByteWidth != v->size) {
+            uint8_t* d = (uint8_t*)VirtualAlloc(nullptr, (bd.ByteWidth + 4095) & ~4095u, MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH, PAGE_READWRITE);
+            if (!d) { v->b = nullptr; return p; }
+            VirtualFree(v->data, 0, MEM_RELEASE); v->data = d; v->size = bd.ByteWidth; v->synced = false; memset(v->cover, 0, sizeof v->cover);
+        } }
+    v->lastUse = g_vbFrameNo;
     if (mapType == D3D10_MAP_WRITE_DISCARD) { memset(v->cover, 0, sizeof v->cover); v->synced = true; }
     ++v->maps;
     if (!v->synced) {   // first write since we started following: take the buffer's current contents once (the GPU may still draw them)
@@ -1114,20 +1121,32 @@ static bool DrawInPromptRow(uintptr_t* sp, const char* key) {
     VbShadow* v = VbFind(vb);
     if (!v) {   // a HUD vertex buffer not followed yet (the game rotates several)
         D3D10_BUFFER_DESC bd; vb->GetDesc(&bd);
-        if (g_vbN < 8 && bd.Usage == D3D10_USAGE_DYNAMIC && (bd.BindFlags & D3D10_BIND_VERTEX_BUFFER) && bd.ByteWidth <= 256 * 1024 && stride == 24) {
-            uint8_t* d = (uint8_t*)VirtualAlloc(nullptr, (bd.ByteWidth + 4095) & ~4095u, MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH, PAGE_READWRITE);
-            if (d) { v = &g_vbs[g_vbN++]; memset(v, 0, sizeof *v); v->b = vb; v->data = d; v->size = bd.ByteWidth; g_uiVB = vb; LOG("UI: HUD vertex buffer %d: %p (%u bytes) followed", g_vbN, (void*)vb, bd.ByteWidth); }
+        if (bd.Usage == D3D10_USAGE_DYNAMIC && (bd.BindFlags & D3D10_BIND_VERTEX_BUFFER) && bd.ByteWidth <= 256 * 1024 && stride == 24) {
+            int slot = -1;
+            if (g_vbN < kVbMax) slot = g_vbN;
+            else {   // all slots used: reuse the one the game has not written for the longest (not mapped right now)
+                uint32_t best = 0xFFFFFFFFu;
+                for (int i = 0; i < g_vbN; ++i) if (!g_vbs[i].mapped && g_vbs[i].lastUse < best) { best = g_vbs[i].lastUse; slot = i; }
+            }
+            uint8_t* d = slot >= 0 ? (uint8_t*)VirtualAlloc(nullptr, (bd.ByteWidth + 4095) & ~4095u, MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH, PAGE_READWRITE) : nullptr;
+            if (d) {
+                if (slot < g_vbN && g_vbs[slot].data) VirtualFree(g_vbs[slot].data, 0, MEM_RELEASE);
+                if (slot == g_vbN) ++g_vbN;
+                v = &g_vbs[slot]; memset(v, 0, sizeof *v); v->b = vb; v->data = d; v->size = bd.ByteWidth; v->lastUse = g_vbFrameNo; g_uiVB = vb;
+                static int nl = 0; if (nl++ < 40) LOG("UI: HUD vertex buffer %d: %p (%u bytes) followed", slot + 1, (void*)vb, bd.ByteWidth);
+            }
         }
     }
     vb->Release();
-    if (!v || stride != 24) { ++g_vbStatOther; return false; }   // first sight of a buffer: its data comes from its next write
+    static uint8_t lastDecision[512]; int ord = g_uiDrawOrd - 1;
+    // first sight of a buffer (its data comes from its next write): repeat what this draw did last frame
+    if (!v || stride != 24) { ++g_vbStatOther; bool r = stride == 24 && ord >= 0 && ord < 512 && lastDecision[ord]; if (r) ++g_vbStatMoved; return r; }
     UINT cnt = (UINT)sp[2], start = (UINT)sp[3];
     if (cnt == 0 || cnt > 600) return false;
     UINT a = off + start * 24, e = a + cnt * 24; if (e > v->size) return false;
     v->lastEnd = e;
     ++g_vbStatDraws;
     // unreadable this frame (not copied since the game wrote it): repeat what this draw (same place in the draw order) did last frame
-    static uint8_t lastDecision[512]; int ord = g_uiDrawOrd - 1;
     bool fresh = true; for (UINT k = a / 256; k <= (e - 1) / 256; ++k) if (!v->cover[k]) { fresh = false; break; }
     if (!fresh) { ++g_vbStatStale; bool r = ord >= 0 && ord < 512 && lastDecision[ord]; if (r) ++g_vbStatMoved; return r; }
     float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
