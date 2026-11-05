@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstring>
 
+void VehDescribe(void* ent);   // main.cpp: logs which vehicle an entity is (once per vehicle)
 namespace arms {
 
 static uintptr_t g_base = 0;
@@ -3557,6 +3558,7 @@ static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usa
         int eflag = e && !IsBadReadPtr(e + 0x70, 4) ? (int)((*(uint32_t*)(e + 0x70) >> 4) & 1) : -1;   // the monitor's own skip flag (0x1009D480)
         float hd = -1; if (ep) { float hx = ep[0] - g_useHand[0], hy = ep[1] - g_useHand[1], hz = ep[2] - g_useHand[2]; hd = sqrtf(hx * hx + hy * hy + hz * hz); }
         (void)vt;
+        if (r && e) VehDescribe(e);
         g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " | %p %s %.2f m dz %+.2f %.0f deg off view, %.2f m from right hand, aim %s (asked %d), skip flag %d, answered by",
                                  (void*)e, r ? "USABLE" : "no", d, dz, ad, hd, aimed ? "on it" : "view", asked, eflag);
         for (int k = 0; k < g_useSetN && g_useDiagLen < (int)sizeof g_useDiagLine - 24; ++k)

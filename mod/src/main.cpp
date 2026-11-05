@@ -1652,6 +1652,7 @@ static bool VehProtected(uint8_t* ent, const char* why) {
     if (!known && nSeen < 48) { seen[nSeen++] = ent; LOG("vehicles: %s on vehicle %p: type %d colour %d (random %d-%d) anim type %d max health %.0f -> %s%s", why, (void*)ent, type, colour, cmin, cmax, anim, g_vehMaxHealth, glider ? "hang glider" : buggy ? "buggy" : "other", prot ? " (protected)" : ""); }
     return prot;
 }
+void VehDescribe(void* ent) { VehProtected((uint8_t*)ent, "offered to get on"); }   // called by the use diagnostics
 typedef void (__fastcall *VehDmg_t)(uint8_t* phys, void* edx, float dmg);
 typedef void (__fastcall *VehBoom_t)(uint8_t* eng, void* edx, int a);
 typedef void (__fastcall *VehExplode_t)(uint8_t* eng, void* edx, int a, int b);
@@ -4361,7 +4362,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 33: optional indestructible buggy / hang glider; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 34: optional indestructible buggy / hang glider; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
