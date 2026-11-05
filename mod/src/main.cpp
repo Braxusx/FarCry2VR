@@ -82,9 +82,9 @@ struct Config {
     float uiDepth = 6.0f;         // metres: distance at which the UI converges (aim point)
     float uiScale = 0.7f;         // UI size relative to the eye image
     char  uiSkipTex[512] = "256x512x71v18";
-    int   uiBoxProbe = 1;         // v234 test: log where small HUD draws land
+    int   uiBoxProbe = 0;         // v234 test: log where small HUD draws land
     int   uiPromptCenter = 1;     // v234: the interaction hand icon is drawn at the centre of the view (over the object)
-    char  uiPromptTex[64] = "64x64x77v6#4b9ead2e";   // UI textures (WxHxFormat, comma-separated) not drawn into the layer
+    char  uiPromptTex[160] = "64x64x77v6#4b9ead2e,64x64x77v6#02a4943d";   // the hand print first (measured), then its glow   // UI textures (WxHxFormat, comma-separated) not drawn into the layer
     int   reticleTexMax = 256;      // UI draws whose texture has at most this many texels go to the aim-locked reticle layer
     int   fixBouncingNpcs = 1, npcFixThreads = 1, npcFixJobThreads = 1;
     int   scopeMode = 1;              // flat screen for binoculars / scopes
@@ -195,8 +195,8 @@ static void LoadConfig() {
     g_cfg.minSizeMul = IniF("MinSizeMul", 0.5f);
     g_cfg.reticleTexMax = (int)IniF("ReticleTexMax", 256);
     { char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "UiSkipTex", "256x512x71v18", g_cfg.uiSkipTex, sizeof g_cfg.uiSkipTex, path); }
-    { char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "UiPromptTex", "64x64x77v6#4b9ead2e", g_cfg.uiPromptTex, sizeof g_cfg.uiPromptTex, path);
-      g_cfg.uiPromptCenter = (int)IniF("UiPromptCenter", 1); g_cfg.uiBoxProbe = (int)IniF("UiBoxProbe", 1); }
+    { char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "UiPromptTex", "64x64x77v6#4b9ead2e,64x64x77v6#02a4943d", g_cfg.uiPromptTex, sizeof g_cfg.uiPromptTex, path);
+      g_cfg.uiPromptCenter = (int)IniF("UiPromptCenter", 1); g_cfg.uiBoxProbe = (int)IniF("UiBoxProbe", 0); }
     g_cfg.shareShadows = (int)IniF("ShareShadows", 1);
     g_cfg.cullMode = (int)IniF("CullMode", 1); if (g_cfg.cullMode < 0 || g_cfg.cullMode > 3) g_cfg.cullMode = 1;
     if (g_cfg.uiMode) g_cfg.hudLayer = 0;
@@ -992,13 +992,13 @@ static void PromptIconAfter() {
     } else { g_pIconMeasure = 0; }
     if (g_pIconHave) for (auto& t : g_pSt) if (t) { t->Release(); t = nullptr; }
 }
-static void PromptIconDraw() {
+static void PromptIconDraw(bool first) {
     if (g_pIconHave) {
         UINT n = 1; D3D10_VIEWPORT vp; g_vtDev->RSGetViewports(&n, &vp);
         if (n && t_RSSetVP) { g_pIconVp = vp; vp.TopLeftX += g_pIconDx; vp.TopLeftY += g_pIconDy; t_RSSetVP(g_vtDev, 1, &vp); g_pIconRestore = true; }
         return;
     }
-    if (g_pIconMeasure != 0) return;
+    if (g_pIconMeasure != 0 || !first) return;   // only the hand print itself is measured
     ID3D10Texture2D* lt = PromptLayerTex(); if (!lt) return;
     if (!g_pSt[0]) { D3D10_TEXTURE2D_DESC sd; lt->GetDesc(&sd); sd.Usage = D3D10_USAGE_STAGING; sd.BindFlags = 0; sd.CPUAccessFlags = D3D10_CPU_ACCESS_READ; sd.MiscFlags = 0; sd.MipLevels = 1; sd.ArraySize = 1;
         if (FAILED(g_vtDev->CreateTexture2D(&sd, nullptr, &g_pSt[0]))) g_pSt[0] = nullptr; }
@@ -1063,7 +1063,7 @@ static int g_drawPolicy(uintptr_t* sp, int slot) {
         if (g_uiCurEye != g_uiPrimary) return 1;           // the other eye skips the UI
         if (g_capState == 2) UiProbe(ord - 1);
         // Reticle: drawn with a tiny texture (8x16 in the default crosshair).
-        bool ret = false, skip = false, promptIcon = false; char probeKey[72] = "";
+        bool ret = false, skip = false, promptIcon = false, promptFirst = false; char probeKey[72] = "";
         {
             ID3D10ShaderResourceView* srv = nullptr; g_vtDev->PSGetShaderResources(0, 1, &srv);
             if (srv) { ID3D10Resource* r = nullptr; srv->GetResource(&r); ID3D10Texture2D* t = nullptr;
@@ -1079,7 +1079,10 @@ static int g_drawPolicy(uintptr_t* sp, int slot) {
                     char k4[64]; snprintf(k4, sizeof k4, ",%ux%ux%dv%u@r,", td.Width, td.Height, (int)td.Format, (unsigned)sp[2]);   // only while a weapon reticle is up
                     if (g_cfg.uiSkipTex[0] && (strstr(list, k2) || strstr(list, k3) || (g_reticleOnUi && strstr(list, k4)))) skip = true;
                     if (td.Width * td.Height <= 256 * 256 && td.Width <= 256) snprintf(probeKey, sizeof probeKey, "%ux%ux%dv%u#%08x", td.Width, td.Height, (int)td.Format, (unsigned)sp[2], th);
-                    if (g_cfg.uiPromptCenter && g_cfg.uiPromptTex[0]) { char pk[72]; snprintf(pk, sizeof pk, ",%s,", g_cfg.uiPromptTex); promptIcon = !strcmp(k3, pk); }
+                    if (g_cfg.uiPromptCenter && g_cfg.uiPromptTex[0]) {   // the first entry is the hand print (measured), the rest move with it
+                        char pl[170]; snprintf(pl, sizeof pl, ",%s,", g_cfg.uiPromptTex);
+                        if (strstr(pl, k3)) { const char* c = strchr(g_cfg.uiPromptTex, ','); size_t n0 = c ? (size_t)(c - g_cfg.uiPromptTex) : strlen(g_cfg.uiPromptTex);
+                            promptIcon = true; promptFirst = strlen(k3) == n0 + 2 && !strncmp(k3 + 1, g_cfg.uiPromptTex, n0); } }
                     t->Release(); }
                 if (r) r->Release(); srv->Release(); }
         }
@@ -1094,7 +1097,7 @@ static int g_drawPolicy(uintptr_t* sp, int slot) {
         }
         if (g_uiBoundLayer != want) { t_OMSetRT(g_vtDev, 1, &want, g_uiSavedEyeDSV); g_uiBoundLayer = want; }
         if (ret) g_uiRetFresh = true;
-        if (promptIcon) PromptIconDraw();
+        if (promptIcon) PromptIconDraw(promptFirst);
         else if (g_cfg.uiBoxProbe && probeKey[0]) BoxProbeBefore(probeKey);
         // alpha fix for additive draws
         {
@@ -4124,7 +4127,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 18: HUD draw position probe (UiBoxProbe); hand icon at the view centre; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 19: hand icon and its glow at the view centre; weapon-swap icons shown; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
