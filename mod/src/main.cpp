@@ -82,7 +82,7 @@ struct Config {
     float uiDepth = 6.0f;         // metres: distance at which the UI converges (aim point)
     float uiScale = 0.7f;         // UI size relative to the eye image
     char  uiSkipTex[512] = "256x512x71v18";
-    int   uiBoxProbe = 0, uiBoxProbe2 = 0;         // v234 test: log where small HUD draws land
+    int   uiBoxProbe = 0, uiBoxProbe2 = 0, uiVertDump = 1;         // v234 test: log where small HUD draws land
     int   uiPromptCenter = 1;     // v234: the interaction hand icon is drawn at the centre of the view (over the object)
     char  uiPromptTex[160] = "64x64x77v6#4b9ead2e";   // the hand print first (measured), then any draws that always move with it   // UI textures (WxHxFormat, comma-separated) not drawn into the layer
     int   reticleTexMax = 256;      // UI draws whose texture has at most this many texels go to the aim-locked reticle layer
@@ -196,7 +196,7 @@ static void LoadConfig() {
     g_cfg.reticleTexMax = (int)IniF("ReticleTexMax", 256);
     { char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "UiSkipTex", "256x512x71v18", g_cfg.uiSkipTex, sizeof g_cfg.uiSkipTex, path); }
     { char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "UiPromptTex", "64x64x77v6#4b9ead2e", g_cfg.uiPromptTex, sizeof g_cfg.uiPromptTex, path);
-      g_cfg.uiPromptCenter = (int)IniF("UiPromptCenter", 1); g_cfg.uiBoxProbe = (int)IniF("UiBoxProbe", 0); g_cfg.uiBoxProbe2 = (int)IniF("UiElementDump", 0); }
+      g_cfg.uiPromptCenter = (int)IniF("UiPromptCenter", 1); g_cfg.uiBoxProbe = (int)IniF("UiBoxProbe", 0); g_cfg.uiBoxProbe2 = (int)IniF("UiElementDump", 0); g_cfg.uiVertDump = (int)IniF("UiVertDump", 1); }
     g_cfg.shareShadows = (int)IniF("ShareShadows", 1);
     g_cfg.cullMode = (int)IniF("CullMode", 1); if (g_cfg.cullMode < 0 || g_cfg.cullMode > 3) g_cfg.cullMode = 1;
     if (g_cfg.uiMode) g_cfg.hudLayer = 0;
@@ -1121,6 +1121,49 @@ static void RowDraw(const char* key, int ord, bool handIcon) {
     if (r->state == 1 && !r->multi) { if (ord >= 0 && ord < 512) g_rowAnchorCur[ord] = 1; RowShift(); return; }
     if ((r->state == 3 || (r->state == 1 && r->multi)) && ord > 0 && ord < 511 && (g_rowAnchorPrev[ord - 1] || g_rowAnchorPrev[ord + 1])) RowShift();
 }
+// v234 test 24 diagnostic (UiVertDump=1): how a HUD draw's position reaches the GPU - its vertex buffer (raw vertices,
+// read back through a staging copy) and its first VS constant buffer, for a few prompt and counter draws
+static int g_vdN = 0;
+static void VertDump(const char* key, uintptr_t* sp) {
+    if (g_vdN >= 12) return; ++g_vdN;
+    ID3D10Buffer* vb = nullptr; UINT stride = 0, off = 0; g_vtDev->IAGetVertexBuffers(0, 1, &vb, &stride, &off);
+    ID3D10Buffer* ib = nullptr; DXGI_FORMAT ifmt = DXGI_FORMAT_UNKNOWN; UINT ioff = 0; g_vtDev->IAGetIndexBuffer(&ib, &ifmt, &ioff);
+    D3D10_PRIMITIVE_TOPOLOGY topo; g_vtDev->IAGetPrimitiveTopology(&topo);
+    D3D10_VIEWPORT vp{}; UINT nv = 1; g_vtDev->RSGetViewports(&nv, &vp);
+    char line[1400]; int o = snprintf(line, sizeof line, "UI vert %s: args %u %u %u, topo %d, ib %p fmt %d, vp %d,%d %ux%u, vb %p stride %u off %u", key, (unsigned)sp[2], (unsigned)sp[3], (unsigned)sp[4], (int)topo, (void*)ib, (int)ifmt, vp.TopLeftX, vp.TopLeftY, vp.Width, vp.Height, (void*)vb, stride, off);
+    if (vb && stride && stride <= 64) {
+        D3D10_BUFFER_DESC bd; vb->GetDesc(&bd); o += snprintf(line + o, sizeof line - o, " (%u bytes usage %d bind %x cpu %x)", bd.ByteWidth, (int)bd.Usage, bd.BindFlags, bd.CPUAccessFlags);
+        D3D10_BUFFER_DESC sd = bd; sd.Usage = D3D10_USAGE_STAGING; sd.BindFlags = 0; sd.CPUAccessFlags = D3D10_CPU_ACCESS_READ; sd.MiscFlags = 0;
+        ID3D10Buffer* st = nullptr;
+        if (bd.ByteWidth <= (8u << 20) && SUCCEEDED(g_vtDev->CreateBuffer(&sd, nullptr, &st)) && st) {
+            g_vtDev->CopyResource(st, vb); void* p = nullptr;
+            if (SUCCEEDED(st->Map(D3D10_MAP_READ, 0, &p)) && p) {
+                UINT start = (UINT)sp[3];   // Draw: vertex count, start vertex
+                for (UINT v = 0; v < 6 && o < (int)sizeof line - 120; ++v) {
+                    size_t at = off + (size_t)(start + v) * stride; if (at + stride > bd.ByteWidth) break;
+                    const float* f = (const float*)((const uint8_t*)p + at);
+                    o += snprintf(line + o, sizeof line - o, " | v%u", v);
+                    for (UINT k = 0; k < stride / 4 && k < 8; ++k) o += snprintf(line + o, sizeof line - o, " %.4g", f[k]);
+                }
+                st->Unmap();
+            }
+            st->Release();
+        }
+    }
+    LOG("%s", line);
+    ID3D10Buffer* cb0 = nullptr; g_vtDev->VSGetConstantBuffers(0, 1, &cb0);
+    if (cb0) {
+        D3D10_BUFFER_DESC bd; cb0->GetDesc(&bd); D3D10_BUFFER_DESC sd = bd; sd.Usage = D3D10_USAGE_STAGING; sd.BindFlags = 0; sd.CPUAccessFlags = D3D10_CPU_ACCESS_READ; sd.MiscFlags = 0;
+        ID3D10Buffer* st = nullptr; char l2[900]; int q = snprintf(l2, sizeof l2, "UI vert %s: VS cb0 %u bytes:", key, bd.ByteWidth);
+        if (bd.ByteWidth <= 4096 && SUCCEEDED(g_vtDev->CreateBuffer(&sd, nullptr, &st)) && st) {
+            g_vtDev->CopyResource(st, cb0); void* p = nullptr;
+            if (SUCCEEDED(st->Map(D3D10_MAP_READ, 0, &p)) && p) { const float* f = (const float*)p; for (UINT k = 0; k < bd.ByteWidth / 4 && k < 48 && q < (int)sizeof l2 - 16; ++k) q += snprintf(l2 + q, sizeof l2 - q, " %.4g", f[k]); st->Unmap(); }
+            st->Release();
+        }
+        LOG("%s", l2); cb0->Release();
+    }
+    if (vb) vb->Release(); if (ib) ib->Release();
+}
 static int g_drawPolicy(uintptr_t* sp, int slot) {
     if (g_cfg.uiMode == 2) {
         if (g_pIconRestore || g_pIconMeasure == 1) PromptIconAfter();
@@ -1178,6 +1221,7 @@ static int g_drawPolicy(uintptr_t* sp, int slot) {
         }
         if (g_uiBoundLayer != want) { t_OMSetRT(g_vtDev, 1, &want, g_uiSavedEyeDSV); g_uiBoundLayer = want; }
         if (ret) g_uiRetFresh = true;
+        if (g_cfg.uiVertDump && probeKey[0] && (promptFirst || strstr(probeKey, "128x64x77v6#b966bedd") || strstr(probeKey, "128x32x77v6") || strstr(probeKey, "c1d99246"))) VertDump(probeKey, sp);
         if (promptIcon) PromptIconDraw(promptFirst);
         if (g_cfg.uiPromptCenter && g_pIconHave && probeKey[0] && !ret) RowDraw(probeKey, ord, promptFirst);
         else if (!promptIcon && g_cfg.uiBoxProbe && probeKey[0]) BoxProbeBefore(probeKey);
@@ -4235,7 +4279,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 23: prompt row at the view centre (glows drawn several times move only beside prompt pieces); predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 24: HUD vertex dump (UiVertDump) + prompt row at the view centre; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
