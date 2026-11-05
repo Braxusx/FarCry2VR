@@ -73,6 +73,9 @@ void SetDotLayer(const XrPosef& pose, float size);
 void SetArc(const XrVector3f* pts, int n, bool land, const XrVector3f& normal, bool ok);
 constexpr int MenuW = 512, MenuH = 320;
 constexpr int AmmoW = 384, AmmoH = 96;
+constexpr int WAmmoW = 256, WAmmoH = 224;
+void SetWeaponAmmoImage(const uint32_t* px);                 // v234: ammo panel beside the weapon (RGBA premultiplied, WAmmoW x WAmmoH)
+void SetWeaponAmmoLayer(const XrPosef& pose, float width);   // this frame: show it (LOCAL space)
 void SetAmmoImage(const uint32_t* px);   // the mod's own ammo counter (RGBA premultiplied, AmmoW x AmmoH)
 void SetMenu(const uint32_t* px, const XrPosef& pose, float width);   // this frame: show the mod menu (px: new RGBA premultiplied pixels, or null to keep)
 void SetScopeCrosshair(int style);
