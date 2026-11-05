@@ -82,7 +82,7 @@ struct Config {
     float uiDepth = 6.0f;         // metres: distance at which the UI converges (aim point)
     float uiScale = 0.7f;         // UI size relative to the eye image
     char  uiSkipTex[512] = "256x512x71v18";
-    int   uiBoxProbe = 0, uiBoxProbe2 = 1;         // v234 test: log where small HUD draws land
+    int   uiBoxProbe = 0, uiBoxProbe2 = 0;         // v234 test: log where small HUD draws land
     int   uiPromptCenter = 1;     // v234: the interaction hand icon is drawn at the centre of the view (over the object)
     char  uiPromptTex[160] = "64x64x77v6#4b9ead2e";   // the hand print first (measured), then any draws that always move with it   // UI textures (WxHxFormat, comma-separated) not drawn into the layer
     int   reticleTexMax = 256;      // UI draws whose texture has at most this many texels go to the aim-locked reticle layer
@@ -196,7 +196,7 @@ static void LoadConfig() {
     g_cfg.reticleTexMax = (int)IniF("ReticleTexMax", 256);
     { char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "UiSkipTex", "256x512x71v18", g_cfg.uiSkipTex, sizeof g_cfg.uiSkipTex, path); }
     { char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "UiPromptTex", "64x64x77v6#4b9ead2e", g_cfg.uiPromptTex, sizeof g_cfg.uiPromptTex, path);
-      g_cfg.uiPromptCenter = (int)IniF("UiPromptCenter", 1); g_cfg.uiBoxProbe = (int)IniF("UiBoxProbe", 0); g_cfg.uiBoxProbe2 = (int)IniF("UiElementDump", 1); }
+      g_cfg.uiPromptCenter = (int)IniF("UiPromptCenter", 1); g_cfg.uiBoxProbe = (int)IniF("UiBoxProbe", 0); g_cfg.uiBoxProbe2 = (int)IniF("UiElementDump", 0); }
     g_cfg.shareShadows = (int)IniF("ShareShadows", 1);
     g_cfg.cullMode = (int)IniF("CullMode", 1); if (g_cfg.cullMode < 0 || g_cfg.cullMode > 3) g_cfg.cullMode = 1;
     if (g_cfg.uiMode) g_cfg.hudLayer = 0;
@@ -1045,13 +1045,18 @@ static void BoxProbeBefore(const char* key) {
 // their glows) moves with the hand. Each small HUD texture is measured once (layer pixels of the prompt area before /
 // after one of its draws, in a band copy): drawn wholly inside the prompt row -> it moves with the hand from then on;
 // drawn elsewhere, or across the band's edge -> left alone.
-struct RowKey { char key[72]; int8_t state; int8_t hits; };   // state 0 unknown, 1 prompt row, 2 elsewhere
+// States: 0 unknown, 1 prompt-only (seen only in the prompt row), 2 elsewhere-only, 3 shared (both - e.g. the glow behind the
+// prompt icons AND behind the ammo / grenade counters, or a font). Each texture is measured up to 6 times, 300 ms apart.
+// Prompt-only draws always move; shared ones move only when the draw next to them (previous frame, same draw order) was a
+// prompt-only piece - the glow just before the hand or a weapon icon moves, the same glow by the ammo counter stays.
+struct RowKey { char key[72]; int8_t state; int8_t rowHits, elseHits, n; double last; };
 static RowKey g_rowKeys[256]; static int g_rowN = 0, g_rowMeasures = 0;
 static ID3D10Texture2D* g_rowSt[2] = { nullptr, nullptr }; static int g_rowPend = -1; static UINT g_rowX0, g_rowY0, g_rowW, g_rowH;
+static uint8_t g_rowAnchorCur[512], g_rowAnchorPrev[512]; static int g_rowOrd = -1;
 static RowKey* RowFind(const char* key) {
     for (int i = 0; i < g_rowN; ++i) if (!strcmp(g_rowKeys[i].key, key)) return &g_rowKeys[i];
     if (g_rowN >= 256) return nullptr;
-    RowKey& r = g_rowKeys[g_rowN++]; snprintf(r.key, sizeof r.key, "%s", key); r.state = 0; r.hits = 0; return &r;
+    RowKey& r = g_rowKeys[g_rowN++]; snprintf(r.key, sizeof r.key, "%s", key); r.state = 0; r.rowHits = r.elseHits = r.n = 0; r.last = -1e9; return &r;
 }
 static bool RowBandCopy(int which) {
     ID3D10Texture2D* lt = PromptLayerTex(); if (!lt) return false;
@@ -1078,23 +1083,35 @@ static void RowAfter() {
         g_rowSt[1]->Unmap(0);
     }
     g_rowSt[0]->Unmap(0);
-    if (x1 < 0) { r.state = 2; LOG("UI prompt row: %s not in the prompt area - left alone", r.key); return; }
-    ID3D10Texture2D* lt = PromptLayerTex(); D3D10_TEXTURE2D_DESC d{}; if (lt) { lt->GetDesc(&d); lt->Release(); } if (!d.Height) return;
-    float fy0 = (g_rowY0 + y0) / (float)d.Height, fy1 = (g_rowY0 + y1 + 2) / (float)d.Height, fx0 = (g_rowX0 + x0) / (float)d.Width, fx1 = (g_rowX0 + x1 + 2) / (float)d.Width;
-    bool edge = x0 <= 2 || y0 <= 2 || x1 >= (int)g_rowW - 4 || y1 >= (int)g_rowH - 4;
-    float cy = 0.5f * (fy0 + fy1);
-    bool row = !edge && cy > 0.64f && cy < 0.84f && fy1 - fy0 < 0.16f;
-    if (!row) { r.state = 2; LOG("UI prompt row: %s at x %.3f-%.3f y %.3f-%.3f - left alone", r.key, fx0, fx1, fy0, fy1); return; }
-    if (++r.hits >= 2) { r.state = 1; LOG("UI prompt row: %s at x %.3f-%.3f y %.3f-%.3f - moves with the hand", r.key, fx0, fx1, fy0, fy1); }
-}
-static void RowDraw(const char* key) {
-    RowKey* r = RowFind(key); if (!r) return;
-    if (r->state == 1) {
-        UINT n = 1; D3D10_VIEWPORT vp; g_vtDev->RSGetViewports(&n, &vp);
-        if (n && t_RSSetVP) { g_pIconVp = vp; vp.TopLeftX += g_pIconDx; vp.TopLeftY += g_pIconDy; t_RSSetVP(g_vtDev, 1, &vp); g_pIconRestore = true; }
-        return;
+    bool row = false; float fx0 = 0, fx1 = 0, fy0 = 0, fy1 = 0;
+    if (x1 >= 0) {
+        ID3D10Texture2D* lt = PromptLayerTex(); D3D10_TEXTURE2D_DESC d{}; if (lt) { lt->GetDesc(&d); lt->Release(); } if (!d.Height) return;
+        fy0 = (g_rowY0 + y0) / (float)d.Height; fy1 = (g_rowY0 + y1 + 2) / (float)d.Height; fx0 = (g_rowX0 + x0) / (float)d.Width; fx1 = (g_rowX0 + x1 + 2) / (float)d.Width;
+        bool edge = x0 <= 2 || y0 <= 2 || x1 >= (int)g_rowW - 4 || y1 >= (int)g_rowH - 4;
+        float cy = 0.5f * (fy0 + fy1);
+        row = !edge && cy > 0.66f && cy < 0.80f && fy1 - fy0 < 0.14f && fx0 > 0.30f && fx1 < 0.70f;
     }
-    if (r->state == 0 && g_rowPend < 0 && g_rowMeasures < 300 && g_pIconMeasure != 1 && RowBandCopy(0)) { ++g_rowMeasures; g_rowPend = (int)(r - g_rowKeys); }
+    if (row) ++r.rowHits; else ++r.elseHits;
+    int8_t old = r.state;
+    if (r.rowHits && r.elseHits) r.state = 3; else if (r.rowHits >= 2) r.state = 1; else if (r.elseHits >= 2) r.state = 2;
+    if (r.state != old) LOG("UI prompt row: %s %s (last seen %s x %.3f-%.3f y %.3f-%.3f; %d in the row, %d elsewhere)", r.key,
+        r.state == 1 ? "drawn only in the prompt row - moves with the hand" : r.state == 2 ? "drawn elsewhere - left alone" : "drawn in the prompt row and elsewhere - moves only beside prompt pieces",
+        x1 >= 0 ? "at" : "outside the prompt area,", fx0, fx1, fy0, fy1, r.rowHits, r.elseHits);
+}
+static void RowFrameEnd() { memcpy(g_rowAnchorPrev, g_rowAnchorCur, sizeof g_rowAnchorPrev); memset(g_rowAnchorCur, 0, sizeof g_rowAnchorCur); }
+static void RowShift() {
+    UINT n = 1; D3D10_VIEWPORT vp; g_vtDev->RSGetViewports(&n, &vp);
+    if (n && t_RSSetVP) { g_pIconVp = vp; vp.TopLeftX += g_pIconDx; vp.TopLeftY += g_pIconDy; t_RSSetVP(g_vtDev, 1, &vp); g_pIconRestore = true; }
+}
+static void RowDraw(const char* key, int ord, bool handIcon) {
+    if (ord >= 0 && ord < 512 && handIcon) g_rowAnchorCur[ord] = 1;
+    if (handIcon) return;   // the hand print moves itself (PromptIconDraw)
+    RowKey* r = RowFind(key); if (!r) return;
+    double now = NowMs();
+    bool measure = r->state != 3 && r->n < 6 && now - r->last > 300.0 && g_rowPend < 0 && g_rowMeasures < 400 && g_pIconMeasure != 1;
+    if (measure && RowBandCopy(0)) { ++r->n; r->last = now; ++g_rowMeasures; g_rowPend = (int)(r - g_rowKeys); return; }   // drawn in place this once
+    if (r->state == 1) { if (ord >= 0 && ord < 512) g_rowAnchorCur[ord] = 1; RowShift(); return; }
+    if (r->state == 3 && ord > 0 && ord < 511 && (g_rowAnchorPrev[ord - 1] || g_rowAnchorPrev[ord + 1])) RowShift();
 }
 static int g_drawPolicy(uintptr_t* sp, int slot) {
     if (g_cfg.uiMode == 2) {
@@ -1154,8 +1171,8 @@ static int g_drawPolicy(uintptr_t* sp, int slot) {
         if (g_uiBoundLayer != want) { t_OMSetRT(g_vtDev, 1, &want, g_uiSavedEyeDSV); g_uiBoundLayer = want; }
         if (ret) g_uiRetFresh = true;
         if (promptIcon) PromptIconDraw(promptFirst);
-        else if (g_cfg.uiPromptCenter && g_pIconHave && probeKey[0] && !ret) RowDraw(probeKey);
-        else if (g_cfg.uiBoxProbe && probeKey[0]) BoxProbeBefore(probeKey);
+        if (g_cfg.uiPromptCenter && g_pIconHave && probeKey[0] && !ret) RowDraw(probeKey, ord, promptFirst);
+        else if (!promptIcon && g_cfg.uiBoxProbe && probeKey[0]) BoxProbeBefore(probeKey);
         // alpha fix for additive draws
         {
             ID3D10BlendState* bs = nullptr; FLOAT bf[4]; UINT sm = 0; g_vtDev->OMGetBlendState(&bs, bf, &sm);
@@ -2602,6 +2619,7 @@ extern "C" void __cdecl OnUiEnd() {
         if (g_uiSavedEyeRTV) { g_uiSavedEyeRTV->Release(); g_uiSavedEyeRTV = nullptr; }
         if (g_uiSavedEyeDSV) { g_uiSavedEyeDSV->Release(); g_uiSavedEyeDSV = nullptr; }
         if (g_uiCurEye == g_uiPrimary && g_uiDrawOrd > 0) g_uiLayerFresh = true;
+        if (g_uiCurEye == g_uiPrimary) RowFrameEnd();
         if (g_capState == 2 && g_uiCurEye == g_uiPrimary && g_uiDrawOrd > 0) UiProbe(g_uiDrawOrd - 1);
         if (g_capState == 2) LOG("UI layer: eye %d, %d UI draws", g_uiCurEye, g_uiDrawOrd);
         g_uiShift = false; g_uiOnEye = false; g_uiRedirect = false; g_uiCurEye = -1;
@@ -4209,7 +4227,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 21: prompt row at the view centre + HUD element dump; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 22: prompt row at the view centre (shared glows move only beside prompt pieces); predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
