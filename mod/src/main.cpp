@@ -1629,7 +1629,7 @@ static bool RedirectCall(uintptr_t site, uintptr_t target, void* hook, void** or
 // death 0x10107B00. For a protected vehicle these return at once. Vehicle: entity -> CVehicle (0x1007F440, ecx = entity);
 // CVehicle+0x14 vehicle type (2 = paraglider); buggy = colour index (Implementation +0x1DC) 1-4, 27 or 34.
 typedef void* (__fastcall *GetVehicle_t)(void* ent, void* edx);
-static bool s_protBuggy = false, s_protGlider = false;
+static bool s_protBuggy = false, s_protGlider = false; static float g_vehMaxHealth = -1;
 static uint8_t* VehEntFromPhys(uint8_t* phys) {
     if (!phys || IsBadReadPtr(phys + 8, 4)) return nullptr; uint8_t* h = *(uint8_t**)(phys + 8);
     if (!h || IsBadReadPtr(h + 0xC, 4)) return nullptr; return *(uint8_t**)(h + 0xC);
@@ -1643,11 +1643,13 @@ static bool VehProtected(uint8_t* ent, const char* why) {
     if (!veh || IsBadReadPtr(veh + 0x10, 8)) return false;
     int type = *(int*)(veh + 0x14); uint8_t* impl = *(uint8_t**)(veh + 0x10);
     int colour = impl && !IsBadReadPtr(impl + 0x1DC, 4) ? *(int*)(impl + 0x1DC) : -1;
+    int anim = impl && !IsBadReadPtr(impl + 4, 4) ? *(int*)(impl + 4) : -1;   // iAnimVehicleType (rider animation set)
+    int cmin = impl && !IsBadReadPtr(impl + 0x1E0, 8) ? *(int*)(impl + 0x1E0) : -1, cmax = impl && !IsBadReadPtr(impl + 0x1E4, 4) ? *(int*)(impl + 0x1E4) : -1;
     bool glider = type == 2, buggy = colour == 1 || colour == 2 || colour == 3 || colour == 4 || colour == 27 || colour == 34;
     bool prot = (glider && s_protGlider) || (buggy && s_protBuggy);
     static void* seen[48]; static int nSeen = 0; bool known = false;
     for (int i = 0; i < nSeen; ++i) if (seen[i] == ent) { known = true; break; }
-    if (!known && nSeen < 48) { seen[nSeen++] = ent; LOG("vehicles: %s on vehicle %p: type %d colour %d -> %s%s", why, (void*)ent, type, colour, glider ? "hang glider" : buggy ? "buggy" : "other", prot ? " (protected)" : ""); }
+    if (!known && nSeen < 48) { seen[nSeen++] = ent; LOG("vehicles: %s on vehicle %p: type %d colour %d (random %d-%d) anim type %d max health %.0f -> %s%s", why, (void*)ent, type, colour, cmin, cmax, anim, g_vehMaxHealth, glider ? "hang glider" : buggy ? "buggy" : "other", prot ? " (protected)" : ""); }
     return prot;
 }
 typedef void (__fastcall *VehDmg_t)(uint8_t* phys, void* edx, float dmg);
@@ -1656,7 +1658,9 @@ typedef void (__fastcall *VehExplode_t)(uint8_t* eng, void* edx, int a, int b);
 typedef void (__fastcall *VehKill_t)(uint8_t* eng, void* edx);
 static VehDmg_t o_VehDmg; static VehBoom_t o_VehBoom; static VehExplode_t o_VehExplode; static VehKill_t o_VehKill;
 static void __fastcall Hook_VehDmg(uint8_t* phys, void* edx, float dmg) {
-    if (VehProtected(VehEntFromPhys(phys), "damage")) return;
+    g_vehMaxHealth = phys && !IsBadReadPtr(phys + 0x88, 4) ? *(float*)(phys + 0x88) : -1;
+    bool prot = VehProtected(VehEntFromPhys(phys), "damage"); g_vehMaxHealth = -1;
+    if (prot) return;
     o_VehDmg(phys, edx, dmg);
 }
 static void __fastcall Hook_VehBoom(uint8_t* eng, void* edx, int a) { if (VehProtected(VehEntFromEngine(eng), "explosion")) return; o_VehBoom(eng, edx, a); }
@@ -4357,7 +4361,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 32: optional indestructible buggy / hang glider; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 33: optional indestructible buggy / hang glider; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
