@@ -1049,14 +1049,14 @@ static void BoxProbeBefore(const char* key) {
 // prompt icons AND behind the ammo / grenade counters, or a font). Each texture is measured up to 6 times, 300 ms apart.
 // Prompt-only draws always move; shared ones move only when the draw next to them (previous frame, same draw order) was a
 // prompt-only piece - the glow just before the hand or a weapon icon moves, the same glow by the ammo counter stays.
-struct RowKey { char key[72]; int8_t state; int8_t rowHits, elseHits, n; double last; };
+struct RowKey { char key[72]; int8_t state; int8_t rowHits, elseHits, n; double last; int16_t perFrame; bool multi; };
 static RowKey g_rowKeys[256]; static int g_rowN = 0, g_rowMeasures = 0;
 static ID3D10Texture2D* g_rowSt[2] = { nullptr, nullptr }; static int g_rowPend = -1; static UINT g_rowX0, g_rowY0, g_rowW, g_rowH;
 static uint8_t g_rowAnchorCur[512], g_rowAnchorPrev[512]; static int g_rowOrd = -1;
 static RowKey* RowFind(const char* key) {
     for (int i = 0; i < g_rowN; ++i) if (!strcmp(g_rowKeys[i].key, key)) return &g_rowKeys[i];
     if (g_rowN >= 256) return nullptr;
-    RowKey& r = g_rowKeys[g_rowN++]; snprintf(r.key, sizeof r.key, "%s", key); r.state = 0; r.rowHits = r.elseHits = r.n = 0; r.last = -1e9; return &r;
+    RowKey& r = g_rowKeys[g_rowN++]; snprintf(r.key, sizeof r.key, "%s", key); r.state = 0; r.rowHits = r.elseHits = r.n = 0; r.last = -1e9; r.perFrame = 0; r.multi = false; return &r;
 }
 static bool RowBandCopy(int which) {
     ID3D10Texture2D* lt = PromptLayerTex(); if (!lt) return false;
@@ -1098,7 +1098,14 @@ static void RowAfter() {
         r.state == 1 ? "drawn only in the prompt row - moves with the hand" : r.state == 2 ? "drawn elsewhere - left alone" : "drawn in the prompt row and elsewhere - moves only beside prompt pieces",
         x1 >= 0 ? "at" : "outside the prompt area,", fx0, fx1, fy0, fy1, r.rowHits, r.elseHits);
 }
-static void RowFrameEnd() { memcpy(g_rowAnchorPrev, g_rowAnchorCur, sizeof g_rowAnchorPrev); memset(g_rowAnchorCur, 0, sizeof g_rowAnchorCur); }
+static void RowFrameEnd() {
+    memcpy(g_rowAnchorPrev, g_rowAnchorCur, sizeof g_rowAnchorPrev); memset(g_rowAnchorCur, 0, sizeof g_rowAnchorCur);
+    for (int i = 0; i < g_rowN; ++i) {   // drawn more than once in a frame (a glow behind several icons / counters): shared
+        RowKey& r = g_rowKeys[i];
+        if (r.perFrame >= 2 && !r.multi) { r.multi = true; LOG("UI prompt row: %s drawn %d times in a frame - each draw moves only beside prompt pieces", r.key, r.perFrame); }
+        r.perFrame = 0;
+    }
+}
 static void RowShift() {
     UINT n = 1; D3D10_VIEWPORT vp; g_vtDev->RSGetViewports(&n, &vp);
     if (n && t_RSSetVP) { g_pIconVp = vp; vp.TopLeftX += g_pIconDx; vp.TopLeftY += g_pIconDy; t_RSSetVP(g_vtDev, 1, &vp); g_pIconRestore = true; }
@@ -1107,11 +1114,12 @@ static void RowDraw(const char* key, int ord, bool handIcon) {
     if (ord >= 0 && ord < 512 && handIcon) g_rowAnchorCur[ord] = 1;
     if (handIcon) return;   // the hand print moves itself (PromptIconDraw)
     RowKey* r = RowFind(key); if (!r) return;
+    if (r->perFrame < 1000) ++r->perFrame;
     double now = NowMs();
     bool measure = r->state != 3 && r->n < 6 && now - r->last > 300.0 && g_rowPend < 0 && g_rowMeasures < 400 && g_pIconMeasure != 1;
     if (measure && RowBandCopy(0)) { ++r->n; r->last = now; ++g_rowMeasures; g_rowPend = (int)(r - g_rowKeys); return; }   // drawn in place this once
-    if (r->state == 1) { if (ord >= 0 && ord < 512) g_rowAnchorCur[ord] = 1; RowShift(); return; }
-    if (r->state == 3 && ord > 0 && ord < 511 && (g_rowAnchorPrev[ord - 1] || g_rowAnchorPrev[ord + 1])) RowShift();
+    if (r->state == 1 && !r->multi) { if (ord >= 0 && ord < 512) g_rowAnchorCur[ord] = 1; RowShift(); return; }
+    if ((r->state == 3 || (r->state == 1 && r->multi)) && ord > 0 && ord < 511 && (g_rowAnchorPrev[ord - 1] || g_rowAnchorPrev[ord + 1])) RowShift();
 }
 static int g_drawPolicy(uintptr_t* sp, int slot) {
     if (g_cfg.uiMode == 2) {
@@ -4227,7 +4235,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 22: prompt row at the view centre (shared glows move only beside prompt pieces); predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 23: prompt row at the view centre (glows drawn several times move only beside prompt pieces); predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
