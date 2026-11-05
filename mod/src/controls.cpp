@@ -351,7 +351,10 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     g.bRightTrigger = poseFire ? (BYTE)lroundf(fminf(1.0f, R.trigger) * 255.0f) : 0;   // pose-guided fire needs tracked input; native vehicle/turret controls do not
     if (!g_c.macheteTrigger && MacheteSelected()) g.bRightTrigger = 0;   // machete: hits come from swinging it; the game's attack animation sways the camera
     // right grip: holster grab (weapon select) in a body zone, iron sight / reverse elsewhere
-    Zone z = headValid && g_vehMode == 0 ? RightHandZone(R, head) : Z_NONE;   // no holster grabs in a vehicle seat
+    // no holster grabs in a vehicle seat, nor in menus / loading screens (v234 test 36: a chest grab in the pause menu left
+    // the mod thinking the machete was out - the gun in the hand then got the machete's hand angles, twisted)
+    const bool inMenu = g_menuMap || g_loadingMap;
+    Zone z = headValid && g_vehMode == 0 && !inMenu ? RightHandZone(R, head) : Z_NONE;
     g_zoneNow = z != Z_NONE;
     bool grip = R.squeeze > (g_rGripDown ? 0.35f : 0.6f);
     // v212 monocular: with the map / GPS up (or the monocular out), a right-grip press away from the holster spots takes the
@@ -439,9 +442,9 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     if (R.btn2 && !g_bDown && L.squeeze > 0.6f) { g_bCombo = true; InterlockedExchange(&g_holsterReq, 1); xr::Haptic(1, 0.5f, 0.05f); LOG("controls: left grip + B - weapon away / back"); }
     if (g_bCombo) { if (!R.btn2) g_bCombo = false; g_bDown = R.btn2; g_bHoldFired = true; }
     if (R.btn2 && !g_bDown) { g_bTime = now; g_bHoldFired = false; }
-    if (R.btn2 && !g_bHoldFired && now - g_bTime >= (ULONGLONG)g_c.holdMs) { PulseBtn(XINPUT_GAMEPAD_RIGHT_THUMB, now); g_bHoldFired = true; }
+    if (R.btn2 && !g_bHoldFired && now - g_bTime >= (ULONGLONG)g_c.holdMs && !inMenu) { PulseBtn(XINPUT_GAMEPAD_RIGHT_THUMB, now); g_bHoldFired = true; }
     if (!R.btn2 && g_bDown && !g_bHoldFired && g_mono) { g_mono = false; LOG("controls: monocular away (weapon change)"); }
-    if (!R.btn2 && g_bDown && !g_bHoldFired) { g_mapOpen = false; g_cycle = (g_cycle + 1) & 3; PulseBtn(kSlots[g_cycle], now); InterlockedExchange(&g_selectReq, 1); }
+    if (!R.btn2 && g_bDown && !g_bHoldFired && !inMenu) { g_mapOpen = false; g_cycle = (g_cycle + 1) & 3; PulseBtn(kSlots[g_cycle], now); InterlockedExchange(&g_selectReq, 1); }   // B in a menu = back, not a weapon change
     g_bDown = R.btn2;
     for (auto& p : g_pulse) if (p.until > now) b |= p.btn;
     if (g_usePulse > now) b |= XINPUT_GAMEPAD_Y;           // a hand touched the interaction target
