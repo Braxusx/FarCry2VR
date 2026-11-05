@@ -1594,6 +1594,35 @@ static bool PatchByte(uintptr_t at, const uint8_t* expect, size_t n, size_t inde
     VirtualProtect(p + index, 1, old, &old); FlushInstructionCache(GetCurrentProcess(), p + index, 1);
     return true;
 }
+// v234: malaria. The player's malaria component update (Steam 0x106A9130 / GOG 0x1069B820, thiscall, float dt) is called
+// from one site (Steam 0x106A94B0 / GOG 0x1069BBA0). Its fields: +0xE8 CurrentAttackType (0 = no attack), +0xEC
+// CurrentNbOfAttack, +0xF0 RemainingPills (4 = the game's own "unlimited pills" mode, set by its SetUnlimitedPills event),
+// +0xF4 TimeSinceLastAttack (counts up; the warning and the attack fire when it passes +0x104 (first) / +0x10C (later)).
+// MalariaAttacks=0 holds that clock at 0 between attacks, so no timed attack (or its warning) ever starts; scripted
+// story attacks are left alone. UnlimitedPills=1 keeps the pill count in the unlimited mode.
+typedef void (__fastcall *MalariaUpd_t)(uint8_t* comp, void* edx, float dt);
+static MalariaUpd_t o_MalariaUpd = nullptr; static bool s_noMalaria = false, s_pillsUnlimited = false;
+static void __fastcall Hook_MalariaUpd(uint8_t* comp, void* edx, float dt) {
+    if (comp && !IsBadWritePtr(comp + 0xE8, 0x10)) {
+        static int nl = 0;
+        if (s_noMalaria && *(int*)(comp + 0xE8) == 0) {
+            float& since = *(float*)(comp + 0xF4);
+            if (since != 0.0f && nl < 3) { ++nl; LOG("game fixes: malaria clock held at 0 (was %.0f s; first attack at %.0f s, later every %.0f s)", since, *(float*)(comp + 0x104), *(float*)(comp + 0x10C)); }
+            since = 0.0f;
+        }
+        if (s_pillsUnlimited) *(int*)(comp + 0xF0) = 4;
+    }
+    o_MalariaUpd(comp, edx, dt);
+}
+static bool RedirectCall(uintptr_t site, uintptr_t target, void* hook, void** orig) {
+    uint8_t* p = (uint8_t*)site;
+    if (!site || p[0] != 0xE8 || (uintptr_t)(p + 5) + *(int32_t*)(p + 1) != target) { LOG("patch %08x: unexpected call", (unsigned)site); return false; }
+    *orig = (void*)target;
+    DWORD old; VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &old);
+    *(int32_t*)(p + 1) = (int32_t)((uintptr_t)hook - (uintptr_t)(p + 5));
+    VirtualProtect(p, 5, old, &old); FlushInstructionCache(GetCurrentProcess(), p, 5);
+    return true;
+}
 static void InstallGameFixes() {
     const bool gog = gameaddr::Detect() == gameaddr::GOG;
     void* unused = nullptr;
@@ -1614,6 +1643,11 @@ static void InstallGameFixes() {
         uintptr_t at = A(0x1074E465); bool ok = at && PatchByte(at - 1, site, 6, 1, 0x14);
         LOG("game fixes: Jackal tape fix %s", ok ? "on" : "not applied");
     } else LOG("game fixes: Jackal tape fix off (JackalTapeFix=0)");
+    s_noMalaria = IniF("MalariaAttacks", 1) == 0; s_pillsUnlimited = IniF("UnlimitedPills", 0) != 0;
+    if (s_noMalaria || s_pillsUnlimited) {
+        bool ok = RedirectCall(A(0x106A94B0), A(0x106A9130), (void*)&Hook_MalariaUpd, (void**)&o_MalariaUpd);
+        LOG("game fixes: malaria - timed attacks %s, unlimited pills %s (%s)", s_noMalaria ? "off" : "on", s_pillsUnlimited ? "on" : "off", ok ? "applied" : "not applied");
+    }
 }
 static void InstallDevConsole() {
     if (!g_cfg.devConsole) return;
@@ -4274,7 +4308,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 27: prompt row placed from the HUD's vertex data (all HUD vertex buffers); predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 31: optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

@@ -131,6 +131,8 @@ static const uint32_t kGogMap[][2] = {
     { 0x1064EC50, 0x10640ED0 },
     { 0x106933E0, 0x10685AB0 },
     { 0x10693C00, 0x106862D0 },
+    { 0x106A9130, 0x1069B820 },   // malaria component update (v234)
+    { 0x106A94B0, 0x1069BBA0 },   // malaria update call site (v234)
     { 0x106C4E90, 0x106B7720 },   // pickup view check (diamond cases) (v234)
     { 0x106EFB40, 0x106E2420 },   // CGadgetMapStrategy::EquipMonocular (v213)
     { 0x1072C260, 0x1071ED80 },   // binoculars update (v216)
