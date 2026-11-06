@@ -5,9 +5,12 @@
 #include <cstddef>
 #include "common/pose_frame.h"
 #include "common/pose_authority.h"
+#include "common/headset_body_yaw.h"
 
 namespace arms {
 struct Config {
+    int bodyYawDiagnostics = 0;
+    int headsetBodyYaw = 0;       // HeadsetBodyYaw: opt-in native on-foot body follows tracked head yaw
     float twistFadeFrom = -1.0f, twistFadeTo = 0.0f;   // UpperArmTwistFadeFrom / To (v231): elbow bend (deg) where the upper-arm twist starts / is full
     float twistSmooth = 0.0f;
     float softIk = 0.0f;         // SoftIkStart (v231): share of the arm length where the shoulder starts easing toward the hand (0 = off)
@@ -112,6 +115,10 @@ struct Config {
 // Per-frame data from the render thread. "ref" = the recentred tracking frame (x right, y up, -z forward),
 // scaled to game units; game is the exact effective frame also used by the eyes.
 struct Frame {
+    fc2vr::body_yaw::Sample bodyYaw{};
+#if defined(FC2VR_BODY_YAW_TESTING)
+    bool bodyYawFixture=false;
+#endif
     bool valid = false, handValid = false;
     bool handAuthority = false, leftAuthority = false, headAuthority = false;
     fc2vr::authority::Stamp source{};
@@ -166,6 +173,9 @@ bool TakeRoomScaleMoved(float out[3]);                    // v231 render thread:
 bool MonoEquipped();   // v218: the game has the monocular out (in the hand)   // v217: something taggable is in the monocular's ring (the game's binoculars target)
 void MonoRenderFix(const float game[16], const float posed[16]);   // v216: move the drawn monocular with the scope camera (same frame)   // v215: the game's render camera world and the head-aimed scope camera world
 bool PlayerState(float pos[3], float* heading);   // player entity position and the game's heading (radians)
+void ResetBodyYaw();
+bool BodyYawBasis(float cameraYaw, bool onFoot, float& corrected, float& transferred, uint64_t& reference);
+uintptr_t BodyYawOwner();
 void RequestGiveThrowables();   // test: fill grenades and molotovs to the maximum (adds them if missing)
 // throwing arc for display: points in the ref frame (game units), landing surface normal (ref), ok = a throwable is ready
 int GetThrowArc(float (*pts)[3], int maxPts, bool& land, float normal[3], bool& ok);

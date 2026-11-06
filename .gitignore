@@ -6,3 +6,4 @@ launcher/payload/*.dll
 launcher/payload/*.exe
 *.o
 *.res
+__pycache__/

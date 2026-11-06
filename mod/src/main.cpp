@@ -27,6 +27,8 @@
 #include "perf.h"
 #include "hang.h"
 #include "dlss_fc2.h"
+#include "body_yaw_fixture.h"
+#include "grass_facing_dx10.h"
 namespace sounddiag { void Tick(); }
 #include "afw_fc2.h"
 #include "common/pose_frame.h"
@@ -160,6 +162,7 @@ static void MigrateIni() {
 }
 static void LoadConfig() {
     MigrateIni();
+    grass_facing::Configure(IniF("GrassHeadYawFix",0)!=0);
     g_cfg.enable     = (int)IniF("Enable", 1);
     g_cfg.worldScale = IniF("WorldScale", 1.0f);
     g_cfg.cullMargin = IniF("CullMargin", 1.25f);
@@ -396,6 +399,7 @@ struct Recenter { bool valid = false; V3 pos{}; V3 fwdH{ 0, 0, -1 }; V3 rightH{ 
 
 static void DoRecenter(const XrPosef& head) {
     if (!fc2vr::authority::FinitePosition(head) || !fc2vr::authority::FiniteOrientation(head)) return;
+    arms::ResetBodyYaw();
     V3 f = QRot(head.orientation, { 0, 0, -1 });
     V3 fh = Norm({ f.x, 0, f.z });
     g_ref.pos = ToV3(head.position);
@@ -472,6 +476,13 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
         if (riding) input.eligible = false;
     }
     GameBasis gb = BasisFromGameCam(rc);
+    {
+        float corrected=0,transferred=0;uint64_t reference=0;
+        const bool onFoot=controls::NormalControls() && controls::VehicleMode()==0 && !controls::MountedWeapon() && !g_riding;
+        if(arms::BodyYawBasis(atan2f(gb.F.y,gb.F.x),onFoot,corrected,transferred,reference)){
+            gb.F={cosf(corrected),sinf(corrected),0};gb.R={gb.F.y,-gb.F.x,0};
+        }
+    }
     {   // v231 camera on the body clock: the game's camera is one game frame behind the player's body (it moves by the
         // body's previous step), so the body, arms and weapon jitter by the frame-to-frame step difference. The body's
         // Camera bone from the latest skeleton update is where the camera will be next frame: use it.
@@ -675,7 +686,7 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateBuffer(ID3D10Device* d, const D3D10_
         }
     }
     HRESULT hr = o_CreateBuffer(d, bd, init, out);
-    if (SUCCEEDED(hr) && bd && (bd->BindFlags & D3D10_BIND_CONSTANT_BUFFER) && out && *out) cbcap::NoteBuffer(*out);
+    if (SUCCEEDED(hr) && bd && (bd->BindFlags & D3D10_BIND_CONSTANT_BUFFER) && out && *out) { grass_facing::Created(*out);cbcap::NoteBuffer(*out); }
     return hr;
 }
 static CreateRTV_t o_CreateRTV = nullptr;
@@ -1307,7 +1318,7 @@ typedef void (STDMETHODCALLTYPE *BufUnmap_t)(ID3D10Buffer*);
 static VSSetCB_t t_VSSetCB; static VSSetShader_t t_VSSetShader; static UpdSub_t t_UpdSub; static CreateVS_t o_CreateVS; static BufMap_t t_Map; static BufUnmap_t t_Unmap;
 static CRITICAL_SECTION cs; static bool csInit; static volatile int state;   // 0 idle, 1 armed (starts at next present), 2 capturing
 static int frames; static std::string out; static ID3D10Buffer* cb[16]; static void* curVS;
-struct MapRec { ID3D10Buffer* b; void* p; }; static MapRec maps[64];
+struct MapRec { ID3D10Buffer* b; void* p; D3D10_MAP type; }; static MapRec maps[64];
 struct VsCode { void* vs; std::string code; }; static std::vector<VsCode> vsCodes; static CRITICAL_SECTION vsCs; static bool vsInit;
 static void Put(char type, const void* a, uint32_t na, const void* b = nullptr, uint32_t nb = 0) {
     if (out.size() > (64u << 20)) return;
@@ -1322,27 +1333,49 @@ static void STDMETHODCALLTYPE I_VSSetCB(ID3D10Device* d, UINT start, UINT n, ID3
     t_VSSetCB(d, start, n, b);
 }
 static void STDMETHODCALLTYPE I_VSSetShader(ID3D10Device* d, ID3D10VertexShader* vs) { curVS = vs; t_VSSetShader(d, vs); }
-static void BufData(ID3D10Buffer* b, const void* data) {
+static void BufData(ID3D10Buffer* b, const void* data,char kind='B') {
     D3D10_BUFFER_DESC bd; b->GetDesc(&bd); if (!(bd.BindFlags & D3D10_BIND_CONSTANT_BUFFER) || bd.ByteWidth > 65536) return;
-    uint32_t h[2] = { (uint32_t)(uintptr_t)b, bd.ByteWidth }; EnterCriticalSection(&cs); Put('B', h, 8, data, bd.ByteWidth); LeaveCriticalSection(&cs);
+    uint32_t h[2] = { (uint32_t)(uintptr_t)b, bd.ByteWidth }; EnterCriticalSection(&cs); Put(kind, h, 8, data, bd.ByteWidth); LeaveCriticalSection(&cs);
 }
 static void STDMETHODCALLTYPE I_UpdSub(ID3D10Device* d, ID3D10Resource* r, UINT sub, const D3D10_BOX* box, const void* data, UINT rp, UINT dp) {
-    if (On() && !box && data && r) { D3D10_RESOURCE_DIMENSION dim; r->GetType(&dim); if (dim == D3D10_RESOURCE_DIMENSION_BUFFER) BufData((ID3D10Buffer*)r, data); }
+    alignas(16) BYTE corrected[1008];
+    if ((On() || grass_facing::Enabled()) && !box && data && r) {
+        D3D10_RESOURCE_DIMENSION dim;r->GetType(&dim);
+        if(dim==D3D10_RESOURCE_DIMENSION_BUFFER){
+            auto* b=(ID3D10Buffer*)r;D3D10_BUFFER_DESC desc{};b->GetDesc(&desc);
+#if defined(FC2VR_BODY_YAW_TESTING)
+            if(On() && grass_facing::Enabled())BufData(b,data,'N');
+#endif
+            if(grass_facing::Enabled() && desc.ByteWidth==sizeof corrected){memcpy(corrected,data,sizeof corrected);if(grass_facing::Patch(b,corrected))data=corrected;}
+            if(On())BufData(b,data);
+        }
+    }
     t_UpdSub(d, r, sub, box, data, rp, dp);
 }
 static HRESULT STDMETHODCALLTYPE I_Map(ID3D10Buffer* b, D3D10_MAP t, UINT f, void** pp) {
     HRESULT hr = t_Map(b, t, f, pp);
-    if (SUCCEEDED(hr) && pp && t != D3D10_MAP_READ) *pp = VbOnMap(b, (int)t, *pp);
-    if (On() && SUCCEEDED(hr) && pp && *pp && t != D3D10_MAP_READ) { EnterCriticalSection(&cs); for (auto& m : maps) if (!m.b || m.b == b) { m.b = b; m.p = *pp; break; } LeaveCriticalSection(&cs); }
+    if (SUCCEEDED(hr) && pp && t != D3D10_MAP_READ) *pp = VbOnMap(b, (int)t, *pp);   // v234: followed HUD buffers -> write-watched copy
+    if ((On() || grass_facing::Enabled()) && csInit && SUCCEEDED(hr) && pp && *pp && t != D3D10_MAP_READ) { EnterCriticalSection(&cs); for (auto& m : maps) if (!m.b || m.b == b) { m = { b, *pp, t }; break; } LeaveCriticalSection(&cs); }
     return hr;
 }
 static void STDMETHODCALLTYPE I_Unmap(ID3D10Buffer* b) {
+    void* p=nullptr;D3D10_MAP type=D3D10_MAP_READ;
+    if ((On() || grass_facing::Enabled()) && csInit) {
+        EnterCriticalSection(&cs);for(auto& m:maps)if(m.b==b){p=m.p;type=m.type;m.b=nullptr;break;}LeaveCriticalSection(&cs);
+        if(p){
+#if defined(FC2VR_BODY_YAW_TESTING)
+            if(On() && grass_facing::Enabled())BufData(b,p,'N');
+#endif
+            if(type==D3D10_MAP_WRITE_DISCARD)grass_facing::Patch(b,p);   // before VbOnUnmap forwards a redirected copy
+        }
+    }
     VbOnUnmap(b);
-    if (On()) { void* p = nullptr; EnterCriticalSection(&cs); for (auto& m : maps) if (m.b == b) { p = m.p; m.b = nullptr; break; } LeaveCriticalSection(&cs); if (p) BufData(b, p); }
+    if(p && On())BufData(b,p);
     t_Unmap(b);
 }
 static HRESULT STDMETHODCALLTYPE H_CreateVS(ID3D10Device* d, const void* code, SIZE_T n, ID3D10VertexShader** out_) {
     HRESULT hr = o_CreateVS(d, code, n, out_);
+    if(SUCCEEDED(hr) && out_ && *out_ && code)grass_facing::ShaderCreated(*out_,code,n);
     if (SUCCEEDED(hr) && out_ && *out_ && code && n < 262144) { if (!vsInit) { InitializeCriticalSection(&vsCs); vsInit = true; } EnterCriticalSection(&vsCs); vsCodes.push_back({ *out_, std::string((const char*)code, n) }); LeaveCriticalSection(&vsCs); }
     return hr;
 }
@@ -1380,6 +1413,7 @@ void Install(void** vt) {
 void HookCreateVS(void** vt) { DWORD o; VirtualProtect(&vt[79], 4, PAGE_EXECUTE_READWRITE, &o); o_CreateVS = (CreateVS_t)vt[79]; vt[79] = (void*)&H_CreateVS; VirtualProtect(&vt[79], 4, o, &o); }
 static long drawCalls[2];
 void OnDraw(uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t e, uint32_t f, void* rtv, int eye) {
+    grass_facing::Bound(curVS,0,16,cb);
     if (!On()) return;
     InterlockedIncrement(&drawCalls[(kind & 0x300) ? 1 : 0]);
     uint32_t h[8 + 8] = { kind, a, b, c, e, f, (uint32_t)(uintptr_t)curVS, (uint32_t)(uintptr_t)rtv | ((uint32_t)(eye & 3) << 30) };
@@ -1394,12 +1428,32 @@ void NoteBones(const float* W, const float* models, int n) {   // game thread, a
     Put('K', buf.data(), (uint32_t)buf.size()); LeaveCriticalSection(&cs);
 }
 void Arm(bool mocap) { if (state == 0) { lite = mocap; state = 1; LOG(mocap ? "mocap: armed (540 frames)" : "cbcap: armed (6 frames)"); ShowToast(mocap ? "Motion capture: 6 s" : "GPU capture: 6 frames"); } }
+#if defined(FC2VR_BODY_YAW_TESTING)
+static char fixtureCapturePath[MAX_PATH]{};
+void FixtureCapture() {
+    static char root[MAX_PATH]{};static bool init=false;
+    if(!init){init=true;const DWORD length=GetEnvironmentVariableA("FC2VR_GRASS_CAPTURE_DIR",root,MAX_PATH);if(length>=MAX_PATH)root[0]=0;}
+    const auto& test=body_yaw_fixture::current;
+    if(!root[0] || !test.configured)return;
+    const auto phase=test.sequence/100000;
+    static unsigned long long last=0;static uint64_t since=0;static bool done=false;
+    if(phase!=last){last=phase;since=GetTickCount64();done=false;}
+    if(!((phase>=2 && phase<=7) || phase==14 || phase==15 || phase==16) || done || state || GetTickCount64()-since<1000)return;
+    snprintf(fixtureCapturePath,sizeof fixtureCapturePath,"%s/phase-%llu/",root,phase);
+    if(!CreateDirectoryA(fixtureCapturePath,nullptr) && GetLastError()!=ERROR_ALREADY_EXISTS){LOG("grass capture: directory failed %lu",GetLastError());return;}
+    Arm(false);done=true;
+}
+#endif
 void Present(const char* iniDir) {   // render thread, each present
     if (state == 1) { EnterCriticalSection(&cs); out.clear(); frames = 0; for (auto& m : maps) m.b = nullptr; LeaveCriticalSection(&cs); state = 2; }
     if (state != 2) return;
     double t = NowMs(); uint32_t h[3] = { (uint32_t)frames, 0, 0 }; memcpy(&h[1], &t, 8);
-    EnterCriticalSection(&cs); Put('F', h, 12); if (lite && mxValid) Put('X', mx, sizeof mx); mxValid = false; LeaveCriticalSection(&cs);
-    if (++frames <= (lite ? 540 : 6)) return;
+    EnterCriticalSection(&cs); Put('F', h, 12); if (mxValid) Put('X', mx, sizeof mx); mxValid = false; LeaveCriticalSection(&cs);
+    int limit=lite?540:6;
+#if defined(FC2VR_BODY_YAW_TESTING)
+    if(fixtureCapturePath[0]){iniDir=fixtureCapturePath;limit=2;}
+#endif
+    if (++frames <= limit) return;
     state = 3;
     // vertex shaders used
     std::vector<void*> used; size_t i = 0;
@@ -3578,6 +3632,19 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             const XrPosef& hv = fv.views[0].pose;
             V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
             put(af.headO, frame.ReferencePosition(mid)); put(af.headF, frame.ReferenceDirection(QRot(hv.orientation, { 0, 0, -1 }))); af.headValid = true;
+            float headYaw=0,corrected=0,transferred=0;uint64_t reference=0;
+            arms::BodyYawBasis(atan2f(frame.raw.F.y,frame.raw.F.x),false,corrected,transferred,reference);
+            af.bodyYaw={arms::BodyYawOwner(),reference,af.source.sequence,af.source.receivedMs,headYaw,false,false};
+            af.bodyYaw.tracked=af.headAuthority && fc2vr::body_yaw::HeadYaw(af.headF[0],af.headF[2],af.bodyYaw.headYaw);
+            af.bodyYaw.onFoot=controls::NormalControls() && controls::VehicleMode()==0 && !controls::MountedWeapon() && !g_riding;
+#if defined(FC2VR_BODY_YAW_TESTING)
+            if(body_yaw_fixture::current.configured){
+                const auto& test=body_yaw_fixture::current;
+                af.bodyYawFixture=true;af.bodyYaw.sequence=test.sequence;af.bodyYaw.receivedMs=test.received;
+                af.bodyYaw.tracked=test.tracked && fc2vr::body_yaw::HeadYaw(af.headF[0],af.headF[2],af.bodyYaw.headYaw);
+                af.bodyYaw.onFoot=af.bodyYaw.onFoot && test.allowed;
+            }
+#endif
         }
         // F2 (then 3 s) with the machete in hand: the right controller's tilt (up from level) and turn (inward from where the head
         // faces) at this moment is added to MacheteAngle / MacheteYaw and saved, so the pose you hold becomes the default
@@ -3682,6 +3749,14 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     xr::FrameViews fv;
     hang::Mark("xrWaitFrame/BeginFrame");
     bool begun = xr::BeginFrame(fv);
+#if defined(FC2VR_BODY_YAW_TESTING)
+    body_yaw_fixture::Update(fv,begun);
+    cbcap::FixtureCapture();
+    if(body_yaw_fixture::current.configured){
+        static uint64_t reset=~0ull;
+        if(reset!=body_yaw_fixture::current.reset){reset=body_yaw_fixture::current.reset;g_ref.valid=false;}
+    }
+#endif
     hang::Mark("VP: after BeginFrame");
     double tBegun = NowMs(); g_prof.wait += tBegun - tStart; if (g_detailLastWaitPtr) *g_detailLastWaitPtr = tBegun - tStart;
     perf::SetPhase(perf::P_HOOKMISC);
@@ -3712,7 +3787,12 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             }
         }
         UpdateHeightRef(head.position.y, NowMs());
-        controls::SetBodyForward(g_ref.fwdH.x, g_ref.fwdH.z, g_ref.valid);
+        // Publish once per frame; a temporary uncompensated publication here
+        // could make a concurrent input poll count the physical turn twice.
+        float corrected=0,transferred=0;uint64_t reference=0;
+        arms::BodyYawBasis(0,false,corrected,transferred,reference);
+        const float c=cosf(transferred),s=sinf(transferred);
+        controls::SetBodyForward(c*g_ref.fwdH.x+s*g_ref.fwdH.z,-s*g_ref.fwdH.x+c*g_ref.fwdH.z,g_ref.valid);
         if ((g_frame % 900) == 0) LOG("head: y=%.3f refY=%.3f -> view offset %+.3f m", head.position.y, g_ref.pos.y, head.position.y - g_ref.pos.y + g_cfg.heightOffset);
     }
     D3D10_TEXTURE2D_DESC bbd{};
@@ -3781,6 +3861,16 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     // Snapshot the unposed native camera and recenter state BEFORE publishing arms
     // or posing scope/cull/eye cameras. Stateful smoothing advances once per frame.
     const bool poseReady = begun && fv.valid && fv.positionValid && g_ref.valid;
+    {   // Read-only save-load observation, also available with an unworn HMD.
+        static bool announced=false;float position[3]{},heading=0;
+        if(!announced && controls::NormalControls() && controls::VehicleMode()==0 && arms::PlayerState(position,&heading)){
+            auto* native=(uint8_t*)(uintptr_t)(a4-4)+vp::RenderCam;
+            const float yaw=atan2f(F<float>(native,cam::World+20),F<float>(native,cam::World+16));
+            if(std::isfinite(yaw) && fabsf(fc2vr::body_yaw::Wrap(yaw-heading-fc2vr::body_yaw::Pi/2))<0.05f){
+                announced=true;LOG("native-save-ready: on-foot player and unposed camera aligned native=%.6f camera=%.6f",heading,yaw);
+            }
+        }
+    }
     float scopeO[3]{}, scopeD[3]{};
     arms::RayContext scopeContext;
     const bool monoScope = poseReady && g_scopeOn && controls::MonocularAtFace();
@@ -3809,7 +3899,14 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     }
     const PoseFrame frame = poseReady
         ? PreparePoseFrame(g_frame, (uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam, renderScope || renderStereo) : PoseFrame{};
+    if(!poseReady)grass_facing::Pose(0,0,false);
     if (poseReady) {   // arms/weapon/shots follow the controllers on every frame, scoped or not
+        float yaw=0,basis=0,transfer=0;uint64_t reference=0;
+        const V3 head=QRot(fv.views[0].pose.orientation,{0,0,-1});
+        const bool supported=arms::BodyYawBasis(0,false,basis,transfer,reference);
+        const V3 worldHead=frame.WorldDirection(head);
+        const bool facingValid=renderStereo && supported && fc2vr::body_yaw::HeadYaw(head.x,head.z,yaw);
+        grass_facing::Pose(yaw,atan2f(worldHead.y,worldHead.x),facingValid);
         uint8_t* rc0 = (uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam;
         SubmitArmsFrame(fv, rc0, frame);
         {   // v232 mocap 'X' record: this frame's poses (eyes are added in the eye loop)
@@ -4037,6 +4134,15 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 o_RenderViewport(self, edx, a1, a2, a3, (uint32_t)(uintptr_t)g_eyePos, (uint32_t)(uintptr_t)g_eyeSize,
                                  a6, a7, a8, a9, (uint32_t)(uintptr_t)g_eyeRT, (uint32_t)(uintptr_t)g_eyeDepth, a12, a13);
                 g_inEye = false; g_uiEye = -1; g_renderEye = -1;
+#if defined(FC2VR_BODY_YAW_TESTING)
+                if(body_yaw_fixture::current.configured){
+                    const auto& test=body_yaw_fixture::current;float position[3]{},heading=0,base=0,transfer=0;uint64_t reference=0;
+                    const bool have=arms::PlayerState(position,&heading);
+                    arms::BodyYawBasis(0,false,base,transfer,reference);
+                    const float* world=&F<float>(rc,cam::World);
+                    LOG("body-yaw-eye frame=%u sample=%llu yaw=%.3f pitch=%.3f roll=%.3f tracked=%d allowed=%d foot=%d eye=%d owner=%p native=%.6f transferred=%.6f expected=%.6f observed=%.6f have=%d reference=%llu",g_frame,test.sequence,test.yaw,test.pitch,test.roll,test.tracked,test.allowed,controls::NormalControls() && !g_riding,e,(void*)arms::BodyYawOwner(),heading,transfer,atan2f(dir.y,dir.x),atan2f(world[5],world[4]),have,(unsigned long long)reference);
+                }
+#endif
                 if (g_capState == 2 && e == 0) SaveTexBmp(g_eyeTex, "cap_eyeraw.bmp", 4);
                 if (g_uiIsolated[e]) { g_dev10->CopyResource(g_eyeTex, g_preUi); g_uiIsolated[e] = false; }   // UI-free eye image
                 if (g_eyeBindsOn) {
@@ -4796,6 +4902,8 @@ static void Install() {
         cc.sightOn = IniF("SightOnDistance", 0.25f); cc.sightOff = IniF("SightOffDistance", 0.35f);
         controls::Install(dunia, cc);
         arms::Config ac;
+        ac.bodyYawDiagnostics=(int)IniF("BodyYawDiagnostics",0);
+        ac.headsetBodyYaw=(int)IniF("HeadsetBodyYaw",0);
         ac.weaponInHand = (int)IniF("WeaponInHand", 1); ac.aimFromController = (int)IniF("AimFromController", 1);
         ac.dump = (int)IniF("DumpSkeleton", 0);
         ac.ik = (int)IniF("ArmIK", 1); ac.freeLeftHand = (int)IniF("FreeLeftHand", 1);

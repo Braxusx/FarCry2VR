@@ -150,6 +150,8 @@ static V234Opt g_v234Game[] = {
     { L"PredecessorMissions", "Predecessor missions", "Unlocks the 7 Intel predecessor missions (an anonymous phone call in the central town).", L"1", false, true },
     { L"BonusMachetes", "Bonus machetes", "Unlocks the Primitive and Homemade machetes: main menu > Options > Game > Machete Type.", L"1", false, true },
     { L"JackalTapeFix", "Jackal tape fix", "Fixes Jackal tape #9 repeating on the southern map (a patch 1.03 bug).", L"1", false, true },
+    { L"HeadsetBodyYaw", "Turn the body with your head", "Turning physically with the headset turns your character's body too (on foot). Steam version only.", L"0", false, false },
+    { L"GrassHeadYawFix", "Steady grass when turning", "Keeps grass from swinging around when you turn physically. Needs \"Turn the body with your head\". Steam version only.", L"0", false, false },
 };
 static V234Opt g_v234Hud[] = {
     { L"AmmoPanel", "Ammo counter on the gun", "Rounds in the clip and spare rounds, beside the gun in your right hand.", L"1", false, true },

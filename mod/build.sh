@@ -5,7 +5,9 @@ TC=${TC:?set TC to the llvm-mingw bin folder}
 cd "$(dirname "$0")"
 CXX=$TC/i686-w64-mingw32-clang++
 mkdir -p build
-$CXX -std=c++17 -O2 -Wall -Wno-unused-function -Wno-missing-braces \
+TEST_FLAGS=""
+if [ "$BODY_YAW_TESTING" = 1 ]; then TEST_FLAGS="-DFC2VR_BODY_YAW_TESTING=1"; fi
+$CXX $TEST_FLAGS -std=c++17 -O2 -Wall -Wno-unused-function -Wno-missing-braces \
   -I third_party/openxr_include \
   -shared -o build/dinput8.dll src/main.cpp src/xr.cpp src/perf.cpp src/hang.cpp src/controls.cpp src/arms.cpp src/dlss_fc2.cpp src/dlss_client.cpp src/afw_fc2.cpp src/gameaddr.cpp src/diag.cpp \
   -static -static-libgcc -static-libstdc++ \
