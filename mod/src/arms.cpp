@@ -293,6 +293,7 @@ static void* g_leftRigWeapon=nullptr;static DWORD g_leftRigTick=0;
 #if defined(FC2VR_BODY_YAW_TESTING)
 static M4 g_leftExpectedWorld;static void* g_leftObservedWeapon=nullptr;
 static uint64_t g_leftObservedSample=0,g_leftRigSample=0;static uint8_t* g_leftObservedEntity=nullptr;static DWORD g_leftObservedTick=0;
+static fc2vr::tracking::GameBasis g_leftRayBasis;
 #endif
 static void LeftWeaponAttachment();
 static M4 g_off0; static bool g_haveOff0 = false;               // the weapon's place in the hand when the hold was taken
@@ -815,6 +816,11 @@ static void Apply(uint8_t* skel) {
     if (!g_c.weaponInHand || !g_permOk) return;
     Frame f; Lock(); f = g_frame; Unlock();
     if (!f.valid) { InterlockedIncrement(&g_pd.noFrame); return; }
+    const int nativeLeft=g_slot[20];
+    const bool leftRig=fc2vr::hands::WeaponRig(f.weapon!=nullptr,f.map,controls::NormalControls(),
+        nativeLeft>=0 && nativeLeft<n && g_armMask[nativeLeft]);
+    const bool anatomicalItems=fc2vr::hands::leftHanded && !leftRig;
+    if(anatomicalItems)fc2vr::hands::AnatomicalItems(f);
     if (!f.handValid) { InterlockedIncrement(&g_pd.noHand); return; }
     // v232 precision: the world is ~3 km across and floats hold ~0.24 mm there. Every arm matrix product in world
     // coordinates rounded to that grid and the errors added up to 1-2 mm of noise per frame on the free hand and the
@@ -1147,9 +1153,6 @@ static void Apply(uint8_t* skel) {
         }
         else for (int k = 0; k < 3; ++k) fg[k] = tgt[k] - ar[k] * 0.02f - au[k] * 0.07f - ab[k] * 0.02f;   // support hand under the grip
     }
-    const int nativeLeft=g_slot[20];
-    const bool leftRig=fc2vr::hands::leftHanded && f.weapon && !f.map
-        && controls::NormalControls() && nativeLeft>=0 && nativeLeft<n && g_armMask[nativeLeft];
     M4 mirrorFrame=Am;for(int k=0;k<3;++k)mirrorFrame.m[3][k]=tgt[k];
     if(leftRig){
         M4 inverse;if(Inv(mirrorFrame,inverse)){
@@ -1193,7 +1196,7 @@ static void Apply(uint8_t* skel) {
       Lock(); if (g_shotWeapon != f.weapon) g_scopeTick = 0;
       g_shotSource = f.source; g_shotWeapon = f.weapon;
       for (int k = 0; k < 3; ++k) so[k] += O[k];
-      memcpy(g_shotO, so, 12); memcpy(g_shotF, sf, 12); memcpy(g_camFwdNow, cf, 12); g_shotValid = authority && !leftRig; memcpy(g_rayRefO, sr, 12); memcpy(g_rayRefD, sfr, 12);
+      memcpy(g_shotO, so, 12); memcpy(g_shotF, sf, 12); memcpy(g_camFwdNow, cf, 12); g_shotValid = authority && !leftRig && !anatomicalItems; memcpy(g_rayRefO, sr, 12); memcpy(g_rayRefD, sfr, 12);
       memcpy(g_camRefO, cro, 12); memcpy(g_camRefD, crd, 12); g_rayTick = GetTickCount(); Unlock(); }
     // rigid re-pose of both arm chains
     for (int i = 0; i < n && i < 512; ++i) if (g_armMask[i]) Bw[i] = Mul(Bw[i], Map);
@@ -1202,16 +1205,25 @@ static void Apply(uint8_t* skel) {
     // Move wrist subtrees, never swap skeleton bone identities or shoulders.
     const M4 calibratedGrip=Bw[rh];
     M4 leftPalmPose=calibratedGrip;
+    M4 supportPalmPose=calibratedGrip;
     float supportTarget[3]{};bool supportTargetValid=false;
     if(leftRig){
-        M4 inverseFrame,inverseLeft;
-        if(Inv(mirrorFrame,inverseFrame) && Inv(Bw[nativeLeft],inverseLeft)){
+        M4 inverseFrame,inverseLeft,inverseRight;
+        if(Inv(mirrorFrame,inverseFrame) && Inv(Bw[nativeLeft],inverseLeft) && Inv(Bw[rh],inverseRight)){
+            // Transfer the original support wrist's orientation as well as its
+            // position. Keeping the trigger wrist here twists the foregrip hand.
+            M4 supportRelative=Mul(Bw[nativeLeft],inverseFrame),mirroredSupport;
+            fc2vr::left_grip::Mirror(&supportRelative.m[0][0],2,&mirroredSupport.m[0][0]);
+            M4 rightSupport=Mul(mirroredSupport,mirrorFrame);
+            for(int k=0;k<3;++k)rightSupport.m[3][k]=fg[k];
+            supportPalmPose=rightSupport;
+            memcpy(supportTarget,fg,12);supportTargetValid=true;
             const M4 relative=Mul(calibratedGrip,inverseFrame);M4 mirrored;
             fc2vr::left_grip::Mirror(&relative.m[0][0],2,&mirrored.m[0][0]);
             leftPalmPose=Mul(mirrored,mirrorFrame);
             SubtreeXform(Bw,bones,n,nativeLeft,Mul(inverseLeft,leftPalmPose));
+            SubtreeXform(Bw,bones,n,rh,Mul(inverseRight,rightSupport));
         }
-        SubtreeXform(Bw,bones,n,rh,Translate(fg[0]-Bw[rh].m[3][0],fg[1]-Bw[rh].m[3][1],fg[2]-Bw[rh].m[3][2]));
     }
     // ---- IK: shoulders from the head, elbows solved, hands on their targets
     if (g_c.ik && f.headValid) {
@@ -1238,6 +1250,7 @@ static void Apply(uint8_t* skel) {
                 // left hand of that weapon's animation (e.g. shaped for a rifle's foregrip), which looked twisted on a
                 // free controller
                 M4 relLUse = g_relL;
+                if(leftRig)relLUse=g_relR; // the free support wrist is anatomically right
                 if (steadyL && !grabbing && g_curWeapon) {
                     static M4 freeL; static bool haveFreeL = false; static ULONGLONG tryT = 0;
                     ULONGLONG tn = GetTickCount64();
@@ -1282,6 +1295,7 @@ static void Apply(uint8_t* skel) {
                 leftFree = true;
                 SubtreeXform(Bw, bones, n, hand, D);
             }
+            if(leftRig && supportSide)supportPalmPose=Bw[hand];
             // Each arm turns with its own controller only: the clavicle and upper arm keep the body's (animated) orientation
             // instead of the right controller's, and the free left forearm takes the left controller's orientation, so
             // rolling one controller turns that hand and forearm together and never the other arm.
@@ -1618,6 +1632,13 @@ static void Apply(uint8_t* skel) {
             const auto point=f.game.ReferencePosition({origin[0]-O[0],origin[1]-O[1],origin[2]-O[2]});
             const auto forward=f.game.ReferenceDirection({direction[0],direction[1],direction[2]});
             Put3(g_rayRefO,point);Put3(g_rayRefD,forward);g_rayTick=GetTickCount();
+#if defined(FC2VR_BODY_YAW_TESTING)
+            // Readback must convert the ray through the same effective basis
+            // that published it, including body-clock correction. g_frame may
+            // already describe a newer render frame/recenter at observation.
+            g_leftRayBasis=f.game;
+            g_leftRayBasis.P.x+=O[0];g_leftRayBasis.P.y+=O[1];g_leftRayBasis.P.z+=O[2];
+#endif
         }else g_rayTick=0;
         Unlock();
         static DWORD lastRayLog=0;const auto now=GetTickCount();
@@ -1631,7 +1652,8 @@ static void Apply(uint8_t* skel) {
             auto read=[&](int index){M4 model;memcpy(model.m,bones[index].model,64);model.m[0][3]=model.m[1][3]=model.m[2][3]=0;model.m[3][3]=1;return Mul(model,W);};
             const M4 left=read(nativeLeft),right=read(rh);
             float palmError=0;for(int i=0;i<3;++i)for(int j=0;j<3;++j)palmError=fmaxf(palmError,fabsf(left.m[i][j]-leftPalmPose.m[i][j]));
-            LOG("left-weapon-rig sample=%llu leftBone=%d rightBone=%d left=%.6f,%.6f,%.6f weapon=%.6f,%.6f,%.6f right=%.6f,%.6f,%.6f support=%.6f,%.6f,%.6f authority=%d,%d palmError=%.6f",(unsigned long long)f.bodyYaw.sequence,nativeLeft,rh,left.m[3][0],left.m[3][1],left.m[3][2],calibratedGrip.m[3][0],calibratedGrip.m[3][1],calibratedGrip.m[3][2],right.m[3][0],right.m[3][1],right.m[3][2],supportTarget[0],supportTarget[1],supportTarget[2],f.handAuthority,f.leftAuthority,palmError);
+            float supportPoseError=0;for(int i=0;i<3;++i)for(int j=0;j<3;++j)supportPoseError=fmaxf(supportPoseError,fabsf(right.m[i][j]-supportPalmPose.m[i][j]));
+            LOG("left-weapon-rig sample=%llu leftBone=%d rightBone=%d left=%.6f,%.6f,%.6f weapon=%.6f,%.6f,%.6f right=%.6f,%.6f,%.6f support=%.6f,%.6f,%.6f authority=%d,%d palmError=%.6f supportPoseError=%.6f",(unsigned long long)f.bodyYaw.sequence,nativeLeft,rh,left.m[3][0],left.m[3][1],left.m[3][2],calibratedGrip.m[3][0],calibratedGrip.m[3][1],calibratedGrip.m[3][2],right.m[3][0],right.m[3][1],right.m[3][2],supportTarget[0],supportTarget[1],supportTarget[2],f.handAuthority,f.leftAuthority,palmError,supportPoseError);
         }
     }
 #endif
@@ -3468,13 +3490,13 @@ void ObserveLeftWeapon(int eye) {
     const auto* at=*(uint8_t**)(entity+0x78);if(!at || IsBadReadPtr(at,0x20))return;
     float d[3];for(int k=0;k<3;++k)d[k]=actual.m[3][k]-expected.m[3][k];
     float rotation=0;for(int i=0;i<3;++i)for(int j=0;j<3;++j)rotation=fmaxf(rotation,fabsf(actual.m[i][j]-expected.m[i][j]));
-    float muzzle[3]{},barrel[3]{},shot[3]{},aim[3]{},referenceOrigin[3]{},referenceDirection[3]{};int index=-1;Frame renderFrame;
+    float muzzle[3]{},barrel[3]{},shot[3]{},aim[3]{},referenceOrigin[3]{},referenceDirection[3]{};int index=-1;fc2vr::tracking::GameBasis rayBasis;
     const bool ray=BarrelRay(actual,weapon,muzzle,barrel,&index);
-    Lock();memcpy(shot,g_shotO,12);memcpy(aim,g_shotF,12);memcpy(referenceOrigin,g_rayRefO,12);memcpy(referenceDirection,g_rayRefD,12);renderFrame=g_frame;Unlock();
+    Lock();memcpy(shot,g_shotO,12);memcpy(aim,g_shotF,12);memcpy(referenceOrigin,g_rayRefO,12);memcpy(referenceDirection,g_rayRefD,12);rayBasis=g_leftRayBasis;Unlock();
     float muzzleError=0,barrelError=0;
     for(int k=0;k<3;++k){muzzleError+=(muzzle[k]-shot[k])*(muzzle[k]-shot[k]);barrelError+=(barrel[k]-aim[k])*(barrel[k]-aim[k]);}
-    const auto referenceWorld=renderFrame.game.Position(Read3(referenceOrigin));
-    const auto referenceForward=renderFrame.game.Direction(Read3(referenceDirection));
+    const auto referenceWorld=rayBasis.Position(Read3(referenceOrigin));
+    const auto referenceForward=rayBasis.Direction(Read3(referenceDirection));
     const float refPoint[3]={referenceWorld.x,referenceWorld.y,referenceWorld.z},refForward[3]={referenceForward.x,referenceForward.y,referenceForward.z};
     LOG("left-weapon-render sample=%llu eye=%d attachment=%d positionError=%.6f rotationError=%.6f muzzleReady=%d muzzle=%d muzzleError=%.6f barrelError=%.6f referenceError=%.6f referenceForwardError=%.6f",(unsigned long long)sample,eye,*(const int*)(at+0x1C),sqrtf(Dot3(d,d)),rotation,ray,index,sqrtf(muzzleError),sqrtf(barrelError),Dist(refPoint,muzzle),Dist(refForward,barrel));
 }

@@ -16,6 +16,7 @@ cases={
     'rendered gun position drift':re.sub(r'positionError=[0-9.]+','positionError=0.5',source),
     'rendered gun rotation drift':re.sub(r'rotationError=[0-9.]+','rotationError=0.5',source),
     'back-of-hand wrist pose':re.sub(r'palmError=[0-9.]+','palmError=1.0',source),
+    'wrong support wrist orientation':re.sub(r'supportPoseError=[0-9.]+','supportPoseError=1.0',source),
     'camera-offset shot origin':re.sub(r'muzzleError=[0-9.]+','muzzleError=0.25',source),
     'wrong barrel direction':re.sub(r'barrelError=[0-9.]+','barrelError=0.5',source),
     'missing native muzzle':source.replace('muzzleReady=1','muzzleReady=0'),

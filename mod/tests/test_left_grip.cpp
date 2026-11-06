@@ -23,6 +23,7 @@ int main(){
     const Matrix rightNeutral{{-.052f,-.180f,-.982f,0,-.999f,.010f,.051f,0,.001f,.984f,-.180f,0,0,0,0,1}};
     const Matrix leftNeutral{{.051f,-.179f,-.982f,0,.999f,.010f,.050f,0,.001f,-.984f,.180f,0,0,0,0,1}};
     Check(Error(Mirror(rightNeutral,2),leftNeutral)<.002f,"mirrored dominant wrist matches anatomical neutral left basis");
+    Check(Error(Mirror(leftNeutral,2),rightNeutral)<.002f,"mirrored support wrist matches anatomical neutral right basis");
     int rejectsOld=0;
     for(int degree=-720;degree<=720;degree+=5){
         const float angle=degree*.01745329252f;
@@ -46,6 +47,11 @@ int main(){
         Check(std::fabs(Det(leftHand)-1)<.00001f && std::fabs(Det(leftGun)-1)<.00001f,"proper rotations preserve mesh winding");
         const Matrix turn=Pose(-.4f,.2f),carried=Mul(grip,turn);
         Check(Error(Mul(leftGun,turn),Mul(WeaponMirror(gun,muzzleFrame),carried))<.00001f,"two-hand turn follows mirroring in the carried grip frame");
+        const Matrix supportPose=Pose(.9f,-.7f,.1f,.02f,-.3f);
+        const Matrix rightSupport=Mul(Mirror(supportPose,2),carried);
+        Check(std::fabs(Det(rightSupport)-1)<.00001f,"support wrist conversion preserves a proper rotation");
+        Check(Error(Mirror(Mirror(supportPose,2),2),supportPose)<.00001f,"support pose conversion is reversible");
+        Check(Error(rightSupport,Mul(hand,carried))>.2f,"support orientation is distinguishable from translated trigger wrist regression");
         float camera[3]={0,0,-1},native[3]={.04f,0,-1},barrel[3]={std::sin(angle),.2f,-std::cos(angle)},out[3];
         fc2vr::left_grip::Unit(native);fc2vr::left_grip::Unit(barrel);
         Check(fc2vr::left_grip::Spread(camera,native,barrel,out),"spread rotation is finite");

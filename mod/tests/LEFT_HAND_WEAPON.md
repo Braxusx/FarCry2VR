@@ -16,7 +16,13 @@ The dominant wrist uses a mirrored right-hand calibration in the native left
 bone basis; it does not reuse the original weapon's support-hand orientation.
 The gun's placement is reflected about its native muzzle center plane and the
 controller grip, with a proper rotation that preserves mesh winding. The right
-wrist follows the support target, and IK retains each anatomical shoulder.
+wrist uses the mirrored original support orientation at the foregrip target,
+and IK retains each anatomical shoulder. When released, the right support hand
+uses a right-wrist calibration. Map/radio/phone and other non-weapon arm poses
+keep their native anatomical controller layout rather than crossing the arms.
+This conversion is local to the arm solve; it does not change action mappings,
+raw XR authority stamps or the items' native attachments. Item poses cannot
+publish a weapon firing ray or inherit a two-hand weapon grip latch.
 The weapon is attached to the left-hand bone with the corresponding offset.
 Character meshes and finger shapes are not mirrored; free-hand cosmetic cleanup
 is outside this step. The native
@@ -69,8 +75,11 @@ The initial controller-routing prototype loaded Continue, and physical testing
 confirmed left-controller weapon movement and right-controller support grip.
 That test also exposed swapped dialog buttons and crossed arms. A subsequent
 test confirmed the dialog fix but reported the gun outside the left palm and
-misses at close range; reload remains untested. The current candidate revises
-the dominant grip and muzzle-based aim and requires a new physical test:
+misses at close range. Reload was subsequently confirmed working, as was the
+physical X button. That run reported a rightward SMG angle, crossed map/radio
+arms and an offset right support hand. The current candidate corrects the item
+arm layout and support-wrist orientation; the SMG angle is still unconfirmed
+against original right-handed calibration. It requires a new physical test:
 
 1. Hold/move/rotate the left controller; verify the weapon follows it and aiming
    remains aligned. Move the right controller independently.
@@ -82,6 +91,10 @@ the dominant grip and muzzle-based aim and requires a new physical test:
    the character's left hand holds the gun, and the arms do not cross.
 5. If available, compare SMG and RPG placement. Existing free-hand pose quirks
    observed in right-handed play are not acceptance blockers for this step.
+6. Open the map and radio, move each controller independently, then return to
+   the gun. Check for crossed arms, correctly placed items and restored left
+   weapon holding. Check the SMG/machine-gun right support wrist while gripping
+   and after release. The runtime keyboard hand toggle is not implemented yet.
 
 Do not infer acceptance of vehicles, map/phone/monocular, throwing, climbing or
 holsters from the on-foot weapon test. No changes from this branch belong in

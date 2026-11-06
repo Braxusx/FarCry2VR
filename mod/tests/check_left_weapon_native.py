@@ -20,6 +20,7 @@ def check_text(text):
         assert row['leftBone']=='56' and row['rightBone']=='81', 'unexpected native Steam hand bones'
         assert row['authority']=='0,0', 'visual fixture acquired controller action authority'
         assert float(row.get('palmError','inf'))<0.001, 'native left wrist retained a support-hand pose instead of mirrored dominant grip'
+        assert float(row.get('supportPoseError','inf'))<0.001, 'native right support wrist differs from the converted target orientation'
         vector=lambda key:tuple(map(float,row[key].split(',')))
         left=math.dist(vector('left'),vector('weapon'))
         right=math.dist(vector('right'),vector('support'))
