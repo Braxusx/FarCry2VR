@@ -2355,7 +2355,7 @@ static void SnapUpdate(uint8_t* playerEnt, float dt) {
 // +0xB8 UpLeft, +0xBC UpRight, +0xC0 DownLeft, +0xC4 DownRight (skeleton = graphic vt+0x78; bones [skel+0x20], count
 // [skel+0x2C], stride 0xA0, id +0, translation +0x80, model space). Published in the reference frame each frame.
 static float g_clkP[3], g_clkW[3], g_clkH[3]; static DWORD g_clkTick = 0;
-static float g_clkRel[9]; static bool g_clkRelOk = false;   // v234: P, W, H in the left controller's aim frame (R, U, B), same game frame
+static float g_clkRel[9]; static bool g_clkRelOk = false; static uint8_t* g_clkGfx = nullptr; static float g_clkModel[4][3]; static DWORD g_clkModelTick = 0;   // v234: P, W, H in the left controller's aim frame (R, U, B), same game frame
 static void MapClockUpdate(const Frame& f, uint8_t* pd, const std::function<void(const float*, float*)>& toRef) {
     if (!controls::MapOpen() || !pd || IsBadReadPtr(pd + 0x4F0, 8)) return;
     typedef uint8_t* (__fastcall *Get_t)(void* inv, void* edx);
@@ -2382,6 +2382,7 @@ static void MapClockUpdate(const Frame& f, uint8_t* pd, const std::function<void
     const float* M = (const float*)(gfx + 0x170);
     auto toW = [&](const float* m, float* w) { for (int k = 0; k < 3; ++k) w[k] = m[0] * M[k] + m[1] * M[4 + k] + m[2] * M[8 + k] + M[12 + k]; };
     float mid[3], top[3], right[3]; for (int k = 0; k < 3; ++k) { mid[k] = (dl[k] + dr[k]) * 0.5f; top[k] = mid[k] + (ul[k] - dl[k]); right[k] = dr[k]; }
+    Lock(); g_clkGfx = gfx; memcpy(g_clkModel[0], mid, 12); memcpy(g_clkModel[1], top, 12); memcpy(g_clkModel[2], dl, 12); memcpy(g_clkModel[3], dr, 12); g_clkModelTick = GetTickCount(); Unlock();   // v234: drawn from the render thread
     float wm[3], wt[3], wr[3], wl[3]; toW(mid, wm); toW(top, wt); toW(right, wr); toW(dl, wl);
     float rm[3], rt[3], rr[3], rl[3]; toRef(wm, rm); toRef(wt, rt); toRef(wr, rr); toRef(wl, rl);
     Lock(); for (int k = 0; k < 3; ++k) { g_clkP[k] = rm[k]; g_clkW[k] = rr[k] - rl[k]; g_clkH[k] = rt[k] - rm[k]; } g_clkTick = GetTickCount();
@@ -2393,6 +2394,8 @@ static void MapClockUpdate(const Frame& f, uint8_t* pd, const std::function<void
     Unlock();
     static bool once = false; if (!once) { once = true; float w = sqrtf(Dot3(g_clkW, g_clkW)), hh = sqrtf(Dot3(g_clkH, g_clkH)); LOG("map clock: map %.2f x %.2f (reference units)", w, hh); }
 }
+// v234: the map's graphic and its bottom-middle / top-middle / bottom-left / bottom-right points in model space
+bool MapClockModel(uint8_t*& gfx, float pts[4][3]) { if (!g_csInit) return false; Lock(); bool ok = g_clkGfx && g_clkModelTick && GetTickCount() - g_clkModelTick < 200; gfx = g_clkGfx; memcpy(pts, g_clkModel, sizeof g_clkModel); Unlock(); return ok; }
 bool MapClockHand(float rel[9]) { if (!g_csInit) return false; Lock(); bool ok = g_clkRelOk && g_clkTick && GetTickCount() - g_clkTick < 200; memcpy(rel, g_clkRel, 36); Unlock(); return ok; }
 bool MapClock(float p[3], float w[3], float h[3]) {
     if (!g_csInit) return false; Lock(); bool ok = g_clkTick && GetTickCount() - g_clkTick < 200; memcpy(p, g_clkP, 12); memcpy(w, g_clkW, 12); memcpy(h, g_clkH, 12); Unlock(); return ok; }

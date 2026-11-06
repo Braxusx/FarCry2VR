@@ -3917,14 +3917,14 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 V3 p0 = frame.LocalPosition({ cp[0], cp[1], cp[2] });
                 V3 xw = frame.LocalPosition({ cp[0] + cw[0], cp[1] + cw[1], cp[2] + cw[2] }) - p0;
                 V3 yh = frame.LocalPosition({ cp[0] + ch[0], cp[1] + ch[1], cp[2] + ch[2] }) - p0;
-                float rel[9]; const xr::HandState& lh = xr::Hand(0);
-                if (lh.aimValid && lh.gripValid && arms::MapClockHand(rel)) {   // from the controller as it is now (stays on the map while moving)
-                    const float k = sqrtf(Dot(xw, xw)) / fmaxf(1e-6f, sqrtf(cw[0] * cw[0] + cw[1] * cw[1] + cw[2] * cw[2]));   // ref units -> metres
-                    const XrQuaternionf& q = lh.aim.orientation;
-                    V3 ax = QRot(q, { 1, 0, 0 }), ay = QRot(q, { 0, 1, 0 }), az = QRot(q, { 0, 0, 1 });
-                    p0 = ToV3(lh.grip.position) + (ax * rel[0] + ay * rel[1] + az * rel[2]) * k;
-                    xw = (ax * rel[3] + ay * rel[4] + az * rel[5]) * k;
-                    yh = (ax * rel[6] + ay * rel[7] + az * rel[8]) * k;
+                // v234 test 47: the map's world matrix as it is drawn now, converted with this frame (the same one the eye
+                // cameras are posed with) - the game-thread conversion drifted while walking with the stick
+                uint8_t* mg = nullptr; float mp[4][3];
+                if (arms::MapClockModel(mg, mp) && mg && !IsBadReadPtr(mg + 0x170, 64)) {
+                    const float* M = (const float*)(mg + 0x170);
+                    auto loc = [&](const float* m) { V3 w{ m[0] * M[0] + m[1] * M[4] + m[2] * M[8] + M[12], m[0] * M[1] + m[1] * M[5] + m[2] * M[9] + M[13], m[0] * M[2] + m[1] * M[6] + m[2] * M[10] + M[14] };
+                        return frame.LocalPosition(frame.game.ReferencePosition(w)); };
+                    p0 = loc(mp[0]); xw = loc(mp[3]) - loc(mp[2]); yh = loc(mp[1]) - p0;
                 }
                 V3 xq = Norm(xw), yq = Norm(yh - xq * Dot(yh, xq)), zq = Cross(xq, yq);
                 V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
@@ -4538,7 +4538,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 46: map clock follows the hand; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 47: map clock from the drawn map; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
