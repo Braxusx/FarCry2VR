@@ -109,6 +109,7 @@ struct Config {
     int   mapClock = 1, mapClock24 = 0; float mapClockWidth = 0.07f, mapClockUp = 0.0f;
     int   noDesktopVsync = 1;   // v234: DesktopVsync=0
     int   gpuHandover = 1;      // v234 test 54: EndFrameWait=0
+    int   dxvk = 0;             // v234 test 57: Dxvk=1 - DXVK trial (bin\\dxvk\\dxgi.dll + d3d11.dll)
     int   mapHealth = 1; float mapHealthWidth = 0.06f, mapPanelGap = 0.004f;   // v234: health + syrettes beside the clock under the map   // v234: clock under the map   // v234: grenade counter by the left hand   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
     int   shadowMapSize = 2720;    // sun shadow cascade resolution (game: 2048 at Ultra High), max 2730, 0 = game's           // sun shadow cascades cover the whole VR view in cull mode 1   // hidden extra render area per side (fraction of the half-FOV) for screen-space reflections
     int   hangWatch = 1;            // freeze/crash reports (fc2vr_hang_N.txt/.dmp)
@@ -1661,13 +1662,62 @@ static bool RedirectCall(uintptr_t site, uintptr_t target, void* hook, void** or
 // through the interface the game asked for (IDXGIFactory1 is an IDXGIFactory). Falls back to the game's own call.
 typedef HRESULT (WINAPI *CreateFactory_t)(REFIID, void**);
 static CreateFactory_t* g_gameCreateFactory = nullptr;
+// v234 test 57: DXVK trial (ini Dxvk=1). DXVK's 32-bit dxgi.dll + d3d11.dll from bin\dxvk\ (loaded by full path when
+// the game makes its factory, not under the loader lock). The factory and the D3D10.1 device come from DXVK: the device is
+// made the way DXVK's own d3d10core does it (D3D11CoreCreateDevice on a DXVK adapter, then its ID3D10Device1). Windows'
+// d3d10_1.dll would never reach DXVK on its own (it uses the system D3D10.1 core).
+static bool g_dxvkWanted = false, g_dxvkOn = false;
+static HMODULE g_dxvkDxgi = nullptr, g_dxvkD3d11 = nullptr;
+static bool DxvkLoad() {
+    if (g_dxvkDxgi && g_dxvkD3d11) return true;
+    char p1[MAX_PATH], p2[MAX_PATH];
+    snprintf(p1, MAX_PATH, "%sdxvk\\dxgi.dll", g_dir); snprintf(p2, MAX_PATH, "%sdxvk\\d3d11.dll", g_dir);
+    g_dxvkDxgi = LoadLibraryExA(p1, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    g_dxvkD3d11 = g_dxvkDxgi ? LoadLibraryExA(p2, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH) : nullptr;
+    LOG("DXVK: %s -> %p, %s -> %p (error %lu)", p1, (void*)g_dxvkDxgi, p2, (void*)g_dxvkD3d11, GetLastError());
+    return g_dxvkDxgi && g_dxvkD3d11;
+}
 static HRESULT WINAPI Hook_CreateDXGIFactory(REFIID riid, void** out) {
+    if (g_dxvkWanted && DxvkLoad()) {
+        CreateFactory_t f = (CreateFactory_t)GetProcAddress(g_dxvkDxgi, "CreateDXGIFactory1");
+        HRESULT hr = f ? f(riid, out) : E_NOINTERFACE;
+        LOG("DXVK: game factory made by DXVK hr=%08lx", (unsigned long)hr);
+        if (SUCCEEDED(hr)) { g_dxvkOn = true; return hr; }
+    }
     IDXGIFactory1* f1 = nullptr;
     HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&f1);
     if (SUCCEEDED(hr) && f1) { hr = f1->QueryInterface(riid, out); f1->Release(); }
     LOG("DXGI: game factory made as DXGI 1.1 (for the GPU frame handover) hr=%08lx", (unsigned long)hr);
     if (SUCCEEDED(hr)) return hr;
     return (g_gameCreateFactory && *g_gameCreateFactory) ? (*g_gameCreateFactory)(riid, out) : hr;
+}
+typedef HRESULT (WINAPI *CreateDevice1_t)(IDXGIAdapter*, UINT, HMODULE, UINT, UINT, UINT, ID3D10Device1**);
+static CreateDevice1_t* g_gameCreateDevice1 = nullptr;
+static HRESULT WINAPI Hook_D3D10CreateDevice1(IDXGIAdapter* ad, UINT type, HMODULE sw, UINT flags, UINT level, UINT sdk, ID3D10Device1** out) {
+    if (g_dxvkOn && ad) {
+        typedef HRESULT (WINAPI *Core_t)(IDXGIFactory*, IDXGIAdapter*, UINT, HMODULE, UINT, const UINT*, UINT, UINT, ID3D11Device**, UINT*);
+        Core_t core = (Core_t)GetProcAddress(g_dxvkD3d11, "D3D11CoreCreateDevice");
+        IDXGIFactory* fac = nullptr; ad->GetParent(__uuidof(IDXGIFactory), (void**)&fac);
+        ID3D11Device* d11 = nullptr; const UINT fl = level;
+        HRESULT hr = core ? core(fac, ad, 0 /* D3D_DRIVER_TYPE_UNKNOWN */, nullptr, flags, &fl, 1, 7 /* D3D11_SDK_VERSION */, &d11, nullptr) : E_NOINTERFACE;
+        if (fac) fac->Release();
+        if (SUCCEEDED(hr) && d11) {
+            ID3D10Multithread* mt = nullptr;
+            if (SUCCEEDED(d11->QueryInterface(__uuidof(ID3D10Multithread), (void**)&mt)) && mt) { mt->SetMultithreadProtected(!(flags & D3D10_CREATE_DEVICE_SINGLETHREADED)); mt->Release(); }
+            struct IDxvkDev : IUnknown { virtual void STDMETHODCALLTYPE SetAPIVersion(UINT) = 0; virtual UINT STDMETHODCALLTYPE GetAPIVersion() = 0; };
+            static const GUID g1 = { 0x92a5d77b, 0xb6e1, 0x420a, { 0xb2, 0x60, 0xfd, 0xf7, 0x01, 0x27, 0x28, 0x27 } };
+            static const GUID g2 = { 0x92a5d77b, 0xb6e1, 0x420a, { 0xb2, 0x60, 0xfd, 0xd7, 0x01, 0x27, 0x28, 0x27 } };
+            IDxvkDev* dv = nullptr;
+            if ((SUCCEEDED(d11->QueryInterface(g1, (void**)&dv)) || SUCCEEDED(d11->QueryInterface(g2, (void**)&dv))) && dv) { dv->SetAPIVersion(10); dv->Release(); }
+            else LOG("DXVK: no API version interface");
+            hr = d11->QueryInterface(__uuidof(ID3D10Device1), (void**)out);
+            d11->Release();
+        }
+        LOG("DXVK: D3D10.1 device (flags %x, level %x) made by DXVK hr=%08lx", flags, level, (unsigned long)hr);
+        if (SUCCEEDED(hr)) return hr;
+        LOG("DXVK: falling back to the system D3D10.1 device");
+    }
+    return (g_gameCreateDevice1 && *g_gameCreateDevice1) ? (*g_gameCreateDevice1)(ad, type, sw, flags, level, sdk, out) : E_FAIL;
 }
 static bool PatchFactoryCall() {
     uint8_t* p = (uint8_t*)A(0x1042167D);
@@ -1676,6 +1726,15 @@ static bool PatchFactoryCall() {
     DWORD old; VirtualProtect(p, 6, PAGE_EXECUTE_READWRITE, &old);
     p[0] = 0xE8; *(int32_t*)(p + 1) = (int32_t)((uintptr_t)&Hook_CreateDXGIFactory - (uintptr_t)(p + 5)); p[5] = 0x90;
     VirtualProtect(p, 6, old, &old); FlushInstructionCache(GetCurrentProcess(), p, 6);
+    if (g_dxvkWanted) {   // "mov eax,[D3D10CreateDevice1]" (Steam 0x104216E4) -> "mov eax,Hook_D3D10CreateDevice1"
+        uint8_t* q = (uint8_t*)A(0x104216E4);
+        if (!q || q[0] != 0xA1) { LOG("DXVK: device patch: unexpected bytes - DXVK off"); g_dxvkWanted = false; return true; }
+        g_gameCreateDevice1 = *(CreateDevice1_t**)(q + 1);
+        VirtualProtect(q, 5, PAGE_EXECUTE_READWRITE, &old);
+        q[0] = 0xB8; *(uint32_t*)(q + 1) = (uint32_t)(uintptr_t)&Hook_D3D10CreateDevice1;
+        VirtualProtect(q, 5, old, &old); FlushInstructionCache(GetCurrentProcess(), q, 5);
+        LOG("DXVK trial on: device creation patched");
+    }
     return true;
 }
 // v234: indestructible buggy / hang glider (optional). Every health loss of a vehicle goes through
@@ -4590,7 +4649,8 @@ static void Install() {
     if (gameaddr::Detect() == gameaddr::GOG) LOG("GOG build: engine addresses translated from the Steam map");
     if (!g_cfg.enable) { LOG("disabled by config"); return; }
     InstallFramePacing();
-    if (g_cfg.gpuHandover) LOG("DXGI 1.1 factory patch: %d", PatchFactoryCall());
+    g_dxvkWanted = g_cfg.dxvk != 0;
+    if (g_cfg.gpuHandover || g_dxvkWanted) LOG("DXGI 1.1 factory patch: %d", PatchFactoryCall());
     bool ok1 = PatchJmp(A(eng::RenderViewport), eng::RenderViewportPrologue, (void*)&Hook_RenderViewport, (void**)&o_RenderViewport);
     bool ok2 = PatchJmp(A(eng::PresentWrapper), eng::PresentPrologue, (void*)&Hook_Present, (void**)&o_Present);
     static const uint8_t rfPrologue[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF0 };   // push ebp; mov ebp,esp; and esp,-16
@@ -4613,7 +4673,7 @@ static void Install() {
         ac.shoulderSide = IniF("ShoulderSide", 0.17f); ac.shoulderDown = IniF("ShoulderDown", 0.22f); ac.shoulderBack = IniF("ShoulderBack", 0.06f);
         ac.twoHandMaxSpan = IniF("TwoHandMaxSpan", 0.65f); ac.noIdleBreak = (int)IniF("NoIdleAnimation", 1);
         xr::SetHoldLostPose(IniF("HoldLostTracking", 1) != 0);
-        g_cfg.gpuHandover = IniF("EndFrameWait", 0) == 0; xr::SetGpuHandover(g_cfg.gpuHandover != 0);
+        g_cfg.gpuHandover = IniF("EndFrameWait", 0) == 0; g_cfg.dxvk = (int)IniF("Dxvk", 0); xr::SetGpuHandover(g_cfg.gpuHandover != 0);
         g_cfg.grabDistance = IniF("GrabDistance", 0.15f);
         g_cfg.scopeInstant = (int)IniF("ScopeInstant", 1); g_cfg.scopeNeedsGrip = (int)IniF("ScopeNeedsGrip", 1);
         g_cfg.scopeGameReticle = (int)IniF("ScopeGameReticle", 1); g_cfg.scopeAmmoSize = IniF("ScopeAmmoSize", 0.28f);
@@ -4679,7 +4739,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
