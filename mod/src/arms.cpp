@@ -3283,7 +3283,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
             continue;
         }
         // an NPC (or a body) at the hand: take hold of the nearest body part
-        if (g_c.npcGrab && free && !(hnd && controls::RightHandInHolsterZone())) {
+        if (g_c.npcGrab && free && !(hnd && controls::WeaponHandInHolsterZone())) {
             uint8_t* nc = nullptr; float nd = 0;
             Handle* nh = FindNpc(hp, playerEnt, &nc, &nd);
             if (nh) {
@@ -3298,7 +3298,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
             }
         }
         // a building at the hand: hold on to it (climbing)
-        if (g_c.climbing && !(hnd && controls::RightHandInHolsterZone()) && ClimbProbe(hp, hr, hb, hnd, playerEnt)) {
+        if (g_c.climbing && !(hnd && controls::WeaponHandInHolsterZone()) && ClimbProbe(hp, hr, hb, hnd, playerEnt)) {
             g_climb[hnd].on = true; memcpy(g_climb[hnd].anchor, hp, 12); memcpy(g_climb[hnd].now, hp, 12); g_climb[hnd].gen = ++g_climbGen;
             RoleHaptic(hnd, 0.5f, 0.05f);
             LOG("climb: %s hand holds on", hnd ? "right" : "left");
@@ -3308,7 +3308,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
         // decides whether something is in reach. Not for the left hand holding the gun, not for holster grabs.
         if (!g_c.gripInteract) continue;   // interact is on X (GripInteract=0)
         if (!hnd && !free) continue;
-        if (hnd && controls::RightHandInHolsterZone()) continue;
+        if (hnd && controls::WeaponHandInHolsterZone()) continue;
         g_useRequest = true; if (g_useCallback) g_useCallback();
         LOG("hands: %s grip -> interact", hnd ? "right" : "left");
     }

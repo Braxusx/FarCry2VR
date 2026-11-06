@@ -86,16 +86,19 @@ static const WORD kSlots[4] = { XINPUT_GAMEPAD_DPAD_LEFT /*primary*/, XINPUT_GAM
 static XINPUT_GAMEPAD g_last{}; static DWORD g_packet = 1;
 static int g_lastZoneLogged = -1;
 
-static Zone RightHandZone(const xr::HandState& r, const XrPosef& head) {
+static Zone WeaponHandZone(const xr::HandState& r, const XrPosef& head) {
     if (!r.gripValid) return Z_NONE;
     V hf = Rot(head.orientation, { 0, 0, -1 });
     float hl = sqrtf(hf.x * hf.x + hf.z * hf.z); if (hl < 1e-4f) return Z_NONE;
     V fwd{ hf.x / hl, 0, hf.z / hl }, right{ -fwd.z, 0, fwd.x };
     V d{ r.grip.position.x - head.position.x, r.grip.position.y - head.position.y, r.grip.position.z - head.position.z };
     float f = d.x * fwd.x + d.z * fwd.z, rt = d.x * right.x + d.z * right.z, up = d.y;
+    // Canonical weapon side: positive is right in right-handed mode and left
+    // in left-handed mode. Read the live layout, including F1 transitions.
+    if(fc2vr::hands::leftHanded)rt=-rt;
     V pointing = Rot(r.grip.orientation, { 0, 0, -1 });
-    if (f < g_c.shoulderFwd && up > g_c.shoulderUp && rt > 0.0f) return Z_SHOULDER;          // reach over the right shoulder
-    if (up < g_c.hipUp && pointing.y < -0.55f) return Z_HIP;                                // hand low, pointing down
+    if (f < g_c.shoulderFwd && up > g_c.shoulderUp && rt > 0.0f) return Z_SHOULDER;          // reach over the weapon-side shoulder
+    if (up < g_c.hipUp && pointing.y < -0.55f && rt > 0.0f) return Z_HIP;                    // weapon-side hip, pointing down
     if (up < g_c.chestUpMax && up > g_c.chestUpMin && f > -0.05f && f < 0.35f && fabsf(rt) < 0.2f) return Z_CHEST;
     return Z_NONE;
 }
@@ -356,8 +359,8 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     if (R.stickClick) b |= XINPUT_GAMEPAD_LEFT_SHOULDER;   // right stick click: syrette (heal yourself)
     g.bRightTrigger = poseFire ? (BYTE)lroundf(fminf(1.0f, R.trigger) * 255.0f) : 0;   // pose-guided fire needs tracked input; native vehicle/turret controls do not
     if (!g_c.macheteTrigger && MacheteSelected()) g.bRightTrigger = 0;   // machete: hits come from swinging it; the game's attack animation sways the camera
-    // right grip: holster grab (weapon select) in a body zone, iron sight / reverse elsewhere
-    Zone z = headValid && g_vehMode == 0 ? RightHandZone(R, head) : Z_NONE;   // no holster grabs in a vehicle seat
+    // Weapon grip: holster grab on the weapon-hand side, iron sight / reverse elsewhere.
+    Zone z = headValid && g_vehMode == 0 ? WeaponHandZone(R, head) : Z_NONE;   // no holster grabs in a vehicle seat
     g_zoneNow = z != Z_NONE;
     bool grip = R.squeeze > (g_rGripDown ? 0.35f : 0.6f);
     // v212 monocular: with the map / GPS up (or the monocular out), a right-grip press away from the holster spots takes the
@@ -452,7 +455,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     for (auto& p : g_pulse) if (p.until > now) b |= p.btn;
     if (g_usePulse > now) b |= XINPUT_GAMEPAD_Y;           // a hand touched the interaction target
     g.wButtons = b;
-    if (g_c.logZones && z != g_lastZoneLogged) { g_lastZoneLogged = z; LOG("controls: right hand zone %s", ZoneName(z)); }
+    if (g_c.logZones && z != g_lastZoneLogged) { g_lastZoneLogged = z; LOG("controls: %s weapon hand zone %s",fc2vr::hands::leftHanded?"left":"right", ZoneName(z)); }
 }
 
 static DWORD WINAPI Hook_GetState(DWORD idx, XINPUT_STATE* st) {
@@ -505,7 +508,7 @@ bool Active() { return g_active != 0; }
 bool MacheteSelected() { return g_cycle == 3; }
 bool MapOpen() { return g_mapOpen; }
 void SetSightsAllowed(bool a) { g_sightsAllowed = a; }
-bool RightHandInHolsterZone() { return g_zoneNow; }
+bool WeaponHandInHolsterZone() { return g_zoneNow; }
 bool SightsUp() { return g_active && g_sightOn; }
 void PulseUse() { g_usePulse = GetTickCount64() + 120; }
 void SetLeftGripClaimed(bool c) { g_leftClaimed = c; }

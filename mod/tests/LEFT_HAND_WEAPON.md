@@ -43,8 +43,11 @@ The weapon is attached to the left-hand bone with the corresponding offset.
 Character meshes and finger shapes are not mirrored; free-hand cosmetic cleanup
 is outside this step. The native
 attachment adapter is gated to the exact Steam image listed in BODY_YAW.md.
-Holster zone geometry is unchanged
-and should be tested/moved separately after weapon handling is accepted.
+Shoulder and hip holster zones follow the current weapon-hand side, including
+live F1 switches. The weapon controller reaches over its own shoulder for
+primary/special weapons or down at its own hip (pointing down) for the secondary.
+The opposite shoulder/hip does not activate those zones. The centre chest
+machete slot stays centred. Shoulder primary/special cycling is preserved.
 
 Build and run CTest as in [BODY_YAW.md](BODY_YAW.md). `hand_switch` checks key
 edges/focus/cancellation, nested/concurrent layout readers, old-lease rejection
@@ -54,6 +57,9 @@ button, haptic-index and authority selection in both modes. On Windows,
 services, without a game or input injection. It checks both modes for fire vs.
 reload, missing weapon tracking, physical stick locations, pause, sights and
 weapon-side haptics. `hand_attachment` checks conversion across 3,367 grip poses.
+`weapon_controls` also checks shoulder/hip side selection through head yaw, actual holster slot
+pulses and weapon-side haptics, support-hand rejection, lost tracking/vehicle
+gates and clearing stale holster zones/pulses during the F1 input reset.
 `left_grip` checks mirrored palm/handle contact, muzzle-center and forward
 invariants, two-hand rotation order, close-range ray parallax and spread
 rotation through full and nearly antiparallel turns.
@@ -125,10 +131,15 @@ against original right-handed calibration. It requires a new physical test:
    support grip, trigger fire/reload roles, unchanged sticks and face buttons.
    Check that holding F1 does not repeat and changing hand with a trigger/grip
    held requires release before firing, reload or a new foregrip grab.
+8. In each layout, use the weapon controller to grip over its matching shoulder
+   (primary/special), at its matching hip while pointing down (secondary), and
+   at centre chest (machete). Check the opposite shoulder/hip does not select
+   those weapons. Switch with F1, release controls to rearm, then repeat on the
+   other side. Physical holster acceptance is pending.
 
 Body yaw stopping with map/radio out is a separately reported eligibility issue;
 this runtime comparison does not change the body-yaw feature's mode policy.
 
 Do not infer acceptance of vehicles, map/phone/monocular, throwing, climbing or
-holsters from the on-foot weapon test. No changes from this branch belong in
+holsters from the on-foot weapon test alone. No changes from this branch belong in
 the separate upstream body-yaw PR.

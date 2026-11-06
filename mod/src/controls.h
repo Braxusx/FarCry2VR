@@ -11,7 +11,8 @@ struct Config {
     int   turnFull = 1;        // TurnFullSpeed: any left/right push of the right stick turns at full speed
     float snapTurn = 45.0f;    // SnapTurn: degrees per right-stick push (0 = smooth turning)
     int   holdMs = 400;        // ButtonHoldMs: B held this long = next throwable instead of next weapon
-    // holster zones, metres relative to the head (head-yaw frame)
+    // Holster zones, metres relative to the head (head-yaw frame).
+    // Shoulder/hip follow the selected weapon-hand side; chest stays centred.
     float shoulderFwd = -0.02f, shoulderUp = -0.20f;
     float hipUp = -0.45f;
     float chestUpMin = -0.55f, chestUpMax = -0.10f;
@@ -71,6 +72,6 @@ void SetRightHandFree(bool f);   // arms: nothing in the right hand (it may aim 
 void SetHandsAway(bool a);       // arms: the weapon is put away (left grip + B)
 int TakeMapLift();               // the map button was pressed with the weapon away: lift the holster lock
 int TakeWeaponSelect();           // a weapon was selected (holster grab or B)                // 0 on foot, 1 driving (driver seat), 2 other vehicle seat / mounted gun (from the game's action map)   // false: the sight button is not sent (unscoped weapons)
-bool RightHandInHolsterZone();   // the right hand is in a weapon holster zone   // the map (left Y) is out, as far as the controls know   // sticks go to the mod menu, not the game
+bool WeaponHandInHolsterZone(); // selected weapon-role hand is in a weapon holster zone
    // the last weapon slot chosen was the machete   // the weapon is held up to the face (iron sight / scope)   // press 'use' briefly (hand interaction)   // the left grip is holding the weapon (no 'use')
 }
