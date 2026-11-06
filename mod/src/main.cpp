@@ -3921,7 +3921,22 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 // cameras are posed with) - the game-thread conversion drifted while walking with the stick
                 uint8_t* mg = nullptr; float mp[4][3];
                 if (arms::MapClockModel(mg, mp) && mg && !IsBadReadPtr(mg + 0x170, 64)) {
-                    const float* M = (const float*)(mg + 0x170);
+                    float Mc[16]; memcpy(Mc, mg + 0x170, 64); const float* M = Mc;
+                    // test 48: the view follows the DRAWN body update (CameraOnBodyClock=2, one game step behind the newest);
+                    // the map's matrix is from the newest one - move it with the body from the newest update to the drawn one
+                    { float cl[3], Wl[16], cd[3], Wd[16];
+                      if (g_camBodyClock == 2 && arms::CamBoneRoot(cl, Wl, false) && arms::CamBoneRoot(cd, Wd, true)) {
+                          auto mul = [](const float* a, const float* b, float* o) { for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c) { float v = 0; for (int k = 0; k < 4; ++k) v += a[r * 4 + k] * b[k * 4 + c]; o[r * 4 + c] = v; } };
+                          // inverse of the newest skeleton world (rigid: transpose rotation, -t * R^T)
+                          float iW[16] = { Wl[0], Wl[4], Wl[8], 0, Wl[1], Wl[5], Wl[9], 0, Wl[2], Wl[6], Wl[10], 0, 0, 0, 0, 1 };
+                          float sx = Wl[0] * Wl[0] + Wl[1] * Wl[1] + Wl[2] * Wl[2];
+                          if (sx > 1e-6f && fabsf(sx - 1.0f) < 0.05f) {
+                              for (int c = 0; c < 3; ++c) iW[12 + c] = -(Wl[12] * iW[c] + Wl[13] * iW[4 + c] + Wl[14] * iW[8 + c]);
+                              float D[16], T[16]; mul(iW, Wd, D); mul(Mc, D, T);
+                              float dd = (T[12] - Mc[12]) * (T[12] - Mc[12]) + (T[13] - Mc[13]) * (T[13] - Mc[13]) + (T[14] - Mc[14]) * (T[14] - Mc[14]);
+                              if (dd < 0.5f * 0.5f) memcpy(Mc, T, 64);
+                          }
+                      } }
                     auto loc = [&](const float* m) { V3 w{ m[0] * M[0] + m[1] * M[4] + m[2] * M[8] + M[12], m[0] * M[1] + m[1] * M[5] + m[2] * M[9] + M[13], m[0] * M[2] + m[1] * M[6] + m[2] * M[10] + M[14] };
                         return frame.LocalPosition(frame.game.ReferencePosition(w)); };
                     p0 = loc(mp[0]); xw = loc(mp[3]) - loc(mp[2]); yh = loc(mp[1]) - p0;
@@ -4538,7 +4553,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 47: map clock from the drawn map; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 48: map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
