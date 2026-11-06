@@ -456,6 +456,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
 }
 
 static DWORD WINAPI Hook_GetState(DWORD idx, XINPUT_STATE* st) {
+    fc2vr::hands::ReadGuard handLayout;
     if (!st) return ERROR_BAD_ARGUMENTS;
     if (idx != 0) return g_active ? ERROR_DEVICE_NOT_CONNECTED : o_GetState ? o_GetState(idx,st) : ERROR_DEVICE_NOT_CONNECTED;
     xr::HandState h[2]; XrPosef head; bool headValid = false;
@@ -482,6 +483,7 @@ static DWORD WINAPI Hook_GetState(DWORD idx, XINPUT_STATE* st) {
     return ERROR_SUCCESS;
 }
 static DWORD WINAPI Hook_SetState(DWORD idx, XINPUT_VIBRATION* v) {
+    fc2vr::hands::ReadGuard handLayout;
     if (g_active && idx == 0) {
         if (v && g_c.rumble) xr::SetRumble((fc2vr::hands::leftHanded ? v->wRightMotorSpeed : v->wLeftMotorSpeed) / 65535.0f * g_c.rumble, (fc2vr::hands::leftHanded ? v->wLeftMotorSpeed : v->wRightMotorSpeed) / 65535.0f * g_c.rumble);
         return ERROR_SUCCESS;

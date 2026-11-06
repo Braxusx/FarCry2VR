@@ -1,11 +1,32 @@
 #pragma once
 #include <utility>
+#include <atomic>
+#include <cstdint>
+#include <mutex>
+#include <shared_mutex>
 
 // Physical XR indices remain 0=left, 1=right. Existing arm/interaction frames
 // use role indices 0=support, 1=weapon. Never remap the raw XR authority stamp.
 namespace fc2vr::hands {
-inline bool leftHanded = false; // configured once, before input hooks start
-inline void Configure(bool left) { leftHanded = left; }
+// Readers may nest through native callbacks. A live layout change only takes
+// the exclusive lock with try_lock: never stall the render thread on a game job.
+inline std::shared_mutex layoutMutex;
+inline thread_local unsigned readDepth=0;
+struct ReadGuard {
+    ReadGuard(){if(readDepth++==0)layoutMutex.lock_shared();}
+    ~ReadGuard(){if(--readDepth==0)layoutMutex.unlock_shared();}
+    ReadGuard(const ReadGuard&)=delete;ReadGuard& operator=(const ReadGuard&)=delete;
+};
+struct TryWriteGuard {
+    std::unique_lock<std::shared_mutex> lock{layoutMutex,std::defer_lock};
+    TryWriteGuard(){if(readDepth==0)(void)lock.try_lock();}
+    explicit operator bool()const{return lock.owns_lock();}
+};
+inline std::atomic<bool> leftHanded{false};
+inline std::atomic<uint64_t> layoutGeneration{1};
+// Startup, or with TryWriteGuard held after revoking the previous input lease.
+inline void Configure(bool left) { if(leftHanded.exchange(left)!=left)++layoutGeneration; }
+inline uint64_t Generation(){return layoutGeneration.load();}
 inline int Physical(int role) { return role < 0 ? role : role ^ int(leftHanded); }
 inline int Weapon() { return Physical(1); }
 inline int Support() { return Physical(0); }

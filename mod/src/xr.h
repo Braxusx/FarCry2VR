@@ -106,6 +106,7 @@ bool InputCurrent();
 bool HeadCurrent(const InputStamp& source);
 bool AcceptedInputCurrent(const InputStamp& source, int hand);   // accepted snapshot, not permission to refresh a raw pose
 void InvalidateForRecenter();   // render thread; invalidates leases and requires neutral controls again
+void InvalidateForHandChange(); // render thread; revoke leases and require neutral rearming
 void SetRumble(float left, float right);
 void SetHoldLostPose(bool on);   // HoldLostTracking: keep the last pose of a controller that loses tracking   // 0..1 per hand, applied every frame
 

@@ -27,6 +27,7 @@
 #include "dlss_fc2.h"
 #include "body_yaw_fixture.h"
 #include "common/hand_roles.h"
+#include "common/hand_switch.h"
 #include "grass_facing_dx10.h"
 namespace sounddiag { void Tick(); }
 #include "afw_fc2.h"
@@ -2689,7 +2690,7 @@ static void EuroUpdate(EuroPose& e, XrPosef& pose, float dt, bool valid) {
 static xr::HandState SmoothHand(int side, XrTime t) {
 #if defined(FC2VR_BODY_YAW_TESTING)
     xr::HandState visual;
-    if(fc2vr::hands::leftHanded && body_yaw_fixture::VisualHand(side,visual))return visual;
+    if(body_yaw_fixture::VisualHand(side,visual))return visual;
 #endif
     static EuroPose eg[2], ea[2]; static XrTime last[2] = { 0, 0 };
     xr::HandState h = xr::Hand(side);
@@ -2709,17 +2710,19 @@ static xr::HandState SmoothHand(int side, XrTime t) {
     return h;
 }
 static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFrame& frame) {
+    fc2vr::hands::ReadGuard handLayout;
     const float s = frame.worldScale;
     TurnMenu();
     MacheteMenu(fv);
     {   // controller pose for the arms/weapon and shots (game thread reads it)
-        arms::Frame af; const xr::HandState rh = SmoothHand(fc2vr::hands::Weapon(), fv.displayTime);
+        arms::Frame af; af.handLayout=fc2vr::hands::Generation();
+        const xr::HandState rh = SmoothHand(fc2vr::hands::Weapon(), fv.displayTime);
         xr::HandState physical[2]; XrPosef inputHead; bool inputHeadValid = false;
         const bool inputCurrent = xr::InputSnapshot(physical,inputHead,inputHeadValid,&af.source);
         af.handAuthority = inputCurrent && physical[fc2vr::hands::Weapon()].gripValid && physical[fc2vr::hands::Weapon()].aimValid;
         af.leftAuthority = inputCurrent && physical[fc2vr::hands::Support()].gripValid && physical[fc2vr::hands::Support()].aimValid;
 #if defined(FC2VR_BODY_YAW_TESTING)
-        if(fc2vr::hands::leftHanded && body_yaw_fixture::current.configured){af.handAuthority=false;af.leftAuthority=false;}
+        if(body_yaw_fixture::current.configured){af.handAuthority=false;af.leftAuthority=false;}
 #endif
         af.headAuthority = inputCurrent && inputHeadValid;
         af.weapon = arms::CurrentWeapon();
@@ -2860,6 +2863,21 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
 
 }
 
+static void WeaponHandHotkey() {
+    static fc2vr::hands::ToggleKey key;
+    static bool waitingToast=false;
+    DWORD foreground=0;GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
+    const bool plain=!(GetAsyncKeyState(VK_CONTROL)&0x8000) && !(GetAsyncKeyState(VK_SHIFT)&0x8000) && !(GetAsyncKeyState(VK_MENU)&0x8000);
+    key.Poll((GetAsyncKeyState(VK_F1)&0x8000)!=0,foreground==GetCurrentProcessId() && plain);
+    if(!key.pending){waitingToast=false;return;}
+    const int result=arms::TryToggleWeaponHand();
+    if(result==0){if(!waitingToast){ShowToast("Hand switch queued: finish reload / release held objects");waitingToast=true;}return;}
+    key.Complete();waitingToast=false;
+    if(result<0){ShowToast("Weapon hand switch unavailable for this game build");return;}
+    g_scopeOn=false;g_twoHandGrip=false;g_macheteCalAt=0;
+    ShowToast(fc2vr::hands::leftHanded?"Weapon hand: LEFT (F1)":"Weapon hand: RIGHT (F1)");
+}
+
 static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4,
         uint32_t a5, uint32_t a6, uint32_t a7, uint32_t a8, uint32_t a9, uint32_t a10, uint32_t a11, uint32_t a12, uint32_t a13) {
     static bool inside = false;
@@ -2935,6 +2953,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         head.position.z = 0.5f * (fv.views[0].pose.position.z + fv.views[1].pose.position.z);
         if (!g_ref.valid) { DoRecenter(head); g_refYTime = NowMs(); }
         Hotkeys(&head);
+        WeaponHandHotkey();
         {   // v222: recenter from the controllers - "Recentering 3, 2, 1" in front of the player, then the recenter
             static double rcAt = 0; static int rcShown = 0;
             if (controls::TakeRecenterRequest() && rcAt == 0) { rcAt = NowMs(); rcShown = 0; }

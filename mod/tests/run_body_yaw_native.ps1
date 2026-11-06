@@ -8,7 +8,8 @@ param(
     [switch]$GrassFix,
     [switch]$GrassMotion,
     [switch]$BodyOnly,
-    [switch]$LeftWeapon
+    [switch]$LeftWeapon,
+    [switch]$WeaponHandToggle
 )
 # Owned, bounded native test. Supply the existing source-built trial manifest.
 # Does not patch original game binaries or send save commands. Restores DLL/settings.
@@ -118,6 +119,28 @@ try{
     }
     if($writer.HasExited){throw 'Pose writer exited during test'}
     if($LeftWeapon){Set-Phase 17 palmInspection 0 0 0 1 1 2;Start-Sleep -Seconds 3}
+    if($WeaponHandToggle){
+        if(!$LeftWeapon){throw 'WeaponHandToggle run requires LeftWeapon as its initial checkpoint'}
+        $expectedLeft=1
+        foreach($phase in @(18,19,20,21)){
+            $expectedLeft=1-$expectedLeft
+            Set-Phase $phase ('handToggle'+$expectedLeft) 0 0 0 1 1 2
+            $before=@(Get-Content -LiteralPath $log|Select-String 'weapon-hand changed left=').Count
+            $identity=& $Probe --inspect-game-focus|ConvertFrom-Json
+            if($identity.pid -ne $gamePid){throw 'Toggle probe selected another process'}
+            & $Probe --weapon-hand-toggle
+            if($LASTEXITCODE -ne 0){throw 'F1 probe failed'}
+            $until=[DateTime]::UtcNow.AddSeconds(15)
+            do{
+                $events=@(Get-Content -LiteralPath $log|Select-String 'weapon-hand changed left=')
+                if($events.Count -gt $before){break}
+                Start-Sleep -Milliseconds 100
+            }while([DateTime]::UtcNow -lt $until)
+            if($events.Count -ne $before+1 -or $events[-1] -notmatch "weapon-hand changed left=$expectedLeft "){throw 'F1 did not produce exactly one expected hand transition'}
+            Start-Sleep -Seconds 3
+            & $Probe --capture-window "$out/hand-$phase.png" *> "$out/capture-$phase.log"
+        }
+    }
     & $Probe --capture-window "$out/final.png" *> "$out/capture.log"
     'Native run completed; trace assertions still required.' | Set-Content "$out/run-completed.txt"
 }finally{

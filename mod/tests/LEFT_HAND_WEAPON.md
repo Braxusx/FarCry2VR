@@ -1,7 +1,18 @@
 # Left weapon-hand prototype
 
-Set `LeftHandedWeapon=1` in `[VR]` in `fc2vr.ini`, then restart. Default 0
-retains right-handed controls. This first step selects the physical left
+Set `LeftHandedWeapon=1` in `[VR]` in `fc2vr.ini` for a left-handed startup.
+Default 0 starts right-handed. Press **F1** while the game has keyboard focus
+to switch weapon hands at runtime (no modifiers, independent of `DevKeys`).
+The toast identifies the selected hand. This is a session-only comparison;
+it does not rewrite the startup setting. Release triggers, grips and buttons
+and centre sticks after switching, then press again normally. Pending actions,
+two-hand grip, shot/scope rays and role-specific histories are invalidated;
+the old native attachment is restored before changing layout. A switch defers
+during reload or while holding an object/NPC/climbing grip. Press F1 again to
+cancel a queued switch; losing game focus also cancels it. Unsupported images
+cannot enable the native left-hand adapter.
+
+Left-handed mode selects the physical left
 controller for weapon pose, aiming, firing and weapon haptics, and the physical
 right controller for support grip and reload. Face buttons keep their original
 physical mappings, including dialog confirmation. The left stick still moves/sprints and
@@ -11,6 +22,11 @@ Raw XR poses and authority stamps stay indexed by physical hand. Per-hand
 freshness, rearming and generation checks select the configured physical hand
 at each use, including deferred interaction and throw checks. Dropping weapon
 tracking cannot borrow the support controller's tracking.
+Native pose/input consumers share a reentrant read guard; the render-thread
+transition uses a nonblocking exclusive attempt. Layout generations reject old
+arm frames, and XR invalidation requires neutral rearming before new actions.
+The muzzle observer is installed on the supported image even when starting
+right-handed, so F1 can enable left-handed play without restarting.
 
 The dominant wrist uses a mirrored right-hand calibration in the native left
 bone basis; it does not reuse the original weapon's support-hand orientation.
@@ -30,7 +46,9 @@ attachment adapter is gated to the exact Steam image listed in BODY_YAW.md.
 Holster zone geometry is unchanged
 and should be tested/moved separately after weapon handling is accepted.
 
-Build and run CTest as in [BODY_YAW.md](BODY_YAW.md). `hand_roles` checks pose,
+Build and run CTest as in [BODY_YAW.md](BODY_YAW.md). `hand_switch` checks key
+edges/focus/cancellation, nested/concurrent layout readers, old-lease rejection
+and neutral rearming. `hand_roles` checks pose,
 button, haptic-index and authority selection in both modes. On Windows,
 `weapon_controls` executes the real gamepad mapper with stubbed XR/engine
 services, without a game or input injection. It checks both modes for fire vs.
@@ -64,6 +82,14 @@ python mod/tests/check_left_weapon_native.py <run directory>
 python mod/tests/test_left_weapon_native_rejections.py <run directory>
 ```
 
+Add `-WeaponHandToggle` to the runner (with `-LeftWeapon`) for four real F1
+presses through the owned native probe. Then run
+`check_hand_switch_native.py` and `test_hand_switch_native_rejections.py` on
+the run directory. They check both physical wrists, both-eye attachment chains,
+restoration of the original right-hand offset, advancing layout/input
+generations and unchanged body-yaw heading/reference. Controller fixtures stay
+visual-only in both modes; no synthetic fire/reload is sent.
+
 This checks actual Steam left/right bone readback against the weapon and
 reach-limited support targets and mirrored dominant-wrist orientation, plus
 attachment identity and gun world alignment after both eyes render. It also
@@ -94,7 +120,14 @@ against original right-handed calibration. It requires a new physical test:
 6. Open the map and radio, move each controller independently, then return to
    the gun. Check for crossed arms, correctly placed items and restored left
    weapon holding. Check the SMG/machine-gun right support wrist while gripping
-   and after release. The runtime keyboard hand toggle is not implemented yet.
+   and after release. The user accepted the right support grip as good enough.
+7. Press F1 for left/right/left comparison. Confirm hand/weapon placement,
+   support grip, trigger fire/reload roles, unchanged sticks and face buttons.
+   Check that holding F1 does not repeat and changing hand with a trigger/grip
+   held requires release before firing, reload or a new foregrip grab.
+
+Body yaw stopping with map/radio out is a separately reported eligibility issue;
+this runtime comparison does not change the body-yaw feature's mode policy.
 
 Do not infer acceptance of vehicles, map/phone/monocular, throwing, climbing or
 holsters from the on-foot weapon test. No changes from this branch belong in

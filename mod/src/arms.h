@@ -110,6 +110,7 @@ struct Config {
 // Per-frame data from the render thread. "ref" = the recentred tracking frame (x right, y up, -z forward),
 // scaled to game units; game is the exact effective frame also used by the eyes.
 struct Frame {
+    uint64_t handLayout=0;
     fc2vr::body_yaw::Sample bodyYaw{};
 #if defined(FC2VR_BODY_YAW_TESTING)
     bool bodyYawFixture=false;
@@ -135,6 +136,8 @@ void Install(uintptr_t base, const Config& c, PatchFn patch);
 void SetWeaponKey(uint32_t k);     // current weapon type id (HUD reticle element name), 0 = unknown
 void SetIniPath(const char* p);    // fc2vr.ini: saved weapon holds [Holds]
 void SubmitFrame(const Frame& f);
+// Render thread only. 1=changed, 0=retry (reader/interaction busy), -1=unsupported.
+int TryToggleWeaponHand();
 #if defined(FC2VR_BODY_YAW_TESTING)
 void ObserveLeftWeapon(int eye); // native readback after engine eye rendering
 #endif
