@@ -34,7 +34,6 @@ The physical anchor survives the mod's F8/controller recenter.
 The companion [shoulder fix](SHOULDERS.md) removes a hemisphere sign flip in
 upper-arm placement. That correction also applies when body yaw is disabled.
 A passive `native-save-ready` log marker supports the optional load helper.
-This feature does not add left-handed controls or change DLSS.
 
 ## CPU tests
 
