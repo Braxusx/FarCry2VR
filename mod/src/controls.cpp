@@ -24,6 +24,9 @@ bool FlashlightOn() { return g_flash; }
 float RightTriggerValue() { return g_rtValue; }
 
 static Config g_c;
+#if defined(FC2VR_BODY_YAW_TESTING)
+static bool g_fixtureInputBlocked=false;
+#endif
 typedef DWORD (WINAPI *XGetState_t)(DWORD, XINPUT_STATE*);
 typedef DWORD (WINAPI *XSetState_t)(DWORD, XINPUT_VIBRATION*);
 static XGetState_t o_GetState = nullptr;
@@ -458,6 +461,9 @@ static DWORD WINAPI Hook_GetState(DWORD idx, XINPUT_STATE* st) {
     xr::HandState h[2]; XrPosef head; bool headValid = false;
     xr::InputStamp stamp;
     bool have = g_c.enable && xr::InputSnapshot(h, head, headValid, &stamp) && (h[0].active || h[1].active);
+#if defined(FC2VR_BODY_YAW_TESTING)
+    if(g_fixtureInputBlocked){UpdateVehicleMode();have=false;} // retain native mode gates; keyboard menus only
+#endif
     if (!have) {
         const bool wasActive = InterlockedExchange(&g_active,0) != 0;
         if (wasActive || g_mappingGeneration) CancelPendingInput();
@@ -485,6 +491,9 @@ static DWORD WINAPI Hook_SetState(DWORD idx, XINPUT_VIBRATION* v) {
 
 void Install(HMODULE dunia, const Config& c) {
     g_c = c; g_base = (uintptr_t)dunia;
+#if defined(FC2VR_BODY_YAW_TESTING)
+    g_fixtureInputBlocked=GetEnvironmentVariableA("FC2VR_BODY_YAW_TEST_FILE",nullptr,0)>1;
+#endif
     if (!c.enable) { LOG("controls: motion controls off"); return; }
     bool a = PatchIat(dunia, "XINPUT1_3.dll", 2, (void*)&Hook_GetState, (void**)&o_GetState);
     bool b = PatchIat(dunia, "XINPUT1_3.dll", 3, (void*)&Hook_SetState, (void**)&o_SetState);

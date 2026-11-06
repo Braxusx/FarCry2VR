@@ -19,6 +19,7 @@ def check_text(text):
             continue
         assert row['leftBone']=='56' and row['rightBone']=='81', 'unexpected native Steam hand bones'
         assert row['authority']=='0,0', 'visual fixture acquired controller action authority'
+        assert float(row.get('palmError','inf'))<0.001, 'native left wrist retained a support-hand pose instead of mirrored dominant grip'
         vector=lambda key:tuple(map(float,row[key].split(',')))
         left=math.dist(vector('left'),vector('weapon'))
         right=math.dist(vector('right'),vector('support'))
@@ -44,6 +45,11 @@ def check_text(text):
                 position=float(row['positionError']);rotation=float(row['rotationError'])
                 assert math.isfinite(position) and position<0.03, f'phase {phase} eye {eye}: rendered gun position error {position} m'
                 assert math.isfinite(rotation) and rotation<0.03, f'phase {phase} eye {eye}: rendered gun orientation error {rotation}'
+                assert row.get('muzzleReady')=='1', 'no owned native muzzle readback'
+                assert float(row.get('muzzleError','inf'))<0.03, 'shot origin misses rendered muzzle'
+                assert float(row.get('barrelError','inf'))<0.01, 'shot direction misses rendered barrel'
+                assert float(row.get('referenceError','inf'))<0.03, 'reticle/scope ray misses world muzzle after reference conversion'
+                assert float(row.get('referenceForwardError','inf'))<0.01, 'reticle/scope direction misses world barrel'
     return len(rows),max(r[1] for r in rows),max(r[2] for r in rows)
 
 if __name__=='__main__':

@@ -117,6 +117,7 @@ try{
         Set-Phase 16 continuousHeadTurn 0 0 0 1 1 2;Start-Sleep -Seconds 8
     }
     if($writer.HasExited){throw 'Pose writer exited during test'}
+    if($LeftWeapon){Set-Phase 17 palmInspection 0 0 0 1 1 2;Start-Sleep -Seconds 3}
     & $Probe --capture-window "$out/final.png" *> "$out/capture.log"
     'Native run completed; trace assertions still required.' | Set-Content "$out/run-completed.txt"
 }finally{
