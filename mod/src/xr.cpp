@@ -284,7 +284,7 @@ static void Sync10Wait() {
 // on the GPU for our copies. The render thread no longer waits for the GPU. EndFrameWait=1: it also waits as before.
 static bool g_gpuHandover = false;   // ini EndFrameWait=0
 static double g_hoMs = 0, g_hoMax = 0; static int g_hoN = 0; static bool g_hoLastGpu = false;
-static EyeFilter g_eyeFilter = nullptr; static bool g_copyBack = false;
+static EyeFilter g_eyeFilter = nullptr; static bool g_copyBack = false, g_plainSharing = false;
 // after our D3D11 work on the shared textures: give them back to D3D10
 static void HandoverDone() {
     for (Shared& s : g_shared) if (s.km11 && s.held11) { s.km11->ReleaseSync(0); s.held11 = false; }
@@ -297,7 +297,7 @@ static void Sync10() {
     HandoverDone();
     double t0 = QpcMs();
     // DLSS / AFW move more textures between the devices (plain shared ones): those still need the GPU to be done
-    const bool wait = !g_gpuHandover || !g_kmOk || g_eyeFilter || g_copyBack;
+    const bool wait = !g_gpuHandover || !g_kmOk || g_plainSharing || g_copyBack;
     if (wait) Sync10Wait(); else g_dev10->Flush();
     for (Shared& s : g_shared) if (s.km10 && s.held10) { s.km10->ReleaseSync(1); s.held10 = false; }
     g_dev10->Flush();
@@ -1122,6 +1122,7 @@ void SetEyeFilter(EyeFilter f) { g_eyeFilter = f; }
 // the eye image, or what the filter (DLSS) made of it
 static ID3D11Query* g_copyQ = nullptr; static bool g_copyPending = false;
 void SetCopyBack(bool on) { g_copyBack = on; }
+void SetPlainSharing(bool on) { g_plainSharing = on; }
 ID3D10Texture2D* EyeTexture10(int e) { return (e == 0 || e == 1) ? g_shared[e].tex10 : nullptr; }
 // the D3D10 device may read the eye textures again once the D3D11 copy-backs of the last frame are done
 void WaitEyeCopies() {
