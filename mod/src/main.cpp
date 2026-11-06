@@ -7,6 +7,7 @@
 // finished, post-processed 3D image (the HUD is drawn later by Render2DView), which is copied
 // into a shared texture and submitted to OpenXR.
 #include <smmintrin.h>
+#include <x86intrin.h>
 #include <vector>
 #include <windows.h>
 #include <d3d10_1.h>
@@ -132,7 +133,7 @@ struct Config {
 static bool g_treeCache = false;
 static volatile LONG g_treeCacheHits = 0;
 static volatile LONG g_treeParked = 0, g_treeFreed = 0;
-static double g_treeMakeMs = 0, g_rfMs = 0;
+static double g_treeMakeMs = 0, g_rfMs = 0; static uint64_t g_rfCycles = 0;   // v234 test 59: render thread CPU cycles inside RenderFrame
 static volatile LONG g_resetSkips = 0, g_resetCalls = 0;
 static void TreeParkAge();
 
@@ -1670,6 +1671,10 @@ static bool g_dxvkWanted = false, g_dxvkOn = false;
 static HMODULE g_dxvkDxgi = nullptr, g_dxvkD3d11 = nullptr;
 static bool DxvkLoad() {
     if (g_dxvkDxgi && g_dxvkD3d11) return true;
+    {   // bin\dxvk\dxvk.conf (if present) is DXVK's config, e.g. dxgi.hideNvidiaGpu = False so the game sees the real GPU
+        char cf[MAX_PATH]; snprintf(cf, MAX_PATH, "%sdxvk\\dxvk.conf", g_dir);
+        if (GetFileAttributesA(cf) != INVALID_FILE_ATTRIBUTES) { SetEnvironmentVariableA("DXVK_CONFIG_FILE", cf); LOG("DXVK: config %s", cf); }
+    }
     char p1[MAX_PATH], p2[MAX_PATH];
     snprintf(p1, MAX_PATH, "%sdxvk\\dxgi.dll", g_dir); snprintf(p2, MAX_PATH, "%sdxvk\\d3d11.dll", g_dir);
     g_dxvkDxgi = LoadLibraryExA(p1, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
@@ -2277,7 +2282,9 @@ static void __fastcall Hook_RenderFrame(void* self) {
     perf::SetPhase(perf::P_RFPRE);
     Trace("RF>");
     if (g_capState == 2) TraceMark("RenderFrame begin");
+    ULONG64 cyc0 = 0; QueryThreadCycleTime(GetCurrentThread(), &cyc0);
     o_RenderFrame(self);
+    { ULONG64 cyc1 = 0; QueryThreadCycleTime(GetCurrentThread(), &cyc1); g_rfCycles += cyc1 - cyc0; }
     if (g_capState == 2) TraceMark("RenderFrame end");
     Trace("RF<");
     perf::SetPhase(perf::P_MID);
@@ -4348,6 +4355,18 @@ static void __fastcall Hook_Present(void* self, void* edx, int a1) {
     if (g_cfg.enable == 2 && g_haveDevice) {
         static double last = 0; static int n = 0; double now = NowMs();
         if (last > 0 && ++n >= 300) {
+            {   // v234 test 59: CPU-busy time of the render thread in RenderFrame (thread cycles; TSC rate measured against QPC),
+                // and the whole process's CPU time per frame (all threads, e.g. DXVK's worker threads), to tell CPU work from waiting
+                static uint64_t tsc0 = 0; static double q0 = 0; static ULONGLONG proc0 = 0;
+                uint64_t tsc = __rdtsc(); FILETIME c, e, k, u; GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u);
+                ULONGLONG proc = ((ULONGLONG)k.dwHighDateTime << 32 | k.dwLowDateTime) + ((ULONGLONG)u.dwHighDateTime << 32 | u.dwLowDateTime);
+                if (tsc0 && now > q0) {
+                    const double tscPerMs = (double)(tsc - tsc0) / (now - q0);
+                    LOG("FLAT CPU avg %d frames: render thread busy in RenderFrame %.2f ms (of %.2f ms) | whole process CPU %.2f ms per frame (%.1f cores busy) | %s",
+                        n, g_rfCycles / tscPerMs / n, g_rfMs / n, (proc - proc0) / 10000.0 / n, (proc - proc0) / 10000.0 / (now - last), g_dxvkOn ? "DXVK" : "native D3D10");
+                }
+                tsc0 = tsc; q0 = now; proc0 = proc; g_rfCycles = 0;
+            }
             LOG("FLAT avg %d frames: frame=%.2f ms renderFrame=%.2f ms | bufCreates=%ld (%.1f MB) treeMakes=%ld (%.2f ms/frame) cacheHits=%ld parked=%ld freed=%ld resets=%ld", n, (now - last) / n, g_rfMs / n, g_bufCreates, g_bufBytes / 1048576.0, g_treeMakes, g_treeMakeMs / n, g_treeCacheHits, g_treeParked, g_treeFreed);
             g_treeMakeMs = 0; g_rfMs = 0;
             g_treeParked = g_treeFreed = 0;
@@ -4740,7 +4759,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 58: Dxvk ini read before the device patch; v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 59: flat CPU-busy measurement, dxvk.conf; v234 test 58: Dxvk ini read before the device patch; v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
