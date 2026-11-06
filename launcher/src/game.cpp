@@ -500,4 +500,60 @@ std::wstring CollectLogs(const Game& g, std::string& err) {
     return zipPath;
 }
 
+// ---- v234: the game's video settings ----
+static std::wstring GameProfilePath() {
+    PWSTR docs = nullptr; std::wstring p;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &docs))) p = Join(docs, L"My Games\\Far Cry 2\\GamerProfile.xml");
+    if (docs) CoTaskMemFree(docs);
+    return p;
+}
+static bool ReadAll(const std::wstring& p, std::string& out) {
+    HANDLE h = CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    DWORD n = GetFileSize(h, nullptr), r = 0; out.resize(n);
+    bool ok = n == INVALID_FILE_SIZE ? false : (n == 0 || (ReadFile(h, &out[0], n, &r, nullptr) && r == n));
+    CloseHandle(h); return ok;
+}
+// the <RenderProfile ...> start tag: [b, e)
+static bool RenderTag(const std::string& x, size_t& b, size_t& e) {
+    b = x.find("<RenderProfile"); if (b == std::string::npos) return false;
+    e = x.find('>', b); return e != std::string::npos;
+}
+static bool GetAttr(const std::string& x, size_t b, size_t e, const char* name, std::string& v, size_t* vb = nullptr) {
+    std::string k = std::string(" ") + name + "=\"";
+    size_t p = x.find(k, b); if (p == std::string::npos || p > e) return false;
+    p += k.size(); size_t q = x.find('"', p); if (q == std::string::npos || q > e) return false;
+    v = x.substr(p, q - p); if (vb) *vb = p; return true;
+}
+ProfileCheck CheckGameProfile() {
+    ProfileCheck c; std::string x, v; size_t b, e;
+    std::wstring path = GameProfilePath();
+    if (path.empty() || !ReadAll(path, x) || !RenderTag(x, b, e)) return c;
+    c.found = true;
+    if (GetAttr(x, b, e, "Platform", v) && v.compare(0, 5, "d3d10") != 0) c.issues.push_back("DirectX 9 is selected: the VR mod needs DirectX 10.");
+    if (GetAttr(x, b, e, "MultiSampleMode", v) && v != "0") c.issues.push_back("Anti-aliasing is on: the VR mod needs it set to None.");
+    if (GetAttr(x, b, e, "VSync", v) && v != "0") c.issues.push_back("V-Sync is on: it can make the game stutter in VR.");
+    return c;
+}
+bool FixGameProfile(std::string& err) {
+    std::wstring path = GameProfilePath(); std::string x, v; size_t b, e;
+    if (path.empty() || !ReadAll(path, x) || !RenderTag(x, b, e)) { err = "Couldn't read the game's settings file (GamerProfile.xml)."; return false; }
+    if (GameRunning()) { err = "Close Far Cry 2 first: it rewrites its settings when it exits."; return false; }
+    CopyFileW(path.c_str(), (path + L".fc2vr-backup").c_str(), FALSE);
+    auto set = [&](const char* name, const char* val) {
+        size_t vb; if (!RenderTag(x, b, e) || !GetAttr(x, b, e, name, v, &vb)) return;
+        x.replace(vb, v.size(), val);
+    };
+    if (RenderTag(x, b, e) && GetAttr(x, b, e, "Platform", v) && v.compare(0, 5, "d3d10") != 0) {
+        set("Platform", "d3d10");
+        if (GetAttr(x, b, e, "Quality", v) && v == "custom") set("Quality", "customd3d10");
+    }
+    set("MultiSampleMode", "0");
+    set("VSync", "0");
+    DWORD w = WriteAtomic(path, x.data(), x.size());
+    if (w) { err = "Couldn't write GamerProfile.xml: " + ErrText(w); return false; }
+    Log("game settings fixed (GamerProfile.xml; backup GamerProfile.xml.fc2vr-backup)");
+    return true;
+}
+
 } // namespace fc2

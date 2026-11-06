@@ -1,11 +1,16 @@
-# Far Cry 2 VR 1.0.4 test 1
+# Far Cry 2 VR 1.0.4 test 2
 
-**Test build** (mod v234 test 52, launcher 1.0.4 test 1). Everything below has been tested in play except where noted. Please report problems with the logs from the launcher (**Collect logs** in the launcher).
+**Test build** (mod v234 test 53, launcher 1.0.4 test 2). Everything below has been tested in play except where noted. Please report problems with the logs from the launcher (**Collect logs** in the launcher).
 
 **Smoother motion**
 - **No more jittering body, arms and weapon while moving** ("stutter"): the view now follows the body update the game is drawing, not the newest one, which was one game step ahead. Existing settings files are updated automatically (`CameraOnBodyClock` 1 → 2).
 - **Body no longer turns while strafing:** the game's own gamepad aim assist is switched off (`GameAimAssist=0`).
 - **Two-handed grip holds** through short controller tracking dropouts.
+- **Desktop V-Sync no longer slows the headset:** the desktop window never waits for the monitor, whatever the game's or the graphics driver's V-Sync setting (`DesktopVsync=0`).
+
+**Launcher**
+- **Game settings check:** the Overview page checks the game's own video settings (DirectX 10, anti-aliasing None, V-Sync Off) and a **Fix game settings** button corrects them (a backup of GamerProfile.xml is kept).
+- New **VR HUD** and **Gameplay** sections on the Optional page for the options below.
 
 **Interaction**
 - **Hand prompt where you look:** objects, weapons on the ground, vehicles and diamond cases are offered when they are near the centre of your view, from your head rather than your body (`UseFromHead`, `UseCone`, `UseCenter`). Diamond cases open from any angle you can see them.
@@ -32,4 +37,4 @@
 
 **Requirements:** Windows 10/11, Far Cry 2 (Steam or GOG) **set to DirectX 10** with **anti-aliasing set to None**, an OpenXR runtime with 32-bit support (e.g. Virtual Desktop VDXR, SteamVR 2.17+). DLSS needs an NVIDIA RTX GPU.
 
-Install: run `FarCry2VR-Launcher_1.0.4_test1.exe`, pick the game folder, press **Install** (updates 1.0.x in place, your settings are kept and new options are added). Includes the NVIDIA DLSS runtime, redistributed as part of this mod (not in the source tree). This product uses NVIDIA DLSS technology. Unofficial fan mod, not affiliated with Ubisoft.
+Install: run `FarCry2VR-Launcher_1.0.4_test2.exe`, pick the game folder, press **Install** (updates 1.0.x in place, your settings are kept and new options are added). Includes the NVIDIA DLSS runtime, redistributed as part of this mod (not in the source tree). This product uses NVIDIA DLSS technology. Unofficial fan mod, not affiliated with Ubisoft.

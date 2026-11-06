@@ -107,6 +107,7 @@ struct Config {
     int   ammoPanel = 1; float ammoPanelWidth = 0.055f, ammoPanelRight = 0.05f, ammoPanelRight2 = 0.06f, ammoPanelUp = 0.04f, ammoPanelFwd = 0.06f, ammoPanelYaw = 20.0f, ammoPanelTilt = 15.0f;
     int   grenPanel = 1; float grenPanelWidth = 0.045f, grenPanelLeft = 0.06f, grenPanelUp = 0.02f, grenPanelFwd = 0.0f, grenPanelSecs = 3.0f, grenPanelTilt = 30.0f;
     int   mapClock = 1, mapClock24 = 0; float mapClockWidth = 0.07f, mapClockUp = 0.0f;
+    int   noDesktopVsync = 1;   // v234: DesktopVsync=0
     int   mapHealth = 1; float mapHealthWidth = 0.06f, mapPanelGap = 0.004f;   // v234: health + syrettes beside the clock under the map   // v234: clock under the map   // v234: grenade counter by the left hand   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
     int   shadowMapSize = 2720;    // sun shadow cascade resolution (game: 2048 at Ultra High), max 2730, 0 = game's           // sun shadow cascades cover the whole VR view in cull mode 1   // hidden extra render area per side (fraction of the half-FOV) for screen-space reflections
     int   hangWatch = 1;            // freeze/crash reports (fc2vr_hang_N.txt/.dmp)
@@ -4279,6 +4280,12 @@ static void __fastcall Hook_Present(void* self, void* edx, int a1) {
     perf::GpuMark(perf::G_PRESENT);
     perf::SetPhase(perf::P_PRESENT);
     Trace("PRES>");
+    // v234: the desktop window never waits for the monitor (the game's VSync / a driver override would pace the VR loop
+    // against the monitor's refresh): the graphics object's sync interval (+0x8C, passed to IDXGISwapChain::Present)
+    if (g_cfg.noDesktopVsync && self && !IsBadWritePtr((uint8_t*)self + 0x8C, 4)) {
+        uint32_t& si = *(uint32_t*)((uint8_t*)self + 0x8C);
+        if (si != 0) { static int nl = 0; if (nl++ < 2) LOG("present: desktop VSync was %u - turned off (the headset sets the pace)", si); si = 0; }
+    }
     o_Present(self, edx, a1);
     if (capEnding) { TraceMark("present end"); g_traceDraws = false; }
     Trace("PRES<");
@@ -4575,7 +4582,7 @@ static void Install() {
         xr::SetScopeCrosshair((int)IniF("ScopeCrosshair", 2));
         g_cfg.scopeFromWeapon = (int)IniF("ScopeFromWeapon", 1); g_cfg.scopeSmoothing = IniF("ScopeSmoothing", 0.06f);
         g_cfg.testCheats = (int)IniF("TestCheats", 0); { char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); arms::SetIniPath(ip); } g_cfg.reticleDot = (int)IniF("ReticleDot", 1); g_cfg.reticleDistance = IniF("ReticleDistance", 10.0f); g_cfg.reticleSize = IniF("ReticleSize", 0.06f);
-        g_cfg.ammoPanel = (int)IniF("AmmoPanel", 1); g_cfg.ammoPanelWidth = IniF("AmmoPanelWidth", 0.055f); g_cfg.ammoPanelRight = IniF("AmmoPanelRight", 0.05f); g_cfg.ammoPanelRight2 = IniF("AmmoPanelRightSecondary", 0.06f); g_cfg.ammoPanelUp = IniF("AmmoPanelUp", 0.04f); g_cfg.ammoPanelFwd = IniF("AmmoPanelForward", 0.06f); g_cfg.grenPanel = (int)IniF("GrenadePanel", 1); g_cfg.grenPanelWidth = IniF("GrenadePanelWidth", 0.045f); g_cfg.grenPanelLeft = IniF("GrenadePanelLeft", 0.06f); g_cfg.grenPanelUp = IniF("GrenadePanelUp", 0.02f); g_cfg.grenPanelFwd = IniF("GrenadePanelForward", 0.0f); g_cfg.grenPanelSecs = IniF("GrenadePanelSeconds", 3.0f); g_cfg.grenPanelTilt = IniF("GrenadePanelTilt", 30.0f); g_cfg.mapClock = (int)IniF("MapClock", 1); g_cfg.mapClockWidth = IniF("MapClockWidth", 0.07f); g_cfg.mapClockUp = IniF("MapClockUp", 0.0f); g_cfg.mapClock24 = (int)IniF("MapClock24h", 0); g_cfg.mapHealth = (int)IniF("MapHealth", 1); g_cfg.mapHealthWidth = IniF("MapHealthWidth", 0.06f); g_cfg.mapPanelGap = IniF("MapPanelGap", 0.004f);
+        g_cfg.ammoPanel = (int)IniF("AmmoPanel", 1); g_cfg.ammoPanelWidth = IniF("AmmoPanelWidth", 0.055f); g_cfg.ammoPanelRight = IniF("AmmoPanelRight", 0.05f); g_cfg.ammoPanelRight2 = IniF("AmmoPanelRightSecondary", 0.06f); g_cfg.ammoPanelUp = IniF("AmmoPanelUp", 0.04f); g_cfg.ammoPanelFwd = IniF("AmmoPanelForward", 0.06f); g_cfg.grenPanel = (int)IniF("GrenadePanel", 1); g_cfg.grenPanelWidth = IniF("GrenadePanelWidth", 0.045f); g_cfg.grenPanelLeft = IniF("GrenadePanelLeft", 0.06f); g_cfg.grenPanelUp = IniF("GrenadePanelUp", 0.02f); g_cfg.grenPanelFwd = IniF("GrenadePanelForward", 0.0f); g_cfg.grenPanelSecs = IniF("GrenadePanelSeconds", 3.0f); g_cfg.grenPanelTilt = IniF("GrenadePanelTilt", 30.0f); g_cfg.mapClock = (int)IniF("MapClock", 1); g_cfg.mapClockWidth = IniF("MapClockWidth", 0.07f); g_cfg.mapClockUp = IniF("MapClockUp", 0.0f); g_cfg.mapClock24 = (int)IniF("MapClock24h", 0); g_cfg.mapHealth = (int)IniF("MapHealth", 1); g_cfg.noDesktopVsync = IniF("DesktopVsync", 0) == 0; g_cfg.mapHealthWidth = IniF("MapHealthWidth", 0.06f); g_cfg.mapPanelGap = IniF("MapPanelGap", 0.004f);
         g_cfg.ammoPanelYaw = IniF("AmmoPanelYaw", 20.0f); g_cfg.ammoPanelTilt = IniF("AmmoPanelTilt", 15.0f);
         ac.handOfs[0] = IniF("HandOffsetX", 0); ac.handOfs[1] = IniF("HandOffsetY", 0); ac.handOfs[2] = IniF("HandOffsetZ", 0);
         ac.leftHandRoll = IniF("LeftHandRoll", 45.0f); ac.macheteAngle = IniF("MacheteAngle", 60.0f);
@@ -4631,7 +4638,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

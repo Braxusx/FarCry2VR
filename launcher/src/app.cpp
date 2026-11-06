@@ -340,6 +340,22 @@ static void PageOverviewDraw(HWND hwnd) {
             ImGui::Unindent(14 * g_scale);
         }
         RuntimeSection();
+        {   // v234: the game's own video settings the VR mod needs
+            theme::Section("Game settings");
+            static ProfileCheck pc; static double lastCheck = -10;
+            if (ImGui::GetTime() - lastCheck > 2.0) { pc = CheckGameProfile(); lastCheck = ImGui::GetTime(); }
+            if (!pc.found) StatusLine('!', "Start Far Cry 2 once, then set DirectX 10, Anti-aliasing None and V-Sync Off in its options. (The launcher checks them once the game has made its settings file.)");
+            else if (pc.issues.empty()) StatusLine('+', "OK: DirectX 10, anti-aliasing off, V-Sync off.");
+            else {
+                for (const auto& i : pc.issues) StatusLine('!', i.c_str());
+                if (theme::Button("Fix game settings", true, !g_app.busy && !g_app.running)) {
+                    std::string err;
+                    if (FixGameProfile(err)) { g_app.notice = "Game settings fixed: DirectX 10, anti-aliasing off, V-Sync off. A backup of GamerProfile.xml was kept."; g_app.noticeCol = theme::Good(); lastCheck = -10; }
+                    else { g_app.notice = err; g_app.noticeCol = theme::Bad(); }
+                }
+                if (g_app.running) { ImGui::SameLine(); theme::Wrapped("Close the game to fix them.", theme::Faded()); }
+            }
+        }
         theme::Section("Shortcuts");
         if (theme::Button("Create desktop shortcut")) DesktopShortcut();
         ImGui::SameLine(); theme::Wrapped("A shortcut to this launcher. Play starts the game in VR from here.", theme::Faded());
