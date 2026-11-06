@@ -108,6 +108,7 @@ struct Config {
     int   grenPanel = 1; float grenPanelWidth = 0.045f, grenPanelLeft = 0.06f, grenPanelUp = 0.02f, grenPanelFwd = 0.0f, grenPanelSecs = 3.0f, grenPanelTilt = 30.0f;
     int   mapClock = 1, mapClock24 = 0; float mapClockWidth = 0.07f, mapClockUp = 0.0f;
     int   noDesktopVsync = 1;   // v234: DesktopVsync=0
+    int   gpuHandover = 1;      // v234 test 54: EndFrameWait=0
     int   mapHealth = 1; float mapHealthWidth = 0.06f, mapPanelGap = 0.004f;   // v234: health + syrettes beside the clock under the map   // v234: clock under the map   // v234: grenade counter by the left hand   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
     int   shadowMapSize = 2720;    // sun shadow cascade resolution (game: 2048 at Ultra High), max 2730, 0 = game's           // sun shadow cascades cover the whole VR view in cull mode 1   // hidden extra render area per side (fraction of the half-FOV) for screen-space reflections
     int   hangWatch = 1;            // freeze/crash reports (fc2vr_hang_N.txt/.dmp)
@@ -1652,6 +1653,29 @@ static bool RedirectCall(uintptr_t site, uintptr_t target, void* hook, void** or
     DWORD old; VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &old);
     *(int32_t*)(p + 1) = (int32_t)((uintptr_t)hook - (uintptr_t)(p + 5));
     VirtualProtect(p, 5, old, &old); FlushInstructionCache(GetCurrentProcess(), p, 5);
+    return true;
+}
+// v234 test 56: the game makes its DXGI factory with CreateDXGIFactory (DXGI 1.0), and a D3D10.1 device on a DXGI 1.0
+// adapter cannot create or open keyed-mutex textures (E_INVALIDARG), which the GPU frame handover needs. The device
+// setup's "call [CreateDXGIFactory]" (Steam 0x1042167D, 6 bytes) becomes a call to this: a DXGI 1.1 factory, handed out
+// through the interface the game asked for (IDXGIFactory1 is an IDXGIFactory). Falls back to the game's own call.
+typedef HRESULT (WINAPI *CreateFactory_t)(REFIID, void**);
+static CreateFactory_t* g_gameCreateFactory = nullptr;
+static HRESULT WINAPI Hook_CreateDXGIFactory(REFIID riid, void** out) {
+    IDXGIFactory1* f1 = nullptr;
+    HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&f1);
+    if (SUCCEEDED(hr) && f1) { hr = f1->QueryInterface(riid, out); f1->Release(); }
+    LOG("DXGI: game factory made as DXGI 1.1 (for the GPU frame handover) hr=%08lx", (unsigned long)hr);
+    if (SUCCEEDED(hr)) return hr;
+    return (g_gameCreateFactory && *g_gameCreateFactory) ? (*g_gameCreateFactory)(riid, out) : hr;
+}
+static bool PatchFactoryCall() {
+    uint8_t* p = (uint8_t*)A(0x1042167D);
+    if (!p || p[0] != 0xFF || p[1] != 0x15) { LOG("DXGI 1.1 factory patch: unexpected bytes - skipped"); return false; }
+    g_gameCreateFactory = *(CreateFactory_t**)(p + 2);
+    DWORD old; VirtualProtect(p, 6, PAGE_EXECUTE_READWRITE, &old);
+    p[0] = 0xE8; *(int32_t*)(p + 1) = (int32_t)((uintptr_t)&Hook_CreateDXGIFactory - (uintptr_t)(p + 5)); p[5] = 0x90;
+    VirtualProtect(p, 6, old, &old); FlushInstructionCache(GetCurrentProcess(), p, 6);
     return true;
 }
 // v234: indestructible buggy / hang glider (optional). Every health loss of a vehicle goes through
@@ -4566,6 +4590,7 @@ static void Install() {
     if (gameaddr::Detect() == gameaddr::GOG) LOG("GOG build: engine addresses translated from the Steam map");
     if (!g_cfg.enable) { LOG("disabled by config"); return; }
     InstallFramePacing();
+    if (g_cfg.gpuHandover) LOG("DXGI 1.1 factory patch: %d", PatchFactoryCall());
     bool ok1 = PatchJmp(A(eng::RenderViewport), eng::RenderViewportPrologue, (void*)&Hook_RenderViewport, (void**)&o_RenderViewport);
     bool ok2 = PatchJmp(A(eng::PresentWrapper), eng::PresentPrologue, (void*)&Hook_Present, (void**)&o_Present);
     static const uint8_t rfPrologue[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF0 };   // push ebp; mov ebp,esp; and esp,-16
@@ -4588,7 +4613,7 @@ static void Install() {
         ac.shoulderSide = IniF("ShoulderSide", 0.17f); ac.shoulderDown = IniF("ShoulderDown", 0.22f); ac.shoulderBack = IniF("ShoulderBack", 0.06f);
         ac.twoHandMaxSpan = IniF("TwoHandMaxSpan", 0.65f); ac.noIdleBreak = (int)IniF("NoIdleAnimation", 1);
         xr::SetHoldLostPose(IniF("HoldLostTracking", 1) != 0);
-        xr::SetGpuHandover(IniF("EndFrameWait", 0) == 0);
+        g_cfg.gpuHandover = IniF("EndFrameWait", 0) == 0; xr::SetGpuHandover(g_cfg.gpuHandover != 0);
         g_cfg.grabDistance = IniF("GrabDistance", 0.15f);
         g_cfg.scopeInstant = (int)IniF("ScopeInstant", 1); g_cfg.scopeNeedsGrip = (int)IniF("ScopeNeedsGrip", 1);
         g_cfg.scopeGameReticle = (int)IniF("ScopeGameReticle", 1); g_cfg.scopeAmmoSize = IniF("ScopeAmmoSize", 0.28f);
@@ -4654,7 +4679,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

@@ -101,6 +101,7 @@ static const uint32_t kGogMap[][2] = {
     { 0x104204A0, 0x10412660 },
     { 0x1042060C, 0x104127CC },
     { 0x10420D50, 0x10412F10 },
+    { 0x1042167D, 0x1041383D },   // D3D10 device setup: call [CreateDXGIFactory] (v234 test 56)
     { 0x104324B0, 0x10424E70 },
     { 0x10449550, 0x1043B920 },
     { 0x10455410, 0x10447880 },   // render setting get (bloom)
