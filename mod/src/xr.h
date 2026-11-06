@@ -121,6 +121,7 @@ void InvalidateForRecenter();   // render thread; invalidates leases and require
 void SetRumble(float left, float right);
 void SetGpuHandover(bool on);   // v234 test 54: EndFrameWait=0 - the GPU hands the frame over (keyed-mutex fence), the render thread does not wait
 bool GpuHandover();
+bool GpuHandoverAvailable();
 bool HandoverStats(double& avgMs, double& maxMs, int& frames, bool& gpu);   // since the last call (render thread)
 void SetHoldLostPose(bool on);   // HoldLostTracking: keep the last pose of a controller that loses tracking   // 0..1 per hand, applied every frame
 

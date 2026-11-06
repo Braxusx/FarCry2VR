@@ -267,17 +267,30 @@ static void FenceRelease() {
 }
 static void FenceCreate() {
     FenceRelease();
-    D3D10_TEXTURE2D_DESC td{}; td.Width = td.Height = 1; td.MipLevels = td.ArraySize = 1; td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    td.SampleDesc.Count = 1; td.Usage = D3D10_USAGE_DEFAULT; td.BindFlags = D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE;
-    td.MiscFlags = D3D10_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-    HRESULT hr = g_dev10->CreateTexture2D(&td, nullptr, &g_fenceTex10);
-    HANDLE sh = nullptr;
-    if (SUCCEEDED(hr)) { IDXGIResource* r = nullptr; g_fenceTex10->QueryInterface(__uuidof(IDXGIResource), (void**)&r); hr = r ? r->GetSharedHandle(&sh) : E_NOINTERFACE; if (r) r->Release(); }
-    if (SUCCEEDED(hr) && sh) hr = g_dev11->OpenSharedResource(sh, __uuidof(ID3D11Texture2D), (void**)&g_fenceTex11);
-    if (SUCCEEDED(hr) && g_fenceTex11) hr = g_fenceTex10->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&g_km10);
-    if (SUCCEEDED(hr) && g_km10) hr = g_fenceTex11->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&g_km11);
-    if (SUCCEEDED(hr) && g_km11) hr = g_km10->AcquireSync(0, 100);
-    if (hr != S_OK) { LOG("XR: GPU handover fence unavailable hr=%08lx - the render thread waits for the GPU as before", (unsigned long)hr); FenceRelease(); return; }
+    // created on our D3D11 device (keyed-mutex sharing is best supported there) and opened on the game's D3D10 device;
+    // the D3D10-created variant is the fallback. Each failing step is logged.
+    const char* step = "D3D11 CreateTexture2D"; HRESULT hr = E_FAIL; HANDLE sh = nullptr;
+    {   D3D11_TEXTURE2D_DESC td{}; td.Width = td.Height = 1; td.MipLevels = td.ArraySize = 1; td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        td.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+        hr = g_dev11->CreateTexture2D(&td, nullptr, &g_fenceTex11);
+        if (SUCCEEDED(hr)) { step = "GetSharedHandle(11)"; IDXGIResource* r = nullptr; g_fenceTex11->QueryInterface(__uuidof(IDXGIResource), (void**)&r); hr = r ? r->GetSharedHandle(&sh) : E_NOINTERFACE; if (r) r->Release(); }
+        if (SUCCEEDED(hr) && sh) { step = "D3D10 OpenSharedResource"; hr = g_dev10->OpenSharedResource(sh, __uuidof(ID3D10Texture2D), (void**)&g_fenceTex10); }
+    }
+    if (FAILED(hr) || !g_fenceTex10) {
+        LOG("XR: GPU handover fence: %s hr=%08lx - trying the D3D10-created texture", step, (unsigned long)hr);
+        SafeRelease(g_fenceTex10); SafeRelease(g_fenceTex11); sh = nullptr;
+        D3D10_TEXTURE2D_DESC td{}; td.Width = td.Height = 1; td.MipLevels = td.ArraySize = 1; td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        td.SampleDesc.Count = 1; td.Usage = D3D10_USAGE_DEFAULT; td.BindFlags = D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE;
+        td.MiscFlags = D3D10_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+        step = "D3D10 CreateTexture2D"; hr = g_dev10->CreateTexture2D(&td, nullptr, &g_fenceTex10);
+        if (SUCCEEDED(hr)) { step = "GetSharedHandle(10)"; IDXGIResource* r = nullptr; g_fenceTex10->QueryInterface(__uuidof(IDXGIResource), (void**)&r); hr = r ? r->GetSharedHandle(&sh) : E_NOINTERFACE; if (r) r->Release(); }
+        if (SUCCEEDED(hr) && sh) { step = "D3D11 OpenSharedResource"; hr = g_dev11->OpenSharedResource(sh, __uuidof(ID3D11Texture2D), (void**)&g_fenceTex11); }
+    }
+    if (SUCCEEDED(hr) && g_fenceTex10 && g_fenceTex11) { step = "keyed mutex (10)"; hr = g_fenceTex10->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&g_km10); }
+    if (SUCCEEDED(hr) && g_km10) { step = "keyed mutex (11)"; hr = g_fenceTex11->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&g_km11); }
+    if (SUCCEEDED(hr) && g_km11) { step = "first AcquireSync"; hr = g_km10->AcquireSync(0, 100); }
+    if (hr != S_OK) { LOG("XR: GPU handover fence unavailable (%s hr=%08lx) - the render thread waits for the GPU as before", step, (unsigned long)hr); FenceRelease(); return; }
     g_km10Held = true;
     LOG("XR: GPU handover fence ready (keyed mutex)");
 }
@@ -1476,6 +1489,7 @@ void Shutdown() {
 namespace xr {
 void SetGpuHandover(bool on) { g_gpuHandover = on; LOG("XR: end-of-frame handover: %s", on ? "GPU (render thread does not wait)" : "render thread waits for the GPU"); }
 bool GpuHandover() { return g_gpuHandover && g_km10 != nullptr; }
+bool GpuHandoverAvailable() { return g_km10 != nullptr; }
 bool HandoverStats(double& avgMs, double& maxMs, int& frames, bool& gpu) {
     if (!g_hoN) return false;
     avgMs = g_hoMs / g_hoN; maxMs = g_hoMax; frames = g_hoN; gpu = g_hoLastGpu;
