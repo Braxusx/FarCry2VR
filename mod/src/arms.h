@@ -189,7 +189,8 @@ bool SightRay(float o[3], float d[3], RayContext* context = nullptr);
 bool SightFrame(float o[3], float d[3], float u[3]);
 bool MapClock(float p[3], float w[3], float h[3]);
 bool MapClockHand(float rel[9]);
-bool MapClockModel(uint8_t*& gfx, float pts[4][3]);   // v234: the held map's graphic + bottom-mid / top-mid / bottom-left / bottom-right (model space)   // v234: the same, in the left controller's aim frame (right, up, back; ref units)   // v234: held map's bottom-middle point, width and height vectors (ref frame)
+bool MapClockModel(uint8_t*& gfx, float pts[4][3]);
+uint8_t* GpsGfx();   // v234: the GPS graphic while the map is out (world matrix at +0x170)   // v234: the held map's graphic + bottom-mid / top-mid / bottom-left / bottom-right (model space)   // v234: the same, in the left controller's aim frame (right, up, back; ref units)   // v234: held map's bottom-middle point, width and height vectors (ref frame)
 bool GameTimeOfDay(int& hh, int& mm);   // v234: sight line + up, fixed to the held weapon (ref frame)
 float AimDistance();
 bool ProjectileReloadActive();     // within the 3.5 s after a projectile weapon shot (its reload)

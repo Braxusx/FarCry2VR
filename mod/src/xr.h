@@ -78,6 +78,9 @@ void SetWeaponAmmoImage(const uint32_t* px);                 // v234: ammo panel
 void SetWeaponAmmoLayer(const XrPosef& pose, float width);   // this frame: show it (LOCAL space)
 constexpr int GrenW = 256, GrenH = 144;
 constexpr int ClockW = 320, ClockH = 112;
+constexpr int HealthW = 320, HealthH = 128;
+void SetHealthImage(const uint32_t* px);                     // v234: health + syrettes under the GPS
+void SetHealthLayer(const XrPosef& pose, float width);
 void SetClockImage(const uint32_t* px);                      // v234: clock under the map (ClockW x ClockH)
 void SetClockLayer(const XrPosef& pose, float width);
 void SetGrenadeImage(const uint32_t* px);                    // v234: grenade / molotov counter by the left hand (GrenW x GrenH)

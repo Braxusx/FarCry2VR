@@ -2355,6 +2355,7 @@ static void SnapUpdate(uint8_t* playerEnt, float dt) {
 // +0xB8 UpLeft, +0xBC UpRight, +0xC0 DownLeft, +0xC4 DownRight (skeleton = graphic vt+0x78; bones [skel+0x20], count
 // [skel+0x2C], stride 0xA0, id +0, translation +0x80, model space). Published in the reference frame each frame.
 static float g_clkP[3], g_clkW[3], g_clkH[3]; static DWORD g_clkTick = 0;
+static uint8_t* g_gpsGfx = nullptr; static DWORD g_gpsTick = 0;
 static float g_clkRel[9]; static bool g_clkRelOk = false; static uint8_t* g_clkGfx = nullptr; static float g_clkModel[4][3]; static DWORD g_clkModelTick = 0;   // v234: P, W, H in the left controller's aim frame (R, U, B), same game frame
 static void MapClockUpdate(const Frame& f, uint8_t* pd, const std::function<void(const float*, float*)>& toRef) {
     if (!controls::MapOpen() || !pd || IsBadReadPtr(pd + 0x4F0, 8)) return;
@@ -2368,6 +2369,12 @@ static void MapClockUpdate(const Frame& f, uint8_t* pd, const std::function<void
     uint8_t* ent = *(uint8_t**)(h + 0xC); if (!ent) return;
     typedef uint8_t* (__fastcall *Comp_t)(void* ent, void* edx, const void* type);
     if (!*(uint32_t*)A(0x10FDF194)) return;
+    {   // v234: the GPS (strategy +0x108 CompassEntity handle -> +0xC entity) for the health panel under it
+        uint8_t* gg = nullptr;
+        if (!IsBadReadPtr(st + 0x108, 4)) { uint8_t* hg = *(uint8_t**)(st + 0x108);
+            if (hg && !IsBadReadPtr(hg + 0xC, 4)) { uint8_t* ge = *(uint8_t**)(hg + 0xC); if (ge) gg = ((Comp_t)A(0x104E2CC0))(ge, nullptr, (const void*)A(0x10FDF1AC)); } }
+        Lock(); g_gpsGfx = gg && !IsBadReadPtr(gg + 0x170, 64) ? gg : nullptr; g_gpsTick = GetTickCount(); Unlock();
+    }
     uint8_t* gfx = ((Comp_t)A(0x104E2CC0))(ent, nullptr, (const void*)A(0x10FDF1AC));
     if (!gfx || IsBadReadPtr(gfx + 0x170, 64)) return;
     typedef uint8_t* (__fastcall *Sk_t)(void* g, void* edx);
@@ -2396,6 +2403,7 @@ static void MapClockUpdate(const Frame& f, uint8_t* pd, const std::function<void
 }
 // v234: the map's graphic and its bottom-middle / top-middle / bottom-left / bottom-right points in model space
 bool MapClockModel(uint8_t*& gfx, float pts[4][3]) { if (!g_csInit) return false; Lock(); bool ok = g_clkGfx && g_clkModelTick && GetTickCount() - g_clkModelTick < 200; gfx = g_clkGfx; memcpy(pts, g_clkModel, sizeof g_clkModel); Unlock(); return ok; }
+uint8_t* GpsGfx() { if (!g_csInit) return nullptr; Lock(); uint8_t* g = g_gpsTick && GetTickCount() - g_gpsTick < 200 ? g_gpsGfx : nullptr; Unlock(); return g; }   // v234
 bool MapClockHand(float rel[9]) { if (!g_csInit) return false; Lock(); bool ok = g_clkRelOk && g_clkTick && GetTickCount() - g_clkTick < 200; memcpy(rel, g_clkRel, 36); Unlock(); return ok; }
 bool MapClock(float p[3], float w[3], float h[3]) {
     if (!g_csInit) return false; Lock(); bool ok = g_clkTick && GetTickCount() - g_clkTick < 200; memcpy(p, g_clkP, 12); memcpy(w, g_clkW, 12); memcpy(h, g_clkH, 12); Unlock(); return ok; }

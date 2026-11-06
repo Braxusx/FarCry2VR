@@ -106,7 +106,8 @@ struct Config {
     int   testCheats = 0; int   reticleDot = 1; float reticleDistance = 10.0f, reticleSize = 0.06f;   // aiming dot
     int   ammoPanel = 1; float ammoPanelWidth = 0.055f, ammoPanelRight = 0.05f, ammoPanelRight2 = 0.06f, ammoPanelUp = 0.04f, ammoPanelFwd = 0.06f, ammoPanelYaw = 20.0f, ammoPanelTilt = 15.0f;
     int   grenPanel = 1; float grenPanelWidth = 0.045f, grenPanelLeft = 0.06f, grenPanelUp = 0.02f, grenPanelFwd = 0.0f, grenPanelSecs = 3.0f, grenPanelTilt = 30.0f;
-    int   mapClock = 1, mapClock24 = 0; float mapClockWidth = 0.07f, mapClockUp = 0.0f;   // v234: clock under the map   // v234: grenade counter by the left hand   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
+    int   mapClock = 1, mapClock24 = 0; float mapClockWidth = 0.07f, mapClockUp = 0.0f;
+    int   gpsHealth = 1; float gpsHealthWidth = 0.06f, gpsHealthDown = 0.09f, gpsHealthRight = 0.0f, gpsHealthFwd = 0.0f;   // v234: health under the GPS   // v234: clock under the map   // v234: grenade counter by the left hand   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
     int   shadowMapSize = 2720;    // sun shadow cascade resolution (game: 2048 at Ultra High), max 2730, 0 = game's           // sun shadow cascades cover the whole VR view in cull mode 1   // hidden extra render area per side (fraction of the half-FOV) for screen-space reflections
     int   hangWatch = 1;            // freeze/crash reports (fc2vr_hang_N.txt/.dmp)
     float pauseMenuScale = 0.75f;  // in-game pause menu panel size factor (on top of HudScale)
@@ -2964,6 +2965,54 @@ static void DrawClock(int hh, int mm) {
     }
     xr::SetClockImage(out);
 }
+// v234 test 48: the view follows the DRAWN body update (CameraOnBodyClock=2, one game step behind the newest); a world
+// matrix read from the game (held map, GPS) is from the newest one - move it with the body from the newest update to the drawn one
+static void DrawnBodyFix(float Mc[16]) {
+    float cl[3], Wl[16], cd[3], Wd[16];
+    if (g_camBodyClock != 2 || !arms::CamBoneRoot(cl, Wl, false) || !arms::CamBoneRoot(cd, Wd, true)) return;
+    auto mul = [](const float* a, const float* b, float* o) { for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c) { float v = 0; for (int k = 0; k < 4; ++k) v += a[r * 4 + k] * b[k * 4 + c]; o[r * 4 + c] = v; } };
+    float iW[16] = { Wl[0], Wl[4], Wl[8], 0, Wl[1], Wl[5], Wl[9], 0, Wl[2], Wl[6], Wl[10], 0, 0, 0, 0, 1 };
+    float sx = Wl[0] * Wl[0] + Wl[1] * Wl[1] + Wl[2] * Wl[2];
+    if (!(sx > 1e-6f && fabsf(sx - 1.0f) < 0.05f)) return;
+    for (int c = 0; c < 3; ++c) iW[12 + c] = -(Wl[12] * iW[c] + Wl[13] * iW[4 + c] + Wl[14] * iW[8 + c]);
+    float D[16], T[16]; mul(iW, Wd, D); mul(Mc, D, T);
+    float dd = (T[12] - Mc[12]) * (T[12] - Mc[12]) + (T[13] - Mc[13]) * (T[13] - Mc[13]) + (T[14] - Mc[14]) * (T[14] - Mc[14]);
+    if (dd < 0.5f * 0.5f) memcpy(Mc, T, 64);
+}
+// v234: health + syrettes under the GPS, in the game's style: syrette icons (white) over a segmented red health bar
+static void DrawHealth(float ratio, int segs, int syr) {
+    const int W = xr::HealthW, H = xr::HealthH; static uint32_t out[xr::HealthW * xr::HealthH];
+    auto put = [&](int x, int y, int r, int g, int b, int a) { if (x < 0 || y < 0 || x >= W || y >= H) return; out[y * W + x] = ((uint32_t)a << 24) | ((uint32_t)(b * a / 255) << 16) | ((uint32_t)(g * a / 255) << 8) | (uint32_t)(r * a / 255); };
+    auto rect = [&](int x0, int y0, int x1, int y1, int r, int g, int b, int a) { for (int y = y0; y < y1; ++y) for (int x = x0; x < x1; ++x) put(x, y, r, g, b, a); };
+    memset(out, 0, sizeof out);
+    // backing: dark, rounded corners
+    for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) { int dx = x < 14 ? 14 - x : x > W - 15 ? x - (W - 15) : 0, dy = y < 14 ? 14 - y : y > H - 15 ? y - (H - 15) : 0; if (dx * dx + dy * dy <= 196) put(x, y, 0, 0, 0, 120); }
+    // syrettes: up to 8 icons, left to right
+    if (syr < 0) syr = 0; if (syr > 8) syr = 8;
+    for (int i = 0; i < syr; ++i) {
+        int x = 16 + i * 37, y = 22;
+        rect(x + 6, y + 8, x + 26, y + 22, 235, 235, 235, 255);     // barrel
+        rect(x + 9, y + 11, x + 23, y + 19, 200, 40, 30, 255);       // red liquid
+        rect(x + 26, y + 13, x + 33, y + 17, 235, 235, 235, 255);    // needle base
+        rect(x + 33, y + 14, x + 35, y + 16, 235, 235, 235, 255);    // needle
+        rect(x + 1, y + 13, x + 6, y + 17, 235, 235, 235, 255);      // plunger rod
+        rect(x + 0, y + 9, x + 2, y + 21, 235, 235, 235, 255);       // plunger head
+    }
+    // health bar: segments, filled red by the health fraction
+    if (segs < 1 || segs > 10) segs = 5;
+    if (!(ratio >= 0.0f)) ratio = 0.0f; if (ratio > 1.0f) ratio = 1.0f;
+    const int bx0 = 16, bx1 = W - 16, by0 = 70, by1 = 104, gap = 6;
+    const float sw = (float)(bx1 - bx0 - gap * (segs - 1)) / segs;
+    for (int k = 0; k < segs; ++k) {
+        int x0 = bx0 + (int)(k * (sw + gap)), x1 = (int)(x0 + sw);
+        float f = ratio * segs - k; if (f < 0) f = 0; if (f > 1) f = 1;
+        rect(x0, by0, x1, by1, 60, 10, 8, 200);                        // empty segment
+        rect(x0, by0, x0 + (int)((x1 - x0) * f), by1, 215, 35, 25, 255);   // health
+        for (int x = x0; x < x1; ++x) { put(x, by0, 255, 255, 255, 140); put(x, by1 - 1, 255, 255, 255, 140); }
+        for (int y = by0; y < by1; ++y) { put(x0, y, 255, 255, 255, 140); put(x1 - 1, y, 255, 255, 255, 140); }
+    }
+    xr::SetHealthImage(out);
+}
 // ---- End key: machete hand menu (pitch / yaw / roll sliders), shown as a panel in front of you.
 // Keyboard: Up/Down select, Left/Right adjust (Shift = 1 deg steps, else 5). Controllers: left stick up/down selects,
 // right stick left/right adjusts (faster the further you push). Changes show live; closing saves them to fc2vr.ini.
@@ -3932,21 +3981,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 uint8_t* mg = nullptr; float mp[4][3];
                 if (arms::MapClockModel(mg, mp) && mg && !IsBadReadPtr(mg + 0x170, 64)) {
                     float Mc[16]; memcpy(Mc, mg + 0x170, 64); const float* M = Mc;
-                    // test 48: the view follows the DRAWN body update (CameraOnBodyClock=2, one game step behind the newest);
-                    // the map's matrix is from the newest one - move it with the body from the newest update to the drawn one
-                    { float cl[3], Wl[16], cd[3], Wd[16];
-                      if (g_camBodyClock == 2 && arms::CamBoneRoot(cl, Wl, false) && arms::CamBoneRoot(cd, Wd, true)) {
-                          auto mul = [](const float* a, const float* b, float* o) { for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c) { float v = 0; for (int k = 0; k < 4; ++k) v += a[r * 4 + k] * b[k * 4 + c]; o[r * 4 + c] = v; } };
-                          // inverse of the newest skeleton world (rigid: transpose rotation, -t * R^T)
-                          float iW[16] = { Wl[0], Wl[4], Wl[8], 0, Wl[1], Wl[5], Wl[9], 0, Wl[2], Wl[6], Wl[10], 0, 0, 0, 0, 1 };
-                          float sx = Wl[0] * Wl[0] + Wl[1] * Wl[1] + Wl[2] * Wl[2];
-                          if (sx > 1e-6f && fabsf(sx - 1.0f) < 0.05f) {
-                              for (int c = 0; c < 3; ++c) iW[12 + c] = -(Wl[12] * iW[c] + Wl[13] * iW[4 + c] + Wl[14] * iW[8 + c]);
-                              float D[16], T[16]; mul(iW, Wd, D); mul(Mc, D, T);
-                              float dd = (T[12] - Mc[12]) * (T[12] - Mc[12]) + (T[13] - Mc[13]) * (T[13] - Mc[13]) + (T[14] - Mc[14]) * (T[14] - Mc[14]);
-                              if (dd < 0.5f * 0.5f) memcpy(Mc, T, 64);
-                          }
-                      } }
+                    DrawnBodyFix(Mc);   // test 48: the view follows the drawn body update; the matrix is from the newest one
                     auto loc = [&](const float* m) { V3 w{ m[0] * M[0] + m[1] * M[4] + m[2] * M[8] + M[12], m[0] * M[1] + m[1] * M[5] + m[2] * M[9] + M[13], m[0] * M[2] + m[1] * M[6] + m[2] * M[10] + M[14] };
                         return frame.LocalPosition(frame.game.ReferencePosition(w)); };
                     p0 = loc(mp[0]); xw = loc(mp[3]) - loc(mp[2]); yh = loc(mp[1]) - p0;
@@ -3958,6 +3993,32 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 V3 p = p0 - yq * (hgt * 0.5f - g_cfg.mapClockUp) + zq * 0.002f;
                 XrPosef kp; kp.orientation = QuatFromBasis(xq, yq, zq); kp.position = { p.x, p.y, p.z };
                 xr::SetClockLayer(kp, g_cfg.mapClockWidth);
+            }
+        }
+        // v234: health + syrettes under the GPS: the GPS model's own axes (X right, Z up assumed), moved to the drawn body update
+        if (g_cfg.gpsHealth && controls::MapOpen() && !controls::MonocularOut() && g_hudObj && !IsBadReadPtr(g_hudObj + 0x288, 0x24)) {
+            uint8_t* gg = arms::GpsGfx();
+            if (gg && !IsBadReadPtr(gg + 0x170, 64)) {
+                float raw = *(float*)(g_hudObj + 0x288); int segs = *(int*)(g_hudObj + 0x290), syr = *(int*)(g_hudObj + 0x2A8);
+                float ratio = raw <= 1.05f ? raw : raw / 100.0f;
+                static float dRaw = -1; static int dSyr = -1, dSegs = -1;
+                if (raw != dRaw || syr != dSyr || segs != dSegs) {
+                    static int nl = 0; if (nl++ < 12) LOG("HUD: health %.3f (%d segments), syrettes %d", raw, segs, syr);
+                    dRaw = raw; dSyr = syr; dSegs = segs; DrawHealth(ratio, segs, syr);
+                }
+                float Mc[16]; memcpy(Mc, gg + 0x170, 64); DrawnBodyFix(Mc);
+                auto loc = [&](float x, float y, float z) { V3 w{ x * Mc[0] + y * Mc[4] + z * Mc[8] + Mc[12], x * Mc[1] + y * Mc[5] + z * Mc[9] + Mc[13], x * Mc[2] + y * Mc[6] + z * Mc[10] + Mc[14] };
+                    return frame.LocalPosition(frame.game.ReferencePosition(w)); };
+                V3 o = loc(0, 0, 0), gx = loc(1, 0, 0) - o, gy = loc(0, 1, 0) - o, gz = loc(0, 0, 1) - o;
+                const float sc = sqrtf(Dot(gx, gx)); if (sc > 1e-6f) {   // model units -> metres
+                    V3 xq = Norm(gx), yq = Norm(gz - xq * Dot(gz, xq)), zq = Cross(xq, yq);
+                    V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
+                    V3 p = o - yq * g_cfg.gpsHealthDown + xq * g_cfg.gpsHealthRight + Norm(gy) * g_cfg.gpsHealthFwd;
+                    if (Dot(zq, mid - p) < 0) { xq = xq * -1.0f; zq = zq * -1.0f; }
+                    static bool once = false; if (!once) { once = true; LOG("HUD: GPS axes (local) x %.2f %.2f %.2f  y %.2f %.2f %.2f  z %.2f %.2f %.2f, %.3f m per unit", gx.x / sc, gx.y / sc, gx.z / sc, gy.x / sc, gy.y / sc, gy.z / sc, gz.x / sc, gz.y / sc, gz.z / sc, sc); }
+                    XrPosef hp; hp.orientation = QuatFromBasis(xq, yq, zq); hp.position = { p.x, p.y, p.z };
+                    xr::SetHealthLayer(hp, g_cfg.gpsHealthWidth);
+                }
             }
         }
         {   // throwing arc (grip + trigger): drawn into both eyes
@@ -4507,7 +4568,7 @@ static void Install() {
         xr::SetScopeCrosshair((int)IniF("ScopeCrosshair", 2));
         g_cfg.scopeFromWeapon = (int)IniF("ScopeFromWeapon", 1); g_cfg.scopeSmoothing = IniF("ScopeSmoothing", 0.06f);
         g_cfg.testCheats = (int)IniF("TestCheats", 0); { char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); arms::SetIniPath(ip); } g_cfg.reticleDot = (int)IniF("ReticleDot", 1); g_cfg.reticleDistance = IniF("ReticleDistance", 10.0f); g_cfg.reticleSize = IniF("ReticleSize", 0.06f);
-        g_cfg.ammoPanel = (int)IniF("AmmoPanel", 1); g_cfg.ammoPanelWidth = IniF("AmmoPanelWidth", 0.055f); g_cfg.ammoPanelRight = IniF("AmmoPanelRight", 0.05f); g_cfg.ammoPanelRight2 = IniF("AmmoPanelRightSecondary", 0.06f); g_cfg.ammoPanelUp = IniF("AmmoPanelUp", 0.04f); g_cfg.ammoPanelFwd = IniF("AmmoPanelForward", 0.06f); g_cfg.grenPanel = (int)IniF("GrenadePanel", 1); g_cfg.grenPanelWidth = IniF("GrenadePanelWidth", 0.045f); g_cfg.grenPanelLeft = IniF("GrenadePanelLeft", 0.06f); g_cfg.grenPanelUp = IniF("GrenadePanelUp", 0.02f); g_cfg.grenPanelFwd = IniF("GrenadePanelForward", 0.0f); g_cfg.grenPanelSecs = IniF("GrenadePanelSeconds", 3.0f); g_cfg.grenPanelTilt = IniF("GrenadePanelTilt", 30.0f); g_cfg.mapClock = (int)IniF("MapClock", 1); g_cfg.mapClockWidth = IniF("MapClockWidth", 0.07f); g_cfg.mapClockUp = IniF("MapClockUp", 0.0f); g_cfg.mapClock24 = (int)IniF("MapClock24h", 0);
+        g_cfg.ammoPanel = (int)IniF("AmmoPanel", 1); g_cfg.ammoPanelWidth = IniF("AmmoPanelWidth", 0.055f); g_cfg.ammoPanelRight = IniF("AmmoPanelRight", 0.05f); g_cfg.ammoPanelRight2 = IniF("AmmoPanelRightSecondary", 0.06f); g_cfg.ammoPanelUp = IniF("AmmoPanelUp", 0.04f); g_cfg.ammoPanelFwd = IniF("AmmoPanelForward", 0.06f); g_cfg.grenPanel = (int)IniF("GrenadePanel", 1); g_cfg.grenPanelWidth = IniF("GrenadePanelWidth", 0.045f); g_cfg.grenPanelLeft = IniF("GrenadePanelLeft", 0.06f); g_cfg.grenPanelUp = IniF("GrenadePanelUp", 0.02f); g_cfg.grenPanelFwd = IniF("GrenadePanelForward", 0.0f); g_cfg.grenPanelSecs = IniF("GrenadePanelSeconds", 3.0f); g_cfg.grenPanelTilt = IniF("GrenadePanelTilt", 30.0f); g_cfg.mapClock = (int)IniF("MapClock", 1); g_cfg.mapClockWidth = IniF("MapClockWidth", 0.07f); g_cfg.mapClockUp = IniF("MapClockUp", 0.0f); g_cfg.mapClock24 = (int)IniF("MapClock24h", 0); g_cfg.gpsHealth = (int)IniF("GpsHealth", 1); g_cfg.gpsHealthWidth = IniF("GpsHealthWidth", 0.06f); g_cfg.gpsHealthDown = IniF("GpsHealthDown", 0.09f); g_cfg.gpsHealthRight = IniF("GpsHealthRight", 0.0f); g_cfg.gpsHealthFwd = IniF("GpsHealthForward", 0.0f);
         g_cfg.ammoPanelYaw = IniF("AmmoPanelYaw", 20.0f); g_cfg.ammoPanelTilt = IniF("AmmoPanelTilt", 15.0f);
         ac.handOfs[0] = IniF("HandOffsetX", 0); ac.handOfs[1] = IniF("HandOffsetY", 0); ac.handOfs[2] = IniF("HandOffsetZ", 0);
         ac.leftHandRoll = IniF("LeftHandRoll", 45.0f); ac.macheteAngle = IniF("MacheteAngle", 60.0f);
@@ -4563,7 +4624,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 49: 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 50: health + syrettes under the GPS; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
