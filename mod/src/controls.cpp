@@ -162,6 +162,7 @@ static volatile bool g_mapReal = false;   // v219: the map controls are up for t
 static volatile bool g_phoneOut = false; static ULONGLONG g_phoneT = 0;
 bool PhoneOut() { return g_phoneOut; }
 bool ItemControls() { return g_itemMap || g_phoneOut; }
+unsigned long long PhoneAgeMs() { return g_phoneOut ? GetTickCount64() - g_phoneT : 0; }
 void ClearPhone() { if (g_phoneOut) { g_phoneOut = false; LOG("controls: phone away (weapon back)"); } }
 static volatile LONG g_recapReq = 0;
 int TakeRecapture() { return (int)InterlockedExchange(&g_recapReq, 0); }

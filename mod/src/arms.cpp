@@ -1051,7 +1051,7 @@ static void Apply(uint8_t* skel) {
         if (fabsf(g_c.mapAngle) > 0.1f) Map = Mul(Mul(Mul(Map, T1), RotMat(axr, g_c.mapAngle * 0.0174533f)), T2);
         if (fabsf(g_c.mapYaw) > 0.1f) Map = Mul(Mul(Mul(Map, T1), RotMat(axu, g_c.mapYaw * 0.0174533f)), T2);
     }
-    if (g_curWeapon && controls::PhoneOut()) controls::ClearPhone();   // the call is over once a weapon is back in the hand
+    if (g_curWeapon && controls::PhoneOut() && controls::PhoneAgeMs() > 2500) controls::ClearPhone();   // (v234: not in the first moments of a call - the gun is still in the hand then)   // the call is over once a weapon is back in the hand
     // a phone call: its own angles. Only the phone (and the map controls it starts with) - cut scenes and other scripted
     // scenes ("cinematic", conversations) keep the free-hand angles, as the phone angles turned the hands up and sideways
     const bool phoneMode = (controls::PhoneOut() || controls::MapControls()) && !f.map && !g_curWeapon;
@@ -2355,7 +2355,8 @@ static void SnapUpdate(uint8_t* playerEnt, float dt) {
 // +0xB8 UpLeft, +0xBC UpRight, +0xC0 DownLeft, +0xC4 DownRight (skeleton = graphic vt+0x78; bones [skel+0x20], count
 // [skel+0x2C], stride 0xA0, id +0, translation +0x80, model space). Published in the reference frame each frame.
 static float g_clkP[3], g_clkW[3], g_clkH[3]; static DWORD g_clkTick = 0;
-static void MapClockUpdate(uint8_t* pd, const std::function<void(const float*, float*)>& toRef) {
+static float g_clkRel[9]; static bool g_clkRelOk = false;   // v234: P, W, H in the left controller's aim frame (R, U, B), same game frame
+static void MapClockUpdate(const Frame& f, uint8_t* pd, const std::function<void(const float*, float*)>& toRef) {
     if (!controls::MapOpen() || !pd || IsBadReadPtr(pd + 0x4F0, 8)) return;
     typedef uint8_t* (__fastcall *Get_t)(void* inv, void* edx);
     uint8_t* g = ((Get_t)A(0x10129E20))(pd + 0x4F0, nullptr);
@@ -2383,9 +2384,16 @@ static void MapClockUpdate(uint8_t* pd, const std::function<void(const float*, f
     float mid[3], top[3], right[3]; for (int k = 0; k < 3; ++k) { mid[k] = (dl[k] + dr[k]) * 0.5f; top[k] = mid[k] + (ul[k] - dl[k]); right[k] = dr[k]; }
     float wm[3], wt[3], wr[3], wl[3]; toW(mid, wm); toW(top, wt); toW(right, wr); toW(dl, wl);
     float rm[3], rt[3], rr[3], rl[3]; toRef(wm, rm); toRef(wt, rt); toRef(wr, rr); toRef(wl, rl);
-    Lock(); for (int k = 0; k < 3; ++k) { g_clkP[k] = rm[k]; g_clkW[k] = rr[k] - rl[k]; g_clkH[k] = rt[k] - rm[k]; } g_clkTick = GetTickCount(); Unlock();
+    Lock(); for (int k = 0; k < 3; ++k) { g_clkP[k] = rm[k]; g_clkW[k] = rr[k] - rl[k]; g_clkH[k] = rt[k] - rm[k]; } g_clkTick = GetTickCount();
+    // relative to the left controller in the same game frame: drawn from the current controller pose, the clock stays
+    // on the map while you move (the map's world position and the drawn view are a frame or two apart)
+    g_clkRelOk = f.leftValid;
+    if (f.leftValid) { const float* ax[3] = { f.laimR, f.laimU, f.laimB }; float d[3] = { rm[0] - f.lgripO[0], rm[1] - f.lgripO[1], rm[2] - f.lgripO[2] };
+        for (int a = 0; a < 3; ++a) { g_clkRel[a] = Dot3(d, ax[a]); g_clkRel[3 + a] = Dot3(g_clkW, ax[a]); g_clkRel[6 + a] = Dot3(g_clkH, ax[a]); } }
+    Unlock();
     static bool once = false; if (!once) { once = true; float w = sqrtf(Dot3(g_clkW, g_clkW)), hh = sqrtf(Dot3(g_clkH, g_clkH)); LOG("map clock: map %.2f x %.2f (reference units)", w, hh); }
 }
+bool MapClockHand(float rel[9]) { if (!g_csInit) return false; Lock(); bool ok = g_clkRelOk && g_clkTick && GetTickCount() - g_clkTick < 200; memcpy(rel, g_clkRel, 36); Unlock(); return ok; }
 bool MapClock(float p[3], float w[3], float h[3]) {
     if (!g_csInit) return false; Lock(); bool ok = g_clkTick && GetTickCount() - g_clkTick < 200; memcpy(p, g_clkP, 12); memcpy(w, g_clkW, 12); memcpy(h, g_clkH, 12); Unlock(); return ok; }
 // the game's time of day: environment manager [0x10FE4174] +0x260, seconds since midnight
@@ -2837,7 +2845,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
         controls::SetHandsAway((g_userHolster && !g_climbWas) || (foreignLock && controls::NormalControls()));
     }
     { auto toRef = [&](const float* w, float* out) { Put3(out, f.game.ReferencePosition(Read3(w))); };
-      ThrowArcUpdate(f, pd, toWorld, toRef); MapClockUpdate(pd, toRef); }
+      ThrowArcUpdate(f, pd, toWorld, toRef); MapClockUpdate(f, pd, toRef); }
     { float o[3], d[3], p[3], t; if (AimPoint(o, d, p, &t)) { g_aimDist = t; g_aimTick = GetTickCount(); } }   // the aiming dot sits on what the weapon points at
     if (controls::VehicleMode() != 0) {   // in a vehicle: no grabbing, climbing or snap turns (the grips are vehicle controls)
         for (int i = 0; i < 2; ++i) { if (g_held[i].active) { HandleRelease(g_held[i].h); g_held[i] = Held{}; } g_gripPrev[i] = true; }

@@ -3917,6 +3917,15 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 V3 p0 = frame.LocalPosition({ cp[0], cp[1], cp[2] });
                 V3 xw = frame.LocalPosition({ cp[0] + cw[0], cp[1] + cw[1], cp[2] + cw[2] }) - p0;
                 V3 yh = frame.LocalPosition({ cp[0] + ch[0], cp[1] + ch[1], cp[2] + ch[2] }) - p0;
+                float rel[9]; const xr::HandState& lh = xr::Hand(0);
+                if (lh.aimValid && lh.gripValid && arms::MapClockHand(rel)) {   // from the controller as it is now (stays on the map while moving)
+                    const float k = sqrtf(Dot(xw, xw)) / fmaxf(1e-6f, sqrtf(cw[0] * cw[0] + cw[1] * cw[1] + cw[2] * cw[2]));   // ref units -> metres
+                    const XrQuaternionf& q = lh.aim.orientation;
+                    V3 ax = QRot(q, { 1, 0, 0 }), ay = QRot(q, { 0, 1, 0 }), az = QRot(q, { 0, 0, 1 });
+                    p0 = ToV3(lh.grip.position) + (ax * rel[0] + ay * rel[1] + az * rel[2]) * k;
+                    xw = (ax * rel[3] + ay * rel[4] + az * rel[5]) * k;
+                    yh = (ax * rel[6] + ay * rel[7] + az * rel[8]) * k;
+                }
                 V3 xq = Norm(xw), yq = Norm(yh - xq * Dot(yh, xq)), zq = Cross(xq, yq);
                 V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
                 if (Dot(zq, mid - p0) < 0) { xq = xq * -1.0f; zq = zq * -1.0f; }   // the face toward you (text not mirrored)
@@ -4529,7 +4538,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 45: clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 46: map clock follows the hand; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

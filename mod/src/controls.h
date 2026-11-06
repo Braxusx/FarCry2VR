@@ -65,6 +65,7 @@ int TakeThrowRelease();          // the aiming hand let go since the last call (
 void FireThrow();                // press the game's throw button
 bool PhoneOut();                  // a phone call is up (see controls.cpp)
 void ClearPhone();
+unsigned long long PhoneAgeMs();   // v234: how long the phone has been out
 int TakeRecapture();              // left grip + A: take the current weapon hold again
 int TakeHolsterToggle();          // left grip + B was pressed (put the weapon away / bring it back)
 int TakeReloadPress();            // the reload button was pressed since the last call
