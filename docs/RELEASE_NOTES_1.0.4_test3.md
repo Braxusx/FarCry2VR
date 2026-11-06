@@ -1,6 +1,9 @@
-# Far Cry 2 VR 1.0.4 test 2
+# Far Cry 2 VR 1.0.4 test 3
 
-**Test build** (mod v234 test 53, launcher 1.0.4 test 2). Everything below has been tested in play except where noted. Please report problems with the logs from the launcher (**Collect logs** in the launcher).
+**Test build** (mod v234 test 56, launcher 1.0.4 test 3). Everything below has been tested in play except where noted. Please report problems with the logs from the launcher (**Collect logs** in the launcher).
+
+**New in test 3**
+- **About 1 ms more time per frame for the game:** the game no longer waits for the graphics card at the end of each frame before starting the next one; the graphics card hands the finished frame to the headset by itself. This mainly helps PCs where the game runs close to the headset's frame time (stutter or jerky movement at 72/80/90 Hz with frames close to the limit). The game's graphics now start through DXGI 1.1 (needed for this) (`EndFrameWait=0`; `EndFrameWait=1` restores the old behaviour).
 
 **Smoother motion**
 - **No more jittering body, arms and weapon while moving** ("stutter"): the view now follows the body update the game is drawing, not the newest one, which was one game step ahead. Existing settings files are updated automatically (`CameraOnBodyClock` 1 → 2).
@@ -37,4 +40,4 @@
 
 **Requirements:** Windows 10/11, Far Cry 2 (Steam or GOG) **set to DirectX 10** with **anti-aliasing set to None**, an OpenXR runtime with 32-bit support (e.g. Virtual Desktop VDXR, SteamVR 2.17+). DLSS needs an NVIDIA RTX GPU.
 
-Install: run `FarCry2VR-Launcher_1.0.4_test2.exe`, pick the game folder, press **Install** (updates 1.0.x in place, your settings are kept and new options are added). Includes the NVIDIA DLSS runtime, redistributed as part of this mod (not in the source tree). This product uses NVIDIA DLSS technology. Unofficial fan mod, not affiliated with Ubisoft.
+Install: run `FarCry2VR-Launcher_1.0.4_test3.exe`, pick the game folder, press **Install** (updates 1.0.x in place, your settings are kept and new options are added). Includes the NVIDIA DLSS runtime, redistributed as part of this mod (not in the source tree). This product uses NVIDIA DLSS technology. Unofficial fan mod, not affiliated with Ubisoft.
