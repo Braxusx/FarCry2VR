@@ -2687,6 +2687,10 @@ static void EuroUpdate(EuroPose& e, XrPosef& pose, float dt, bool valid) {
     pose.position = { e.p.x, e.p.y, e.p.z }; pose.orientation = e.q;
 }
 static xr::HandState SmoothHand(int side, XrTime t) {
+#if defined(FC2VR_BODY_YAW_TESTING)
+    xr::HandState visual;
+    if(fc2vr::hands::leftHanded && body_yaw_fixture::VisualHand(side,visual))return visual;
+#endif
     static EuroPose eg[2], ea[2]; static XrTime last[2] = { 0, 0 };
     xr::HandState h = xr::Hand(side);
     float dt = last[side] ? (float)((double)(t - last[side]) * 1e-9) : 0; last[side] = t;
@@ -2714,6 +2718,9 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
         const bool inputCurrent = xr::InputSnapshot(physical,inputHead,inputHeadValid,&af.source);
         af.handAuthority = inputCurrent && physical[fc2vr::hands::Weapon()].gripValid && physical[fc2vr::hands::Weapon()].aimValid;
         af.leftAuthority = inputCurrent && physical[fc2vr::hands::Support()].gripValid && physical[fc2vr::hands::Support()].aimValid;
+#if defined(FC2VR_BODY_YAW_TESTING)
+        if(fc2vr::hands::leftHanded && body_yaw_fixture::current.configured){af.handAuthority=false;af.leftAuthority=false;}
+#endif
         af.headAuthority = inputCurrent && inputHeadValid;
         af.weapon = arms::CurrentWeapon();
         af.valid = true; af.handValid = rh.aimValid && rh.gripValid;
@@ -3286,6 +3293,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 g_inEye = false; g_uiEye = -1; g_renderEye = -1;
 #if defined(FC2VR_BODY_YAW_TESTING)
                 if(body_yaw_fixture::current.configured){
+                    arms::ObserveLeftWeapon(e);
                     const auto& test=body_yaw_fixture::current;float position[3]{},heading=0,base=0,transfer=0;uint64_t reference=0;
                     const bool have=arms::PlayerState(position,&heading);
                     arms::BodyYawBasis(0,false,base,transfer,reference);

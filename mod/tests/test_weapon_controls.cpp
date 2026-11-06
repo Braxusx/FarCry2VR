@@ -51,6 +51,14 @@ int main() {
         Check(pad.sThumbLX==controls::Axis(0.3f) && pad.sThumbLY==controls::Axis(0.7f),"physical left stick moves");
         Check(pad.sThumbRX==-32767,"physical right stick turns");
         h[0].stick=h[1].stick={0,0};
+        Reset(left);h[0].btn1=true;
+        controls::Build(pad,h,head,false);
+        Check((pad.wButtons&XINPUT_GAMEPAD_Y)!=0 && !(pad.wButtons&XINPUT_GAMEPAD_A),"physical X keeps original dialog/interact mapping");
+        h[0].btn1=false;
+        Reset(left);h[1].btn1=true;
+        controls::Build(pad,h,head,false);
+        Check((pad.wButtons&XINPUT_GAMEPAD_A)!=0 && !(pad.wButtons&XINPUT_GAMEPAD_Y),"physical A keeps original mapping");
+        h[1].btn1=false;
         Reset(left);h[0].menu=true;
         controls::Build(pad,h,head,false);
         Check((pad.wButtons&XINPUT_GAMEPAD_START)!=0,"pause stays on physical menu button");

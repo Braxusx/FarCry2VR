@@ -27,7 +27,7 @@ int main() {
         Check(roles[0].trigger==physical[support].trigger,"reload follows support trigger");
         Check(roles[1].position==physical[weapon].position,"weapon pose follows physical weapon hand");
         Check(roles[0].squeeze==physical[support].squeeze,"foregrip follows support hand");
-        Check(roles[1].btn1==physical[weapon].btn1 && roles[0].btn2==physical[support].btn2,"face buttons follow action roles");
+        Check(roles[1].btn1==physical[1].btn1 && roles[0].btn2==physical[0].btn2,"face buttons stay physical");
         for(int i=0;i<2;++i) {
             Check(roles[i].stick.x==physical[i].stick.x && roles[i].stick.y==physical[i].stick.y,"sticks stay physical");
             Check(roles[i].stickClick==physical[i].stickClick,"sprint/heal stick clicks stay physical");

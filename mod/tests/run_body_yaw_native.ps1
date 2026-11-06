@@ -7,7 +7,8 @@ param(
     [ValidateSet(0,1)][int]$Enabled=1,
     [switch]$GrassFix,
     [switch]$GrassMotion,
-    [switch]$BodyOnly
+    [switch]$BodyOnly,
+    [switch]$LeftWeapon
 )
 # Owned, bounded native test. Supply the existing source-built trial manifest.
 # Does not patch original game binaries or send save commands. Restores DLL/settings.
@@ -39,6 +40,8 @@ try{
     $config=[IO.File]::ReadAllText($ini)
     $config=[regex]::Replace($config,'(?m)^HeadsetBodyYaw=.*\r?\n?','')
     $config=$config.Replace('[VR]',"[VR]`r`nHeadsetBodyYaw=$Enabled")
+    $config=[regex]::Replace($config,'(?m)^LeftHandedWeapon=.*\r?\n?','')
+    $config=$config.Replace('[VR]',("[VR]`r`nLeftHandedWeapon="+[int][bool]$LeftWeapon))
     if($BodyOnly){
         foreach($key in @('WeaponInHand','AimFromController','DumpSkeleton')){
             $config=[regex]::Replace($config,('(?m)^'+$key+'=.*\r?\n?'),'')

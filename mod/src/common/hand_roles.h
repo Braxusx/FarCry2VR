@@ -12,12 +12,14 @@ inline int Support() { return Physical(0); }
 template<class Hand> void Controls(const Hand* physical, Hand* roles) {
     roles[0] = physical[Support()];
     roles[1] = physical[Weapon()];
-    // Locomotion and pause retain their physical locations. All pose flags,
-    // triggers, grips and face buttons travel with their action role.
+    // Locomotion, face buttons and pause retain their physical locations.
+    // Only poses, triggers and grips travel with their weapon/support role.
     for (int i=0;i<2;++i) {
         roles[i].stick = physical[i].stick;
         roles[i].stickClick = physical[i].stickClick;
         roles[i].menu = physical[i].menu;
+        roles[i].btn1 = physical[i].btn1;
+        roles[i].btn2 = physical[i].btn2;
     }
 }
 } // namespace fc2vr::hands

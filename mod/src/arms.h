@@ -135,6 +135,9 @@ void Install(uintptr_t base, const Config& c, PatchFn patch);
 void SetWeaponKey(uint32_t k);     // current weapon type id (HUD reticle element name), 0 = unknown
 void SetIniPath(const char* p);    // fc2vr.ini: saved weapon holds [Holds]
 void SubmitFrame(const Frame& f);
+#if defined(FC2VR_BODY_YAW_TESTING)
+void ObserveLeftWeapon(int eye); // native readback after engine eye rendering
+#endif
 // Observation only: these stamps do not grant freshness or pose authority.
 struct FrameUsage {
     bool haveApplied = false, haveInteraction = false;
