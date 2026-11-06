@@ -1,5 +1,8 @@
 // perf.cpp - see perf.h
 #include "perf.h"
+#include <map>
+#include <string>
+#include <vector>
 #include "log.h"
 #include "gameaddr.h"
 #include <stdint.h>
@@ -78,7 +81,22 @@ static uintptr_t g_dBase = 0, g_dTextEnd = 0;
 static CRITICAL_SECTION g_cs;
 struct Ent { uint64_t key; uint32_t a, b; uint32_t n; };
 static const int kTab = 4096;
-static Ent g_eip[kTab], g_call[kTab], g_incl[kTab];
+static Ent g_eip[kTab], g_call[kTab], g_incl[kTab], g_sys[kTab];
+// v234 test 61: the nearest exported function below an address in a system DLL (ntdll!NtWaitForSingleObject etc.)
+static void ExportName(uintptr_t addr, char* out, size_t n) {
+    HMODULE mod = nullptr; snprintf(out, n, "%08x", (unsigned)addr);
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)addr, &mod) || !mod) return;
+    char p[MAX_PATH] = "?"; GetModuleFileNameA(mod, p, MAX_PATH); const char* b = strrchr(p, '\\'); b = b ? b + 1 : p;
+    uint8_t* base = (uint8_t*)mod; IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
+    IMAGE_DATA_DIRECTORY dd = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    const char* best = nullptr; uint32_t bestRva = 0, rva = (uint32_t)(addr - (uintptr_t)base);
+    if (dd.VirtualAddress && dd.Size) {
+        IMAGE_EXPORT_DIRECTORY* ed = (IMAGE_EXPORT_DIRECTORY*)(base + dd.VirtualAddress);
+        uint32_t* fn = (uint32_t*)(base + ed->AddressOfFunctions); uint32_t* nm = (uint32_t*)(base + ed->AddressOfNames); uint16_t* ord = (uint16_t*)(base + ed->AddressOfNameOrdinals);
+        for (DWORD i = 0; i < ed->NumberOfNames; ++i) { uint32_t f = fn[ord[i]]; if (f <= rva && f > bestRva && !(f >= dd.VirtualAddress && f < dd.VirtualAddress + dd.Size)) { bestRva = f; best = (const char*)(base + nm[i]); } }
+    }
+    if (best) snprintf(out, n, "%s!%s+%x", b, best, rva - bestRva); else snprintf(out, n, "%s+%x", b, rva);
+}
 // inclusive attribution: for each function of interest, which of its call sites is on the stack (Steam VA, size)
 struct Focus { const char* name; uint32_t va, size; uintptr_t lo, hi; };
 static Focus g_focus[] = {
@@ -150,6 +168,7 @@ static DWORD WINAPI SamplerThread(LPVOID p) {
             HMODULE mod = nullptr;
             GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)eip, &mod);
             Add(g_eip, ((uint64_t)ph << 32) | ((uintptr_t)mod | 1), (uint32_t)(uintptr_t)mod, 1);
+            Add(g_sys, ((uint64_t)ph << 32) | (uint32_t)(eip & ~0xFu), (uint32_t)(eip & ~0xFu), ph);
             Add(g_call, ((uint64_t)ph << 56) ^ ((uint64_t)r1 << 24) ^ r2 ^ ((uint64_t)(uintptr_t)mod << 8), r1, r2 | 0);
         }
         LeaveCriticalSection(&g_cs);
@@ -187,9 +206,9 @@ void Report() {
     DWORD now = GetTickCount();
     if (now - last < 10000) return;
     last = now;
-    static Ent a[kTab], b[kTab], ic[kTab]; static uint32_t pn[P_COUNT]; uint32_t tot;
+    static Ent a[kTab], b[kTab], ic[kTab], sy[kTab]; static uint32_t pn[P_COUNT]; uint32_t tot;
     EnterCriticalSection(&g_cs);
-    memcpy(a, g_eip, sizeof a); memcpy(b, g_call, sizeof b); memcpy(ic, g_incl, sizeof ic); memcpy(pn, g_phaseN, sizeof pn); tot = g_total;
+    memcpy(a, g_eip, sizeof a); memcpy(b, g_call, sizeof b); memcpy(sy, g_sys, sizeof sy); memset(g_sys, 0, sizeof g_sys); memcpy(ic, g_incl, sizeof ic); memcpy(pn, g_phaseN, sizeof pn); tot = g_total;
     memset(g_eip, 0, sizeof g_eip); memset(g_call, 0, sizeof g_call); memset(g_incl, 0, sizeof g_incl); memset(g_phaseN, 0, sizeof g_phaseN); g_total = 0;
     LeaveCriticalSection(&g_cs);
     if (!tot) return;
@@ -220,6 +239,15 @@ void Report() {
             int shown = 0;
             for (int i = 0; i < kTab && shown < 14; ++i) if (ic[i].n && (int)ic[i].a == f && ic[i].n * 200 >= sum) { ++shown; LogWrite("    %5.1f%% call site +%04x", 100.0 * ic[i].n / tot, ic[i].b); }
         }
+    }
+    {   // v234 test 61: system DLL time by function (tells waiting - NtWait*, NtDelay* - from work)
+        std::map<std::string, uint32_t> m;
+        for (int i = 0; i < kTab; ++i) if (sy[i].n) { char nm[160]; ExportName(sy[i].a, nm, sizeof nm); int ph = (int)sy[i].b; if (ph < 0 || ph >= P_COUNT) ph = 0;
+            char k[200]; snprintf(k, sizeof k, "[%s] %s", kPhase[ph], nm); m[k] += sy[i].n; }
+        std::vector<std::pair<uint32_t, std::string>> v; for (auto& e : m) v.push_back({ e.second, e.first });
+        std::sort(v.begin(), v.end(), [](const std::pair<uint32_t, std::string>& x, const std::pair<uint32_t, std::string>& y) { return x.first > y.first; });
+        LogWrite(" top system functions:");
+        for (size_t i = 0; i < v.size() && i < 30; ++i) LogWrite("  %5.1f%% %s", 100.0 * v[i].first / tot, v[i].second.c_str());
     }
     top(a, "EIP", false);
     top(b, "callers of non-Dunia EIP (first two Dunia return addrs)", true);

@@ -740,20 +740,20 @@ static void NoteDraw(void* frame, ID3D10Device* dev) {
     }
 }
 namespace cbcap { void OnDraw(uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t e, uint32_t f, void* rtv, int eye); }
-static void STDMETHODCALLTYPE Hook_DrawIndexed(ID3D10Device* d, UINT n, UINT s0, INT b) { PwDraw(); cbcap::OnDraw(0x101, n, s0, (uint32_t)b, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); o_DrawIndexed(d, n, s0, b); }
-static void STDMETHODCALLTYPE Hook_Draw(ID3D10Device* d, UINT n, UINT s0) { PwDraw(); cbcap::OnDraw(0x102, n, s0, 0, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); o_Draw(d, n, s0); }
+static void STDMETHODCALLTYPE Hook_DrawIndexed(ID3D10Device* d, UINT n, UINT s0, INT b) { cbcap::OnDraw(0x101, n, s0, (uint32_t)b, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); o_DrawIndexed(d, n, s0, b); }
+static void STDMETHODCALLTYPE Hook_Draw(ID3D10Device* d, UINT n, UINT s0) { cbcap::OnDraw(0x102, n, s0, 0, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); o_Draw(d, n, s0); }
 typedef void (STDMETHODCALLTYPE *DrawIdxInst_t)(ID3D10Device*, UINT, UINT, UINT, INT, UINT);
 typedef void (STDMETHODCALLTYPE *DrawInst_t)(ID3D10Device*, UINT, UINT, UINT, UINT);
 static DrawIdxInst_t o_DrawIdxInst = nullptr; static DrawInst_t o_DrawInst = nullptr;
-static void STDMETHODCALLTYPE Hook_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, UINT c, INT e, UINT f) { PwDraw(); cbcap::OnDraw(0x103, a, b, c, (uint32_t)e, f, g_capRTV0, g_inEye ? g_capEye : 3); o_DrawIdxInst(d, a, b, c, e, f); }
-static void STDMETHODCALLTYPE Hook_DrawInst(ID3D10Device* d, UINT a, UINT b, UINT c, UINT e) { PwDraw(); o_DrawInst(d, a, b, c, e); }
+static void STDMETHODCALLTYPE Hook_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, UINT c, INT e, UINT f) { cbcap::OnDraw(0x103, a, b, c, (uint32_t)e, f, g_capRTV0, g_inEye ? g_capEye : 3); o_DrawIdxInst(d, a, b, c, e, f); }
+static void STDMETHODCALLTYPE Hook_DrawInst(ID3D10Device* d, UINT a, UINT b, UINT c, UINT e) { o_DrawInst(d, a, b, c, e); }
 // Inline hooks on the runtime implementations (catch every caller, cached pointers included).
 static DrawIndexed_t t_DrawIndexed = nullptr; static Draw_t t_Draw = nullptr; static DrawIdxInst_t t_DrawIdxInst = nullptr; static DrawInst_t t_DrawInst = nullptr; static OMSetRT_t t_OMSetRT = nullptr;
 namespace cbcap { void OnDraw(uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t e, uint32_t f, void* rtv, int eye); }
-static void STDMETHODCALLTYPE I_DrawIndexed(ID3D10Device* d, UINT n, UINT s0, INT b) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(1, n, s0, (uint32_t)b, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawIndexed(d, n, s0, b); }
-static void STDMETHODCALLTYPE I_Draw(ID3D10Device* d, UINT n, UINT s0) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(2, n, s0, 0, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_Draw(d, n, s0); }
-static void STDMETHODCALLTYPE I_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, UINT c, INT e, UINT f) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(3, a, b, c, (uint32_t)e, f, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawIdxInst(d, a, b, c, e, f); }
-static void STDMETHODCALLTYPE I_DrawInst(ID3D10Device* d, UINT a, UINT b, UINT c, UINT e) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(4, a, b, c, e, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawInst(d, a, b, c, e); }
+static void STDMETHODCALLTYPE I_DrawIndexed(ID3D10Device* d, UINT n, UINT s0, INT b) { PwDraw(); NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(1, n, s0, (uint32_t)b, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawIndexed(d, n, s0, b); }
+static void STDMETHODCALLTYPE I_Draw(ID3D10Device* d, UINT n, UINT s0) { PwDraw(); NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(2, n, s0, 0, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_Draw(d, n, s0); }
+static void STDMETHODCALLTYPE I_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, UINT c, INT e, UINT f) { PwDraw(); NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(3, a, b, c, (uint32_t)e, f, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawIdxInst(d, a, b, c, e, f); }
+static void STDMETHODCALLTYPE I_DrawInst(ID3D10Device* d, UINT a, UINT b, UINT c, UINT e) { PwDraw(); NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(4, a, b, c, e, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawInst(d, a, b, c, e); }
 // ---- per-eye UI viewport (UiMode 1)
 typedef void (STDMETHODCALLTYPE *RSSetVP_t)(ID3D10Device*, UINT, const D3D10_VIEWPORT*);
 static RSSetVP_t o_RSSetVP = nullptr, t_RSSetVP = nullptr;
@@ -1450,6 +1450,7 @@ static void InstallFramePacing() {
     bool ok = PatchJmpN(A(0x1029B290), pro, 6, (void*)&Hook_TimerUpdate, (void**)&o_TimerUpdate);
     LOG("frame pacing hook (game timer update): %s, FramePacing=%d", ok ? "ok" : "FAILED", g_framePacing);
 }
+static void HookStateCounters(void** vt);
 static void InstallInlineDrawHooks() {
     static bool done = false; if (done) return; done = true;
     InlineHookImpl((void*)o_DrawIndexed, (void*)&I_DrawIndexed, (void**)&t_DrawIndexed, "DrawIndexed");
@@ -1459,6 +1460,7 @@ static void InstallInlineDrawHooks() {
     InlineHookImpl((void*)o_OMSetRT, (void*)&I_OMSetRT, (void**)&t_OMSetRT, "OMSetRenderTargets");
     if (o_RSSetVP) InlineHookImpl((void*)o_RSSetVP, (void*)&I_RSSetVP, (void**)&t_RSSetVP, "RSSetViewports");
     if (g_vtDev) cbcap::Install(*(void***)g_vtDev);
+    if (g_vtDev && g_cfg.profile) HookStateCounters(*(void***)g_vtDev);
     arms::SetBoneSink(&cbcap::NoteBones);
 }
 // DLSS upscaling: the eyes render smaller than shown, so texture detail is picked one or more mip levels too blurry.
@@ -1544,18 +1546,20 @@ static void STDMETHODCALLTYPE Sc_Blend(ID3D10Device* d, void* b, const FLOAT* f,
     g_scLast[SC_BLEND][0] = b; lm = m; if (f) memcpy(lf, f, 16); o_scBlend(d, b, f, m); }
 static void STDMETHODCALLTYPE Sc_DS(ID3D10Device* d, void* s, UINT r) {
     static UINT lr; ++g_scCalls[SC_DS]; if (g_scLast[SC_DS][0] == s && lr == r) ++g_scSame[SC_DS]; g_scLast[SC_DS][0] = s; lr = r; o_scDS(d, s, r); }
-static void HookStateCounters(void** vt) {
-    static bool done = false; if (done) return; done = true;
-    DWORD old; VirtualProtect(&vt[3], 27 * 4, PAGE_EXECUTE_READWRITE, &old);
-    o_scVSCB = (SetArr_t)vt[3]; vt[3] = (void*)&Sc_VSCB;    o_scPSSRV = (SetArr_t)vt[4]; vt[4] = (void*)&Sc_PSSRV;
-    o_scPSSH = (SetOne_t)vt[5]; vt[5] = (void*)&Sc_PSSH;    o_scVSSH = (SetOne_t)vt[7]; vt[7] = (void*)&Sc_VSSH;
-    o_scPSCB = (SetArr_t)vt[10]; vt[10] = (void*)&Sc_PSCB;  o_scIL = (SetOne_t)vt[11]; vt[11] = (void*)&Sc_IL;
-    o_scVB = (SetVB_t)vt[12]; vt[12] = (void*)&Sc_VB;       o_scIB = (SetIB_t)vt[13]; vt[13] = (void*)&Sc_IB;
-    o_scTopo = (SetTopo_t)vt[18]; vt[18] = (void*)&Sc_Topo; o_scVSSRV = (SetArr_t)vt[19]; vt[19] = (void*)&Sc_VSSRV;
-    o_scBlend = (SetBlend_t)vt[25]; vt[25] = (void*)&Sc_Blend; o_scDS = (SetDS_t)vt[26]; vt[26] = (void*)&Sc_DS;
-    o_scRS = (SetOne_t)vt[29]; vt[29] = (void*)&Sc_RS;
-    VirtualProtect(&vt[3], 27 * 4, old, &old);
-    LOG("perf: state call counters on (Profile=1)");
+static void HookStateCounters(void** vt) {   // vt: the device's own vtable; the implementations are hooked inline,
+    static bool done = false; if (done) return; done = true;   // because the engine calls cached method pointers
+    InlineHookImpl(vt[4], (void*)&Sc_PSSRV, (void**)&o_scPSSRV, "count PSSetShaderResources");
+    InlineHookImpl(vt[5], (void*)&Sc_PSSH, (void**)&o_scPSSH, "count PSSetShader");
+    InlineHookImpl(vt[10], (void*)&Sc_PSCB, (void**)&o_scPSCB, "count PSSetConstantBuffers");
+    InlineHookImpl(vt[11], (void*)&Sc_IL, (void**)&o_scIL, "count IASetInputLayout");
+    InlineHookImpl(vt[12], (void*)&Sc_VB, (void**)&o_scVB, "count IASetVertexBuffers");
+    InlineHookImpl(vt[13], (void*)&Sc_IB, (void**)&o_scIB, "count IASetIndexBuffer");
+    InlineHookImpl(vt[18], (void*)&Sc_Topo, (void**)&o_scTopo, "count IASetPrimitiveTopology");
+    InlineHookImpl(vt[19], (void*)&Sc_VSSRV, (void**)&o_scVSSRV, "count VSSetShaderResources");
+    InlineHookImpl(vt[25], (void*)&Sc_Blend, (void**)&o_scBlend, "count OMSetBlendState");
+    InlineHookImpl(vt[26], (void*)&Sc_DS, (void**)&o_scDS, "count OMSetDepthStencilState");
+    InlineHookImpl(vt[29], (void*)&Sc_RS, (void**)&o_scRS, "count RSSetState");
+    LOG("perf: state call counters on (Profile=1; VS constant buffers / VS shader not counted)");
 }
 static void PerfWorkReport(int frames) {
     if (!g_cfg.profile || frames <= 0) return;
@@ -1588,7 +1592,6 @@ static void HookDeviceVtable(ID3D10Device* dev) {
     o_CreateRTV = (CreateRTV_t)vt[76]; vt[76] = (void*)&Hook_CreateRTV;
     VirtualProtect(&vt[71], 6 * 4, old, &old);
     LOG("device vtable hooked (CreateTexture2D, CreateRenderTargetView)");
-    if (g_cfg.profile) HookStateCounters(vt);
 }
 static int g_traceLeft = 0;   // event trace for a few frames
 static void Trace(const char* ev) { hang::Mark(ev); if (g_traceLeft > 0) LogWrite("TRACE %-10s tid=%lu t=%.3f", ev, GetCurrentThreadId(), NowMs()); }
@@ -4849,7 +4852,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 60: Profile=1 work breakdown (shadows, draws, state calls); v234 test 59: flat CPU-busy measurement, dxvk.conf; v234 test 58: Dxvk ini read before the device patch; v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 61: counters on the runtime implementations, profiler names system functions; v234 test 60: Profile=1 work breakdown (shadows, draws, state calls); v234 test 59: flat CPU-busy measurement, dxvk.conf; v234 test 58: Dxvk ini read before the device patch; v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
