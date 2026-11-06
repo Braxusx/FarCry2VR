@@ -82,7 +82,7 @@ static volatile ULONGLONG g_diagUntil = 0;
 static uint8_t* volatile g_wGfx = nullptr; static uint8_t* volatile g_wSkel = nullptr;   // the held weapon's graphic component (world matrix +0x170) and its skeleton   // weapon attachment diagnostic window (after a projectile shot)
 static void* volatile g_reloadState = nullptr; static volatile DWORD g_reloadT = 0;
 
-static float g_lastSpan = 0; static float g_rayRefO[3], g_rayRefD[3]; static DWORD g_rayTick = 0;
+static float g_lastSpan = 0; static float g_rayRefO[3], g_rayRefD[3], g_rayRefU[3]; static DWORD g_rayTick = 0;
 static float g_foregripRef[3]; static bool g_foregripValid = false, g_oneHanded = true;
 static float g_shotO[3], g_shotF[3], g_camFwdNow[3], g_camRefO[3], g_camRefD[3]; static bool g_shotValid = false;
 static fc2vr::authority::Stamp g_shotSource; static void* g_shotWeapon = nullptr; static bool g_shotSynth = false;   // v234: aim from a held (synthesized) right hand
@@ -1125,21 +1125,22 @@ static void Apply(uint8_t* skel) {
     // shots follow the sight line of the re-posed weapon
     // (steady hands: from the camera as it sat on the hand when the hold was taken, carried by the re-pose - not
     // from the game's camera now, which sways while sprinting and would make the aiming dot and shots sway with it)
-    { float so[3], sf[3]; XformPt(Map, co, so); XformDir(Map, cf, sf);
+    { float so[3], sf[3], su[3]; XformPt(Map, co, so); XformDir(Map, cf, sf); XformDir(Map, cu, su);
       if (g_c.steadyHands && g_relHave && !f.map) {
           M4 ir; if (Inv(g_relR, ir)) {
               M4 V = Mul(Mul(ir, Bw[rh]), Map);   // the capture-time camera, re-posed with the weapon
-              for (int k = 0; k < 3; ++k) { so[k] = V.m[3][k]; sf[k] = -V.m[2][k]; }
+              for (int k = 0; k < 3; ++k) { so[k] = V.m[3][k]; sf[k] = -V.m[2][k]; su[k] = V.m[1][k]; }
           }
       }
-      Normalize(sf);
+      Normalize(sf); Normalize(su);
+      float sur[3]; Put3(sur, f.game.ReferenceDirection(Read3(su)));
       float sr[3], sfr[3]; Put3(sfr, f.game.ReferenceDirection(Read3(sf))); toRef(so, sr);
       float cro[3], crd[3]; Put3(crd, f.game.ReferenceDirection(Read3(cf))); toRef(co, cro);   // raw native camera line: turrets still aim along it
       const bool authority = (f.handSynth || (f.handAuthority && xr::InputCurrent(f.source,1))) && f.weapon && f.weapon == g_curWeapon;
       Lock(); if (g_shotWeapon != f.weapon) g_scopeTick = 0;
       g_shotSource = f.source; g_shotWeapon = f.weapon; g_shotSynth = f.handSynth;
       for (int k = 0; k < 3; ++k) so[k] += O[k];
-      memcpy(g_shotO, so, 12); memcpy(g_shotF, sf, 12); memcpy(g_camFwdNow, cf, 12); g_shotValid = authority; memcpy(g_rayRefO, sr, 12); memcpy(g_rayRefD, sfr, 12);
+      memcpy(g_shotO, so, 12); memcpy(g_shotF, sf, 12); memcpy(g_camFwdNow, cf, 12); g_shotValid = authority; memcpy(g_rayRefO, sr, 12); memcpy(g_rayRefD, sfr, 12); memcpy(g_rayRefU, sur, 12);
       memcpy(g_camRefO, cro, 12); memcpy(g_camRefD, crd, 12); g_rayTick = GetTickCount(); Unlock(); }
     // rigid re-pose of both arm chains
     for (int i = 0; i < n && i < 512; ++i) if (g_armMask[i]) Bw[i] = Mul(Bw[i], Map);
@@ -3639,6 +3640,8 @@ float AimDistance() { return g_aimTick && GetTickCount() - g_aimTick < 300 ? g_a
 bool SightRay(float o[3], float d[3], RayContext* context) { if (!g_csInit) return false; fc2vr::authority::Stamp source; void* weapon;
     Lock(); bool ok = g_shotValid && g_rayTick && GetTickCount()-g_rayTick < 200; source = g_shotSource; weapon = g_shotWeapon;
     memcpy(o,g_rayRefO,12); memcpy(d,g_rayRefD,12); if (context) *context = {source,weapon}; Unlock(); return ok && ShotCurrent(source,weapon); }
+bool SightFrame(float o[3], float d[3], float u[3]) {   // v234: the sight line plus its up direction, fixed to the held weapon (ref frame)
+    if (!g_csInit) return false; Lock(); bool ok = g_rayTick && GetTickCount() - g_rayTick < 200; memcpy(o, g_rayRefO, 12); memcpy(d, g_rayRefD, 12); memcpy(u, g_rayRefU, 12); Unlock(); return ok; }
 static bool MonoAimRay(float o[3], float d[3]) {
     if (!g_inMonoUpd || !controls::MonocularAtFace() || !g_csInit) return false;
     Lock(); bool ok = g_scopeTick && GetTickCount() - g_scopeTick < 250; memcpy(o, g_scopeO, 12); memcpy(d, g_scopeD, 12); Unlock();

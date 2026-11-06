@@ -104,7 +104,7 @@ struct Config {
     int   scopeRound = 1; float scopeRoundSize = 0.8f, scopeHudX = 0.83f, scopeHudY = 0.925f;   // round scope window, ammo crop
     int   scopeFromWeapon = 1; float scopeSmoothing = 0.06f;   // scope view follows the weapon (s of smoothing)
     int   testCheats = 0; int   reticleDot = 1; float reticleDistance = 10.0f, reticleSize = 0.06f;   // aiming dot
-    int   ammoPanel = 1; float ammoPanelWidth = 0.055f, ammoPanelRight = 0.055f, ammoPanelUp = 0.03f, ammoPanelFwd = -0.03f;   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
+    int   ammoPanel = 1; float ammoPanelWidth = 0.055f, ammoPanelRight = 0.05f, ammoPanelUp = 0.04f, ammoPanelFwd = 0.06f, ammoPanelYaw = 20.0f, ammoPanelTilt = 15.0f;   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
     int   shadowMapSize = 2720;    // sun shadow cascade resolution (game: 2048 at Ultra High), max 2730, 0 = game's           // sun shadow cascades cover the whole VR view in cull mode 1   // hidden extra render area per side (fraction of the half-FOV) for screen-space reflections
     int   hangWatch = 1;            // freeze/crash reports (fc2vr_hang_N.txt/.dmp)
     float pauseMenuScale = 0.75f;  // in-game pause menu panel size factor (on top of HudScale)
@@ -2862,7 +2862,7 @@ static void DrawAmmo(int clip, int pouch) {
     }
     xr::SetAmmoImage(out);
 }
-// v234: the ammo panel beside the weapon: rounds in the clip (large) over the spare rounds, in framed cyan boxes.
+// v234: the ammo panel beside the weapon: rounds in the clip (large) over the spare rounds, in framed light orange boxes.
 static void DrawWeaponAmmo(int clip, int pouch) {
     static HDC dc = nullptr; static HBITMAP bmp = nullptr; static uint32_t* bits = nullptr; static HFONT fBig = nullptr, fSmall = nullptr;
     const int W = xr::WAmmoW, H = xr::WAmmoH;
@@ -2890,7 +2890,7 @@ static void DrawWeaponAmmo(int clip, int pouch) {
     static uint32_t out[xr::WAmmoW * xr::WAmmoH];
     for (int i = 0; i < W * H; ++i) {
         uint32_t p = bits[i]; int a = (int)((p & 0xFF) + ((p >> 8) & 0xFF) + ((p >> 16) & 0xFF)) / 3;
-        const int r = 120, g = 235, b = 240;   // HUD cyan
+        const int r = 0xFD, g = 0xAA, b = 0x48;   // light orange #FDAA48
         int inside = (i / W >= top.top && i / W < top.bottom) || (i / W >= bot.top && i / W < bot.bottom && i % W >= bot.left && i % W < bot.right);
         int bg = inside ? 70 : 0; int aa = a > bg ? a : bg;   // a faint dark backing inside the frames keeps the digits readable
         int cr = r * a / 255, cg = g * a / 255, cb = b * a / 255;
@@ -3799,17 +3799,26 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 xr::SetDotLayer(dp, g_cfg.reticleSize * dist / fmaxf(0.01f, g_cfg.reticleDistance));
             }
         }
-        // v234: ammo panel on the right side of the weapon (follows the right controller, turned to face the eyes)
+        // v234: ammo panel fixed to the right side of the weapon. Position: the right controller grip (where the hand holds
+        // the gun) plus offsets along the weapon's own axes; orientation: the weapon's sight frame (moves and turns with
+        // the gun), facing back toward you, turned inward by AmmoPanelYaw and tilted up by AmmoPanelTilt.
         if (g_cfg.ammoPanel && controls::Active() && arms::CurrentWeapon() != nullptr && !controls::MacheteSelected() && !controls::MapOpen()
             && !controls::MountedWeapon() && !controls::MenuControls() && g_hudClip >= 0) {
             const xr::HandState& rh = xr::Hand(1);
-            if (rh.gripValid) {
+            float so[3], sd[3], su[3];
+            if (rh.gripValid && arms::SightFrame(so, sd, su)) {
+                V3 o0 = frame.LocalPosition({ so[0], so[1], so[2] });
+                V3 fw = frame.LocalPosition({ so[0] + sd[0], so[1] + sd[1], so[2] + sd[2] }) - o0;
+                V3 up = frame.LocalPosition({ so[0] + su[0], so[1] + su[1], so[2] + su[2] }) - o0;
+                fw = Norm(fw); up = Norm(up - fw * Dot(up, fw));
+                V3 rt = Norm(Cross(fw, up));
                 static LONG drawn = -1; if (drawn != g_hudAmmoSeq) { drawn = g_hudAmmoSeq; DrawWeaponAmmo(g_hudClip, g_hudPouch); }
-                const XrPosef& gp = rh.grip;
-                V3 gx = QRot(gp.orientation, { 1, 0, 0 }), gy = QRot(gp.orientation, { 0, 1, 0 }), gz = QRot(gp.orientation, { 0, 0, 1 });
-                V3 p = ToV3(gp.position) + gx * g_cfg.ammoPanelRight + gy * g_cfg.ammoPanelUp + gz * (-g_cfg.ammoPanelFwd);
-                V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
-                V3 zq = Norm(mid - p), xq = Norm(Cross(gy, zq)), yq = Cross(zq, xq);   // faces the eyes, upright with the weapon
+                V3 p = ToV3(rh.grip.position) + rt * g_cfg.ammoPanelRight + up * g_cfg.ammoPanelUp + fw * g_cfg.ammoPanelFwd;
+                const float yw = g_cfg.ammoPanelYaw * 0.0174533f, tl = g_cfg.ammoPanelTilt * 0.0174533f;
+                V3 back = fw * -1.0f;
+                V3 zq = Norm(back * cosf(yw) - rt * sinf(yw));           // the panel's face: back toward you, turned inward
+                zq = Norm(zq * cosf(tl) + up * sinf(tl));                 // and tilted up
+                V3 xq = Norm(Cross(up, zq)), yq = Cross(zq, xq);
                 XrPosef ap; ap.orientation = QuatFromBasis(xq, yq, zq); ap.position = { p.x, p.y, p.z };
                 xr::SetWeaponAmmoLayer(ap, g_cfg.ammoPanelWidth);
             }
@@ -4361,7 +4370,7 @@ static void Install() {
         xr::SetScopeCrosshair((int)IniF("ScopeCrosshair", 2));
         g_cfg.scopeFromWeapon = (int)IniF("ScopeFromWeapon", 1); g_cfg.scopeSmoothing = IniF("ScopeSmoothing", 0.06f);
         g_cfg.testCheats = (int)IniF("TestCheats", 0); { char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); arms::SetIniPath(ip); } g_cfg.reticleDot = (int)IniF("ReticleDot", 1); g_cfg.reticleDistance = IniF("ReticleDistance", 10.0f); g_cfg.reticleSize = IniF("ReticleSize", 0.06f);
-        g_cfg.ammoPanel = (int)IniF("AmmoPanel", 1); g_cfg.ammoPanelWidth = IniF("AmmoPanelWidth", 0.055f); g_cfg.ammoPanelRight = IniF("AmmoPanelRight", 0.055f); g_cfg.ammoPanelUp = IniF("AmmoPanelUp", 0.03f); g_cfg.ammoPanelFwd = IniF("AmmoPanelForward", -0.03f);
+        g_cfg.ammoPanel = (int)IniF("AmmoPanel", 1); g_cfg.ammoPanelWidth = IniF("AmmoPanelWidth", 0.055f); g_cfg.ammoPanelRight = IniF("AmmoPanelRight", 0.05f); g_cfg.ammoPanelUp = IniF("AmmoPanelUp", 0.04f); g_cfg.ammoPanelFwd = IniF("AmmoPanelForward", 0.06f); g_cfg.ammoPanelYaw = IniF("AmmoPanelYaw", 20.0f); g_cfg.ammoPanelTilt = IniF("AmmoPanelTilt", 15.0f);
         ac.handOfs[0] = IniF("HandOffsetX", 0); ac.handOfs[1] = IniF("HandOffsetY", 0); ac.handOfs[2] = IniF("HandOffsetZ", 0);
         ac.leftHandRoll = IniF("LeftHandRoll", 45.0f); ac.macheteAngle = IniF("MacheteAngle", 60.0f);
         ac.leftHandYaw = IniF("LeftHandYaw", 30.0f); ac.leftForearmTwist = IniF("LeftForearmTwist", 1.0f); ac.armsIndependent = (int)IniF("ArmsIndependent", 1); ac.steadyHands = (int)IniF("SteadyHands", 1); ac.grabBoxShrink = IniF("GrabBoxShrink", 0.25f); ac.upperArmTwist = IniF("UpperArmTwist", 0.5f); ac.macheteYaw = IniF("MacheteYaw", 15.0f); ac.macheteRoll = IniF("MacheteRoll", 0.0f); ac.mapAngle = IniF("MapPitch", 0.0f); ac.mapYaw = IniF("MapYaw", 0.0f); ac.mapRoll = IniF("MapRoll", 0.0f); ac.freePitch = IniF("FreeHandPitch", 0.0f); ac.freeYaw = IniF("FreeHandYaw", 0.0f); ac.freeRoll = IniF("FreeHandRoll", 0.0f); ac.phonePitch = IniF("PhonePitch", ac.freePitch); ac.phoneYaw = IniF("PhoneYaw", ac.freeYaw); ac.phoneRoll = IniF("PhoneRoll", ac.freeRoll); ac.phoneDiag = (int)IniF("PhoneDiag", 0);
@@ -4416,7 +4425,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 37: ammo panel beside the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 38: ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
