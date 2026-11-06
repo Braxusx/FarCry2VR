@@ -119,6 +119,9 @@ bool HeadCurrent(const InputStamp& source);
 bool AcceptedInputCurrent(const InputStamp& source, int hand);   // accepted snapshot, not permission to refresh a raw pose
 void InvalidateForRecenter();   // render thread; invalidates leases and requires neutral controls again
 void SetRumble(float left, float right);
+void SetGpuHandover(bool on);   // v234 test 54: EndFrameWait=0 - the GPU hands the frame over (keyed-mutex fence), the render thread does not wait
+bool GpuHandover();
+bool HandoverStats(double& avgMs, double& maxMs, int& frames, bool& gpu);   // since the last call (render thread)
 void SetHoldLostPose(bool on);   // HoldLostTracking: keep the last pose of a controller that loses tracking   // 0..1 per hand, applied every frame
 
 void Shutdown();

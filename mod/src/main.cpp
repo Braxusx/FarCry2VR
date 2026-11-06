@@ -1541,6 +1541,17 @@ static void ProfReport() {
         memset(g_bufSites, 0, sizeof g_bufSites);
     } }
     InterlockedExchange(&g_texCreates, 0); InterlockedExchange(&g_rtvCreates, 0);
+    {   // v234 test 54: before/after line for the end-of-frame handover (EndFrameWait, Ctrl+F11), about every 10 s
+        static Prof acc; static int reps = 0;
+        acc.frame += p.frame; acc.wait += p.wait; acc.eye0 += p.eye0; acc.eye1 += p.eye1; acc.end += p.end; acc.n += p.n;
+        if (++reps >= 8 && acc.n) {
+            double ho = 0, hoMax = 0; int hoN = 0; bool gpu = false; xr::HandoverStats(ho, hoMax, hoN, gpu);
+            const double q = 1.0 / acc.n;
+            LOG("HANDOVER %s: frame %.2f ms, render thread busy %.2f ms (eye0 %.2f, eye1 %.2f, end %.2f), spare %.2f ms (xrWaitFrame) | handover wait %.2f ms (max %.2f)",
+                gpu ? "GPU (no wait)" : "render thread waits", acc.frame * q, (acc.eye0 + acc.eye1 + acc.end) * q, acc.eye0 * q, acc.eye1 * q, acc.end * q, acc.wait * q, ho, hoMax);
+            acc = Prof{}; reps = 0;
+        }
+    }
     p = Prof{};
 }
 
@@ -2422,6 +2433,10 @@ static void Hotkeys(const XrPosef* head) {
         else { g_cfg.vehicleViewSmooth = keep; g_cfg.vehicleViewPrev = 1; }
         LOG("vehicle view smoothing %.2f previous %d (Ctrl+F7)", g_cfg.vehicleViewSmooth, g_cfg.vehicleViewPrev);
         ShowToast(g_cfg.vehicleViewSmooth <= 0 ? "Vehicle view: 3 OFF (head bone)" : g_cfg.vehicleViewPrev ? "Vehicle view: 1 seat, drawn update" : "Vehicle view: 2 seat, latest update"); } p7 = k7; }
+    {   // v234 test 54: Ctrl+F11 switches the end-of-frame handover (GPU / render thread waits) for a before/after measurement
+        static bool p = false; bool k = (GetAsyncKeyState(VK_F11) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000);
+        if (k && !p) { bool on = !xr::GpuHandover(); xr::SetGpuHandover(on); ShowToast(xr::GpuHandover() ? "Frame handover: GPU (new)" : "Frame handover: CPU waits (old)"); }
+        p = k; }
     {   // v234 test: Ctrl+F10 cycles the view's body clock 2 (drawn update) -> 1 (latest update, 1.0.3) -> 0 (game camera)
         static bool p = false; bool k = (GetAsyncKeyState(VK_F10) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000);
         if (k && !p) { g_camBodyClock = g_camBodyClock == 2 ? 1 : g_camBodyClock == 1 ? 0 : 2; LOG("camera body clock %d (Ctrl+F10)", g_camBodyClock);
@@ -4573,6 +4588,7 @@ static void Install() {
         ac.shoulderSide = IniF("ShoulderSide", 0.17f); ac.shoulderDown = IniF("ShoulderDown", 0.22f); ac.shoulderBack = IniF("ShoulderBack", 0.06f);
         ac.twoHandMaxSpan = IniF("TwoHandMaxSpan", 0.65f); ac.noIdleBreak = (int)IniF("NoIdleAnimation", 1);
         xr::SetHoldLostPose(IniF("HoldLostTracking", 1) != 0);
+        xr::SetGpuHandover(IniF("EndFrameWait", 0) == 0);
         g_cfg.grabDistance = IniF("GrabDistance", 0.15f);
         g_cfg.scopeInstant = (int)IniF("ScopeInstant", 1); g_cfg.scopeNeedsGrip = (int)IniF("ScopeNeedsGrip", 1);
         g_cfg.scopeGameReticle = (int)IniF("ScopeGameReticle", 1); g_cfg.scopeAmmoSize = IniF("ScopeAmmoSize", 0.28f);
@@ -4638,7 +4654,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

@@ -241,7 +241,7 @@ static bool CreateShared(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt) {
 }
 
 // Make the D3D10 copies visible to D3D11: flush the game device and wait for its GPU work to finish.
-static void Sync10() {
+static void Sync10Wait() {
     if (!g_evt10) { g_dev10->Flush(); return; }
     g_evt10->End();
     g_dev10->Flush();
@@ -250,6 +250,60 @@ static void Sync10() {
         if (GetTickCount() - t0 > 100) break;
         YieldProcessor();
     }
+}
+// v234 test 54: GPU-side handover. A tiny keyed-mutex texture used as a fence between the game's D3D10 device and our
+// D3D11 device: D3D10 releases key 1 after all of this frame's work (queued in order behind it), D3D11 acquires key 1
+// (the GPU waits, the CPU goes on), copies, releases key 0, and D3D10 takes key 0 back at once so its next frame's
+// writes into the shared textures wait on the GPU for our copies. The render thread no longer waits for the GPU.
+static ID3D10Texture2D* g_fenceTex10 = nullptr; static ID3D11Texture2D* g_fenceTex11 = nullptr;
+static IDXGIKeyedMutex* g_km10 = nullptr; static IDXGIKeyedMutex* g_km11 = nullptr; static bool g_km10Held = false, g_km11Held = false;
+static bool g_gpuHandover = false;   // ini EndFrameWait=0
+static double g_hoMs = 0, g_hoMax = 0; static int g_hoN = 0, g_hoFallbacks = 0; static bool g_hoLastGpu = false;
+static void FenceRelease() {
+    if (g_km11 && g_km11Held) g_km11->ReleaseSync(0);
+    if (g_km10 && g_km10Held) g_km10->ReleaseSync(0);
+    g_km10Held = g_km11Held = false;
+    SafeRelease(g_km10); SafeRelease(g_km11); SafeRelease(g_fenceTex10); SafeRelease(g_fenceTex11);
+}
+static void FenceCreate() {
+    FenceRelease();
+    D3D10_TEXTURE2D_DESC td{}; td.Width = td.Height = 1; td.MipLevels = td.ArraySize = 1; td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    td.SampleDesc.Count = 1; td.Usage = D3D10_USAGE_DEFAULT; td.BindFlags = D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE;
+    td.MiscFlags = D3D10_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    HRESULT hr = g_dev10->CreateTexture2D(&td, nullptr, &g_fenceTex10);
+    HANDLE sh = nullptr;
+    if (SUCCEEDED(hr)) { IDXGIResource* r = nullptr; g_fenceTex10->QueryInterface(__uuidof(IDXGIResource), (void**)&r); hr = r ? r->GetSharedHandle(&sh) : E_NOINTERFACE; if (r) r->Release(); }
+    if (SUCCEEDED(hr) && sh) hr = g_dev11->OpenSharedResource(sh, __uuidof(ID3D11Texture2D), (void**)&g_fenceTex11);
+    if (SUCCEEDED(hr) && g_fenceTex11) hr = g_fenceTex10->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&g_km10);
+    if (SUCCEEDED(hr) && g_km10) hr = g_fenceTex11->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&g_km11);
+    if (SUCCEEDED(hr) && g_km11) hr = g_km10->AcquireSync(0, 100);
+    if (hr != S_OK) { LOG("XR: GPU handover fence unavailable hr=%08lx - the render thread waits for the GPU as before", (unsigned long)hr); FenceRelease(); return; }
+    g_km10Held = true;
+    LOG("XR: GPU handover fence ready (keyed mutex)");
+}
+// after our D3D11 copies of the shared textures: D3D11 releases key 0 (queued after the copies) and D3D10 takes it
+// back, so the game's next writes into those textures wait on the GPU for the copies
+static void HandoverDone() {
+    if (!g_km11Held) return;
+    g_km11->ReleaseSync(0); g_km11Held = false;
+    g_ctx11->Flush();
+    if (g_km10->AcquireSync(0, 100) == S_OK) g_km10Held = true;
+    else { LOG("XR: GPU handover: D3D10 could not take the fence back - wait mode"); g_gpuHandover = false; ++g_hoFallbacks; }
+}
+static void Sync10() {
+    HandoverDone();
+    double t0 = QpcMs(); bool gpu = false;
+    if (g_gpuHandover && g_km10 && g_km11 && g_km10Held) {
+        g_km10->ReleaseSync(1); g_km10Held = false;
+        g_dev10->Flush();
+        HRESULT hr = g_km11->AcquireSync(1, 100);
+        if (hr == S_OK) { gpu = true; g_km11Held = true; }   // given back in HandoverDone, after our copies
+        else {
+            LOG("XR: GPU handover: D3D11 acquire hr=%08lx - wait mode", (unsigned long)hr); g_gpuHandover = false; ++g_hoFallbacks;
+        }
+    }
+    if (!gpu) Sync10Wait();
+    double d = QpcMs() - t0; g_hoMs += d; if (d > g_hoMax) g_hoMax = d; ++g_hoN; g_hoLastGpu = gpu;
 }
 
 static bool CreateChain(Chain& c, int32_t w, int32_t h, int64_t fmt) {
@@ -560,6 +614,7 @@ void Haptic(int side, float amplitude, float seconds, float frequency) {
 // ---------------------------------------------------------------- init
 static void Teardown() {
     InvalidateInput("teardown",true); g_referenceChanges.clear(); ++g_spaceGeneration;
+    FenceRelease();
     for (int i = 0; i < 5; ++i) { SafeRelease(g_shared[i].tex10); SafeRelease(g_shared[i].tex11); }
     g_hud = Chain{}; g_ret = Chain{}; g_dot = Chain{}; SafeRelease(g_dotTex); g_menu = Chain{}; SafeRelease(g_menuTex); g_ammo = Chain{}; SafeRelease(g_ammoTex); g_wammo = Chain{}; SafeRelease(g_wammoTex); g_gren = Chain{}; SafeRelease(g_grenTex); g_clk = Chain{}; SafeRelease(g_clkTex); g_hp = Chain{}; SafeRelease(g_hpTex); g_vig = Chain{}; SafeRelease(g_vigTex); SafeRelease(g_vigPlainTex); SafeRelease(g_vigMonoTex[0]); SafeRelease(g_vigMonoTex[1]);
     g_eye[0] = Chain{}; g_eye[1] = Chain{}; g_screen = Chain{};
@@ -684,6 +739,7 @@ static bool SwapchainsImpl(const D3D10_TEXTURE2D_DESC& eye, const D3D10_TEXTURE2
     if (!CreateChain(g_screen, (int32_t)g_w, (int32_t)g_h, fs)) return false;
     for (int i = 0; i < 2; ++i) if (!CreateShared(g_shared[i], g_eyeW, g_eyeH, g_eyeFormat)) { snprintf(g_err, sizeof(g_err), "shared eye texture %d failed", i); return false; }
     if (!CreateShared(g_shared[2], g_w, g_h, g_bbFormat)) { snprintf(g_err, sizeof(g_err), "shared screen texture failed"); return false; }
+    FenceCreate();
     if (CreateChain(g_hud, (int32_t)g_eyeW, (int32_t)g_eyeH, fe) && CreateShared(g_shared[3], g_eyeW, g_eyeH, g_eyeFormat)) LOG("XR: HUD layer %ux%u ready", g_eyeW, g_eyeH);
     else { LOG("XR: HUD layer unavailable"); SafeRelease(g_shared[3].tex10); SafeRelease(g_shared[3].tex11); }
     if (CreateChain(g_ret, (int32_t)g_eyeW, (int32_t)g_eyeH, fe) && CreateShared(g_shared[4], g_eyeW, g_eyeH, g_eyeFormat)) LOG("XR: reticle layer ready");
@@ -1280,7 +1336,7 @@ void EndFrame(const FrameViews& fv, bool submittedEyes) {
     XrFrameEndInfo ei{ XR_TYPE_FRAME_END_INFO };
     ei.displayTime = fv.displayTime; ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     ei.layerCount = layerCount; ei.layers = layers;
-    Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame");
+    HandoverDone(); Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame");
     g_frameBegun = false;
 }
 
@@ -1306,7 +1362,7 @@ void EndFrameScreen(const FrameViews& fv, ID3D10Texture2D* src, const XrPosef& p
     XrFrameEndInfo ei{ XR_TYPE_FRAME_END_INFO };
     ei.displayTime = fv.displayTime; ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     ei.layerCount = layerCount; ei.layers = layers;
-    Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame(scope)");
+    HandoverDone(); Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame(scope)");
     g_frameBegun = false;
 }
 
@@ -1377,7 +1433,7 @@ void EndFrameScope(const FrameViews& fv, ID3D10Texture2D* src, const XrPosef& po
     XrFrameEndInfo ei{ XR_TYPE_FRAME_END_INFO };
     ei.displayTime = fv.displayTime; ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     ei.layerCount = n; ei.layers = layers;
-    Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame(scope)");
+    HandoverDone(); Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame(scope)");
     g_frameBegun = false;
 }
 
@@ -1406,7 +1462,7 @@ void SubmitScreen(ID3D10Texture2D* src, const XrPosef* pose, float width) {
     XrFrameEndInfo ei{ XR_TYPE_FRAME_END_INFO };
     ei.displayTime = fs.predictedDisplayTime; ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     ei.layerCount = layerCount; ei.layers = layers;
-    Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame(screen)");
+    HandoverDone(); Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame(screen)");
     g_frameBegun = false;
 }
 
@@ -1416,3 +1472,13 @@ void Shutdown() {
 }
 
 } // namespace xr
+
+namespace xr {
+void SetGpuHandover(bool on) { g_gpuHandover = on; LOG("XR: end-of-frame handover: %s", on ? "GPU (render thread does not wait)" : "render thread waits for the GPU"); }
+bool GpuHandover() { return g_gpuHandover && g_km10 != nullptr; }
+bool HandoverStats(double& avgMs, double& maxMs, int& frames, bool& gpu) {
+    if (!g_hoN) return false;
+    avgMs = g_hoMs / g_hoN; maxMs = g_hoMax; frames = g_hoN; gpu = g_hoLastGpu;
+    g_hoMs = g_hoMax = 0; g_hoN = 0; return true;
+}
+}
