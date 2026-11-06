@@ -104,7 +104,8 @@ struct Config {
     int   scopeRound = 1; float scopeRoundSize = 0.8f, scopeHudX = 0.83f, scopeHudY = 0.925f;   // round scope window, ammo crop
     int   scopeFromWeapon = 1; float scopeSmoothing = 0.06f;   // scope view follows the weapon (s of smoothing)
     int   testCheats = 0; int   reticleDot = 1; float reticleDistance = 10.0f, reticleSize = 0.06f;   // aiming dot
-    int   ammoPanel = 1; float ammoPanelWidth = 0.055f, ammoPanelRight = 0.05f, ammoPanelRight2 = 0.06f, ammoPanelUp = 0.04f, ammoPanelFwd = 0.06f, ammoPanelYaw = 20.0f, ammoPanelTilt = 15.0f;   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
+    int   ammoPanel = 1; float ammoPanelWidth = 0.055f, ammoPanelRight = 0.05f, ammoPanelRight2 = 0.06f, ammoPanelUp = 0.04f, ammoPanelFwd = 0.06f, ammoPanelYaw = 20.0f, ammoPanelTilt = 15.0f;
+    int   grenPanel = 1; float grenPanelWidth = 0.045f, grenPanelLeft = 0.05f, grenPanelUp = 0.02f, grenPanelFwd = 0.0f, grenPanelSecs = 3.0f;   // v234: grenade counter by the left hand   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
     int   shadowMapSize = 2720;    // sun shadow cascade resolution (game: 2048 at Ultra High), max 2730, 0 = game's           // sun shadow cascades cover the whole VR view in cull mode 1   // hidden extra render area per side (fraction of the half-FOV) for screen-space reflections
     int   hangWatch = 1;            // freeze/crash reports (fc2vr_hang_N.txt/.dmp)
     float pauseMenuScale = 0.75f;  // in-game pause menu panel size factor (on top of HudScale)
@@ -2898,6 +2899,33 @@ static void DrawWeaponAmmo(int clip, int pouch) {
     }
     xr::SetWeaponAmmoImage(out);
 }
+// v234: grenade / molotov counter (one framed box, same colours as the ammo panel)
+static void DrawGrenades(int count) {
+    static HDC dc = nullptr; static HBITMAP bmp = nullptr; static uint32_t* bits = nullptr; static HFONT fBig = nullptr;
+    const int W = xr::GrenW, H = xr::GrenH;
+    if (!dc) {
+        dc = CreateCompatibleDC(nullptr);
+        BITMAPINFO bi{}; bi.bmiHeader.biSize = sizeof bi.bmiHeader; bi.bmiHeader.biWidth = W; bi.bmiHeader.biHeight = -H; bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
+        bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, (void**)&bits, nullptr, 0); SelectObject(dc, bmp);
+        fBig = CreateFontA(104, 0, 0, 0, FW_BOLD, 0, 0, 0, ANSI_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, "Arial");
+        SetBkMode(dc, TRANSPARENT);
+    }
+    if (!bits) return;
+    RECT all{ 0, 0, W, H }; FillRect(dc, &all, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    const RECT box{ 8, 6, W - 8, H - 6 };
+    HPEN pen = CreatePen(PS_SOLID, 6, RGB(255, 255, 255)); HGDIOBJ op = SelectObject(dc, pen); HGDIOBJ ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
+    RoundRect(dc, box.left, box.top, box.right, box.bottom, 34, 34); SelectObject(dc, op); SelectObject(dc, ob); DeleteObject(pen);
+    char t[16]; snprintf(t, sizeof t, "%d", count < 0 ? 0 : count);
+    SetTextColor(dc, RGB(255, 255, 255)); SelectObject(dc, fBig); RECT tr = box; DrawTextA(dc, t, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    GdiFlush();
+    static uint32_t out[xr::GrenW * xr::GrenH];
+    for (int i = 0; i < W * H; ++i) {
+        uint32_t p = bits[i]; int a = (int)((p & 0xFF) + ((p >> 8) & 0xFF) + ((p >> 16) & 0xFF)) / 3;
+        int inside = i / W >= box.top && i / W < box.bottom; int aa = a > (inside ? 70 : 0) ? a : (inside ? 70 : 0);
+        out[i] = ((uint32_t)aa << 24) | ((uint32_t)(0x48 * a / 255) << 16) | ((uint32_t)(0xAA * a / 255) << 8) | (uint32_t)(0xFD * a / 255);
+    }
+    xr::SetGrenadeImage(out);
+}
 // ---- End key: machete hand menu (pitch / yaw / roll sliders), shown as a panel in front of you.
 // Keyboard: Up/Down select, Left/Right adjust (Shift = 1 deg steps, else 5). Controllers: left stick up/down selects,
 // right stick left/right adjusts (faster the further you push). Changes show live; closing saves them to fc2vr.ini.
@@ -3830,6 +3858,29 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 xr::SetWeaponAmmoLayer(ap, g_cfg.ammoPanelWidth);
             }
         }
+        // v234: grenade counter on the left side of the left hand, for GrenadePanelSeconds after a left-hand throw aim
+        // (left grip + left trigger) starts, and while it is held. Count: the HUD's grenade number (main HUD +0x10C).
+        if (g_cfg.grenPanel && controls::Active()) {
+            static double shownUntil = 0; static bool wasAim = false;
+            bool aim = controls::ThrowAimHand() == 0;
+            if (aim) shownUntil = NowMs() + g_cfg.grenPanelSecs * 1000.0;
+            if (aim && !wasAim) LOG("HUD: grenade counter shown (%d)", g_hudObj && !IsBadReadPtr(g_hudObj + 0x10C, 4) ? *(int*)(g_hudObj + 0x10C) : -1);
+            wasAim = aim;
+            const xr::HandState& lh = xr::Hand(0);
+            uint8_t* hud = g_hudObj;
+            if (NowMs() < shownUntil && lh.aimValid && hud && !IsBadReadPtr(hud + 0x10C, 4) && !controls::MenuControls()) {
+                static int drawnN = -999; int cnt = *(int*)(hud + 0x10C); if (cnt != drawnN) { drawnN = cnt; DrawGrenades(cnt); }
+                const XrPosef& ap0 = lh.aim;
+                V3 fw = QRot(ap0.orientation, { 0, 0, -1 }), up = QRot(ap0.orientation, { 0, 1, 0 }), rt = QRot(ap0.orientation, { 1, 0, 0 });
+                V3 p = ToV3(lh.grip.position) - rt * g_cfg.grenPanelLeft + up * g_cfg.grenPanelUp + fw * g_cfg.grenPanelFwd;
+                const float yw = g_cfg.ammoPanelYaw * 0.0174533f, tl = g_cfg.ammoPanelTilt * 0.0174533f;
+                V3 zq = Norm(fw * -cosf(yw) + rt * sinf(yw));   // back toward you, turned inward (toward the right)
+                zq = Norm(zq * cosf(tl) + up * sinf(tl));
+                V3 xq = Norm(Cross(up, zq)), yq = Cross(zq, xq);
+                XrPosef gp; gp.orientation = QuatFromBasis(xq, yq, zq); gp.position = { p.x, p.y, p.z };
+                xr::SetGrenadeLayer(gp, g_cfg.grenPanelWidth);
+            }
+        }
         {   // throwing arc (grip + trigger): drawn into both eyes
             static float ap[64][3]; bool land = false, aok = false; float an[3];
             int n = arms::GetThrowArc(ap, 64, land, an, aok);
@@ -4377,7 +4428,8 @@ static void Install() {
         xr::SetScopeCrosshair((int)IniF("ScopeCrosshair", 2));
         g_cfg.scopeFromWeapon = (int)IniF("ScopeFromWeapon", 1); g_cfg.scopeSmoothing = IniF("ScopeSmoothing", 0.06f);
         g_cfg.testCheats = (int)IniF("TestCheats", 0); { char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); arms::SetIniPath(ip); } g_cfg.reticleDot = (int)IniF("ReticleDot", 1); g_cfg.reticleDistance = IniF("ReticleDistance", 10.0f); g_cfg.reticleSize = IniF("ReticleSize", 0.06f);
-        g_cfg.ammoPanel = (int)IniF("AmmoPanel", 1); g_cfg.ammoPanelWidth = IniF("AmmoPanelWidth", 0.055f); g_cfg.ammoPanelRight = IniF("AmmoPanelRight", 0.05f); g_cfg.ammoPanelRight2 = IniF("AmmoPanelRightSecondary", 0.06f); g_cfg.ammoPanelUp = IniF("AmmoPanelUp", 0.04f); g_cfg.ammoPanelFwd = IniF("AmmoPanelForward", 0.06f); g_cfg.ammoPanelYaw = IniF("AmmoPanelYaw", 20.0f); g_cfg.ammoPanelTilt = IniF("AmmoPanelTilt", 15.0f);
+        g_cfg.ammoPanel = (int)IniF("AmmoPanel", 1); g_cfg.ammoPanelWidth = IniF("AmmoPanelWidth", 0.055f); g_cfg.ammoPanelRight = IniF("AmmoPanelRight", 0.05f); g_cfg.ammoPanelRight2 = IniF("AmmoPanelRightSecondary", 0.06f); g_cfg.ammoPanelUp = IniF("AmmoPanelUp", 0.04f); g_cfg.ammoPanelFwd = IniF("AmmoPanelForward", 0.06f); g_cfg.grenPanel = (int)IniF("GrenadePanel", 1); g_cfg.grenPanelWidth = IniF("GrenadePanelWidth", 0.045f); g_cfg.grenPanelLeft = IniF("GrenadePanelLeft", 0.05f); g_cfg.grenPanelUp = IniF("GrenadePanelUp", 0.02f); g_cfg.grenPanelFwd = IniF("GrenadePanelForward", 0.0f); g_cfg.grenPanelSecs = IniF("GrenadePanelSeconds", 3.0f);
+        g_cfg.ammoPanelYaw = IniF("AmmoPanelYaw", 20.0f); g_cfg.ammoPanelTilt = IniF("AmmoPanelTilt", 15.0f);
         ac.handOfs[0] = IniF("HandOffsetX", 0); ac.handOfs[1] = IniF("HandOffsetY", 0); ac.handOfs[2] = IniF("HandOffsetZ", 0);
         ac.leftHandRoll = IniF("LeftHandRoll", 45.0f); ac.macheteAngle = IniF("MacheteAngle", 60.0f);
         ac.leftHandYaw = IniF("LeftHandYaw", 30.0f); ac.leftForearmTwist = IniF("LeftForearmTwist", 1.0f); ac.armsIndependent = (int)IniF("ArmsIndependent", 1); ac.steadyHands = (int)IniF("SteadyHands", 1); ac.grabBoxShrink = IniF("GrabBoxShrink", 0.25f); ac.upperArmTwist = IniF("UpperArmTwist", 0.5f); ac.macheteYaw = IniF("MacheteYaw", 15.0f); ac.macheteRoll = IniF("MacheteRoll", 0.0f); ac.mapAngle = IniF("MapPitch", 0.0f); ac.mapYaw = IniF("MapYaw", 0.0f); ac.mapRoll = IniF("MapRoll", 0.0f); ac.freePitch = IniF("FreeHandPitch", 0.0f); ac.freeYaw = IniF("FreeHandYaw", 0.0f); ac.freeRoll = IniF("FreeHandRoll", 0.0f); ac.phonePitch = IniF("PhonePitch", ac.freePitch); ac.phoneYaw = IniF("PhoneYaw", ac.freeYaw); ac.phoneRoll = IniF("PhoneRoll", ac.freeRoll); ac.phoneDiag = (int)IniF("PhoneDiag", 0);
@@ -4432,7 +4484,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 39: secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 40: grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

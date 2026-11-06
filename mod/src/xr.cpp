@@ -77,6 +77,7 @@ static bool g_dotOn = false; static XrPosef g_dotPose{}; static float g_dotSize 
 static Chain g_menu; static ID3D11Texture2D* g_menuTex = nullptr; static bool g_menuOn = false, g_menuDirty = false; static XrPosef g_menuPose{}; static float g_menuWidth = 0.6f;
 static uint32_t g_menuPx[MenuW * MenuH];
 static Chain g_wammo; static ID3D11Texture2D* g_wammoTex = nullptr; static bool g_wammoDirty = false, g_wammoHave = false, g_wammoOn = false; static uint32_t g_wammoPx[WAmmoW * WAmmoH]; static XrPosef g_wammoPose{}; static float g_wammoWidth = 0.08f;
+static Chain g_gren; static ID3D11Texture2D* g_grenTex = nullptr; static bool g_grenDirty = false, g_grenHave = false, g_grenOn = false; static uint32_t g_grenPx[GrenW * GrenH]; static XrPosef g_grenPose{}; static float g_grenWidth = 0.05f;
 static Chain g_ammo; static ID3D11Texture2D* g_ammoTex = nullptr; static bool g_ammoDirty = false, g_ammoHave = false; static uint32_t g_ammoPx[AmmoW * AmmoH];
 // scope: round window + crosshair drawn over the (square-cropped) scope view
 static Chain g_vig; static ID3D11Texture2D* g_vigTex = nullptr; static ID3D11Texture2D* g_vigPlainTex = nullptr; static int g_scopeCross = 2;
@@ -558,7 +559,7 @@ void Haptic(int side, float amplitude, float seconds, float frequency) {
 static void Teardown() {
     InvalidateInput("teardown",true); g_referenceChanges.clear(); ++g_spaceGeneration;
     for (int i = 0; i < 5; ++i) { SafeRelease(g_shared[i].tex10); SafeRelease(g_shared[i].tex11); }
-    g_hud = Chain{}; g_ret = Chain{}; g_dot = Chain{}; SafeRelease(g_dotTex); g_menu = Chain{}; SafeRelease(g_menuTex); g_ammo = Chain{}; SafeRelease(g_ammoTex); g_wammo = Chain{}; SafeRelease(g_wammoTex); g_vig = Chain{}; SafeRelease(g_vigTex); SafeRelease(g_vigPlainTex); SafeRelease(g_vigMonoTex[0]); SafeRelease(g_vigMonoTex[1]);
+    g_hud = Chain{}; g_ret = Chain{}; g_dot = Chain{}; SafeRelease(g_dotTex); g_menu = Chain{}; SafeRelease(g_menuTex); g_ammo = Chain{}; SafeRelease(g_ammoTex); g_wammo = Chain{}; SafeRelease(g_wammoTex); g_gren = Chain{}; SafeRelease(g_grenTex); g_vig = Chain{}; SafeRelease(g_vigTex); SafeRelease(g_vigPlainTex); SafeRelease(g_vigMonoTex[0]); SafeRelease(g_vigMonoTex[1]);
     g_eye[0] = Chain{}; g_eye[1] = Chain{}; g_screen = Chain{};
     if (g_inst && p_xrDestroyInstance) p_xrDestroyInstance(g_inst);   // also destroys session/space/swapchains
     g_inst = XR_NULL_HANDLE; g_sess = XR_NULL_HANDLE; g_local = XR_NULL_HANDLE; g_view = XR_NULL_HANDLE; g_sys = XR_NULL_SYSTEM_ID;
@@ -694,6 +695,11 @@ static bool SwapchainsImpl(const D3D10_TEXTURE2D_DESC& eye, const D3D10_TEXTURE2
         td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         if (FAILED(g_dev11->CreateTexture2D(&td, nullptr, &g_wammoTex))) g_wammoTex = nullptr;
     }
+    if (CreateChain(g_gren, GrenW, GrenH, fe)) {
+        D3D11_TEXTURE2D_DESC td{}; td.Width = GrenW; td.Height = GrenH; td.MipLevels = td.ArraySize = 1; td.Format = (DXGI_FORMAT)fe;
+        td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(g_dev11->CreateTexture2D(&td, nullptr, &g_grenTex))) g_grenTex = nullptr;
+    }
     if (CreateChain(g_menu, MenuW, MenuH, fe)) {
         D3D11_TEXTURE2D_DESC td{}; td.Width = MenuW; td.Height = MenuH; td.MipLevels = td.ArraySize = 1; td.Format = (DXGI_FORMAT)fe;
         td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -773,6 +779,8 @@ static bool SwapchainsImpl(const D3D10_TEXTURE2D_DESC& eye, const D3D10_TEXTURE2
 ID3D10Texture2D* HudTexture() { return g_shared[3].tex10; }
 void SetWeaponAmmoImage(const uint32_t* px) { if (px) { memcpy(g_wammoPx, px, sizeof g_wammoPx); g_wammoDirty = true; g_wammoHave = true; } }
 void SetWeaponAmmoLayer(const XrPosef& pose, float width) { if (g_wammo.sc && g_wammoTex && g_wammoHave) { g_wammoOn = true; g_wammoPose = pose; g_wammoWidth = width; } }
+void SetGrenadeImage(const uint32_t* px) { if (px) { memcpy(g_grenPx, px, sizeof g_grenPx); g_grenDirty = true; g_grenHave = true; } }
+void SetGrenadeLayer(const XrPosef& pose, float width) { if (g_gren.sc && g_grenTex && g_grenHave) { g_grenOn = true; g_grenPose = pose; g_grenWidth = width; } }
 void SetAmmoImage(const uint32_t* px) { if (px) { memcpy(g_ammoPx, px, sizeof g_ammoPx); g_ammoDirty = true; g_ammoHave = true; } }
 void SetMenu(const uint32_t* px, const XrPosef& pose, float width) {
     if (!g_menu.sc || !g_menuTex) return;
@@ -1135,8 +1143,8 @@ void EndFrame(const FrameViews& fv, bool submittedEyes) {
     XrCompositionLayerProjection layer{ XR_TYPE_COMPOSITION_LAYER_PROJECTION };
     XrCompositionLayerQuad hq{ XR_TYPE_COMPOSITION_LAYER_QUAD };
     XrCompositionLayerQuad rq{ XR_TYPE_COMPOSITION_LAYER_QUAD };
-    XrCompositionLayerQuad dq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, mq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, bq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, wq{ XR_TYPE_COMPOSITION_LAYER_QUAD };
-    const XrCompositionLayerBaseHeader* layers[8] = { (XrCompositionLayerBaseHeader*)&layer, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+    XrCompositionLayerQuad dq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, mq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, bq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, wq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, gq{ XR_TYPE_COMPOSITION_LAYER_QUAD };
+    const XrCompositionLayerBaseHeader* layers[9] = { (XrCompositionLayerBaseHeader*)&layer, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
     uint32_t layerCount = 0;
     if (submittedEyes && fv.valid && fv.shouldRender) {
         if (g_hudOn && g_hudBandOn && g_hudDrop > 0) HudBandScan();
@@ -1209,6 +1217,16 @@ void EndFrame(const FrameViews& fv, bool submittedEyes) {
                     layers[layerCount++] = (XrCompositionLayerBaseHeader*)&wq;
                 }
             }
+            if (g_grenOn && g_gren.sc && g_grenTex) {   // v234: grenade counter by the left hand
+                if (g_grenDirty) { g_ctx11->UpdateSubresource(g_grenTex, 0, nullptr, g_grenPx, GrenW * 4, 0); g_grenDirty = false; }
+                if (BlitStatic(g_gren, g_grenTex)) {
+                    gq.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                    gq.space = g_local; gq.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+                    gq.subImage.swapchain = g_gren.sc; gq.subImage.imageRect.extent = { g_gren.w, g_gren.h };
+                    gq.pose = g_grenPose; gq.size = { g_grenWidth, g_grenWidth * (float)GrenH / (float)GrenW };
+                    layers[layerCount++] = (XrCompositionLayerBaseHeader*)&gq;
+                }
+            }
             if (g_menuOn && g_menu.sc && g_menuTex) {
                 if (g_menuDirty) { g_ctx11->UpdateSubresource(g_menuTex, 0, nullptr, g_menuPx, MenuW * 4, 0); g_menuDirty = false; }
                 if (BlitStatic(g_menu, g_menuTex)) {
@@ -1221,7 +1239,7 @@ void EndFrame(const FrameViews& fv, bool submittedEyes) {
             }
         }
     }
-    g_hudOn = false; g_retOn = false; g_dotOn = false; g_menuOn = false; g_wammoOn = false; g_arcFrame = false;
+    g_hudOn = false; g_retOn = false; g_dotOn = false; g_menuOn = false; g_wammoOn = false; g_grenOn = false; g_arcFrame = false;
     g_ctx11->Flush();
     XrFrameEndInfo ei{ XR_TYPE_FRAME_END_INFO };
     ei.displayTime = fv.displayTime; ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
