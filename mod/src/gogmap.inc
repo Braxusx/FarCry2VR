@@ -176,6 +176,7 @@ static const uint32_t kGogMap[][2] = {
     { 0x10FDF190, 0x10F2E890 },
     { 0x10FDF194, 0x10F2E894 },
     { 0x10FDF1AC, 0x10F2E8AC },
+    { 0x10FE4174, 0x10F33874 },   // environment manager instance (v234 map clock)
     { 0x10FE4DA4, 0x10F344A4 },
     { 0x11609560, 0x11558950 },
     { 0x11609668, 0x11558A58 },

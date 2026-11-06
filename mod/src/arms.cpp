@@ -1,3 +1,4 @@
+#include <functional>
 // arms.cpp - first-person weapon and arms follow the right motion controller; shots follow the controller.
 //
 // Far Cry 2's first-person arms are the player pawn's own skeleton, animated relative to its "Camera" bone; the
@@ -2348,6 +2349,51 @@ static void SnapUpdate(uint8_t* playerEnt, float dt) {
     verify = 3;
 }
 
+// ---------------------------------------------------------------- v234: clock under the map
+// The map in the hand is the map gadget's own entity: strategy (*(*(gadget+0x24)+8)) -> [[+0x38]+8]+0xC. Its graphic
+// (0x104E2CC0, type 0x10FDF1AC; world matrix +0x170) has four corner bones whose name ids the strategy keeps at
+// +0xB8 UpLeft, +0xBC UpRight, +0xC0 DownLeft, +0xC4 DownRight (skeleton = graphic vt+0x78; bones [skel+0x20], count
+// [skel+0x2C], stride 0xA0, id +0, translation +0x80, model space). Published in the reference frame each frame.
+static float g_clkP[3], g_clkW[3], g_clkH[3]; static DWORD g_clkTick = 0;
+static void MapClockUpdate(uint8_t* pd, const std::function<void(const float*, float*)>& toRef) {
+    if (!controls::MapOpen() || !pd || IsBadReadPtr(pd + 0x4F0, 8)) return;
+    typedef uint8_t* (__fastcall *Get_t)(void* inv, void* edx);
+    uint8_t* g = ((Get_t)A(0x10129E20))(pd + 0x4F0, nullptr);
+    if (!g || IsBadReadPtr(g + 0x24, 4)) return;
+    uint8_t* u = *(uint8_t**)(g + 0x24); if (!u || IsBadReadPtr(u + 8, 4)) return;
+    uint8_t* st = *(uint8_t**)(u + 8); if (!st || IsBadReadPtr(st + 0x38, 0x90)) return;
+    uint8_t* gd = *(uint8_t**)(st + 0x38); if (!gd || IsBadReadPtr(gd + 8, 4)) return;
+    uint8_t* h = *(uint8_t**)(gd + 8); if (!h || IsBadReadPtr(h + 0xC, 4)) return;
+    uint8_t* ent = *(uint8_t**)(h + 0xC); if (!ent) return;
+    typedef uint8_t* (__fastcall *Comp_t)(void* ent, void* edx, const void* type);
+    if (!*(uint32_t*)A(0x10FDF194)) return;
+    uint8_t* gfx = ((Comp_t)A(0x104E2CC0))(ent, nullptr, (const void*)A(0x10FDF1AC));
+    if (!gfx || IsBadReadPtr(gfx + 0x170, 64)) return;
+    typedef uint8_t* (__fastcall *Sk_t)(void* g, void* edx);
+    uint8_t* sk = ((Sk_t)(*(void***)gfx)[0x78 / 4])(gfx, nullptr);
+    if (!sk || IsBadReadPtr(sk + 0x20, 0x10)) return;
+    uint8_t* bones = *(uint8_t**)(sk + 0x20); int n = *(int*)(sk + 0x2C);
+    if (!bones || n <= 0 || n > 256 || IsBadReadPtr(bones, n * 0xA0)) return;
+    auto bonePos = [&](uint32_t id, float out[3]) { for (int i = 0; i < n; ++i) if (*(uint32_t*)(bones + i * 0xA0) == id) { memcpy(out, bones + i * 0xA0 + 0x80, 12); return true; } return false; };
+    float ul[3], dl[3], dr[3];
+    if (!bonePos(*(uint32_t*)(st + 0xB8), ul) || !bonePos(*(uint32_t*)(st + 0xC0), dl) || !bonePos(*(uint32_t*)(st + 0xC4), dr)) {
+        static int nl = 0; if (nl++ < 3) LOG("map clock: map corner bones not found (%d bones)", n); return; }
+    const float* M = (const float*)(gfx + 0x170);
+    auto toW = [&](const float* m, float* w) { for (int k = 0; k < 3; ++k) w[k] = m[0] * M[k] + m[1] * M[4 + k] + m[2] * M[8 + k] + M[12 + k]; };
+    float mid[3], top[3], right[3]; for (int k = 0; k < 3; ++k) { mid[k] = (dl[k] + dr[k]) * 0.5f; top[k] = mid[k] + (ul[k] - dl[k]); right[k] = dr[k]; }
+    float wm[3], wt[3], wr[3], wl[3]; toW(mid, wm); toW(top, wt); toW(right, wr); toW(dl, wl);
+    float rm[3], rt[3], rr[3], rl[3]; toRef(wm, rm); toRef(wt, rt); toRef(wr, rr); toRef(wl, rl);
+    Lock(); for (int k = 0; k < 3; ++k) { g_clkP[k] = rm[k]; g_clkW[k] = rr[k] - rl[k]; g_clkH[k] = rt[k] - rm[k]; } g_clkTick = GetTickCount(); Unlock();
+    static bool once = false; if (!once) { once = true; float w = sqrtf(Dot3(g_clkW, g_clkW)), hh = sqrtf(Dot3(g_clkH, g_clkH)); LOG("map clock: map %.2f x %.2f (reference units)", w, hh); }
+}
+bool MapClock(float p[3], float w[3], float h[3]) {
+    if (!g_csInit) return false; Lock(); bool ok = g_clkTick && GetTickCount() - g_clkTick < 200; memcpy(p, g_clkP, 12); memcpy(w, g_clkW, 12); memcpy(h, g_clkH, 12); Unlock(); return ok; }
+// the game's time of day: environment manager [0x10FE4174] +0x260, seconds since midnight
+bool GameTimeOfDay(int& hh, int& mm) {
+    uint8_t* env = *(uint8_t**)A(0x10FE4174); if (!env || IsBadReadPtr(env + 0x260, 4)) return false;
+    float t = *(float*)(env + 0x260); if (!(t >= 0.0f && t < 86400.5f)) return false;
+    int s = (int)t; hh = (s / 3600) % 24; mm = (s % 3600) / 60; return true;
+}
 // ---------------------------------------------------------------- safehouse watch (sleep): the right stick sets the time
 // CGadgetUseWatchStrategy update (0x1072DFD0, thiscall this, float dt): in its time-setting mode (+0x80 == 1) the
 // time hand turns by the input axis at +0x68 (written by the input listener from A / D); the right stick writes it.
@@ -2791,7 +2837,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
         controls::SetHandsAway((g_userHolster && !g_climbWas) || (foreignLock && controls::NormalControls()));
     }
     { auto toRef = [&](const float* w, float* out) { Put3(out, f.game.ReferencePosition(Read3(w))); };
-      ThrowArcUpdate(f, pd, toWorld, toRef); }
+      ThrowArcUpdate(f, pd, toWorld, toRef); MapClockUpdate(pd, toRef); }
     { float o[3], d[3], p[3], t; if (AimPoint(o, d, p, &t)) { g_aimDist = t; g_aimTick = GetTickCount(); } }   // the aiming dot sits on what the weapon points at
     if (controls::VehicleMode() != 0) {   // in a vehicle: no grabbing, climbing or snap turns (the grips are vehicle controls)
         for (int i = 0; i < 2; ++i) { if (g_held[i].active) { HandleRelease(g_held[i].h); g_held[i] = Held{}; } g_gripPrev[i] = true; }

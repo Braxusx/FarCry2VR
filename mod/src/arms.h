@@ -186,7 +186,9 @@ void GetPhoneHands(float& angle, float& yaw, float& roll);
 void* CurrentWeapon();   // the player's current weapon object (identity only)                     // called (game thread) when a hand uses the interaction target
 // the weapon's sight line (ref frame: origin, unit direction); false if not updated recently
 bool SightRay(float o[3], float d[3], RayContext* context = nullptr);
-bool SightFrame(float o[3], float d[3], float u[3]);   // v234: sight line + up, fixed to the held weapon (ref frame)
+bool SightFrame(float o[3], float d[3], float u[3]);
+bool MapClock(float p[3], float w[3], float h[3]);   // v234: held map's bottom-middle point, width and height vectors (ref frame)
+bool GameTimeOfDay(int& hh, int& mm);   // v234: sight line + up, fixed to the held weapon (ref frame)
 float AimDistance();
 bool ProjectileReloadActive();     // within the 3.5 s after a projectile weapon shot (its reload)
 void NotifyClip(int clip, int pouch);         // the HUD clip count changed (player's weapon)               // game units along the sight ray to what the weapon points at (0 = unknown)

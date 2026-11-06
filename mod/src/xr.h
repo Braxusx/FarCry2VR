@@ -77,6 +77,9 @@ constexpr int WAmmoW = 256, WAmmoH = 224;
 void SetWeaponAmmoImage(const uint32_t* px);                 // v234: ammo panel beside the weapon (RGBA premultiplied, WAmmoW x WAmmoH)
 void SetWeaponAmmoLayer(const XrPosef& pose, float width);   // this frame: show it (LOCAL space)
 constexpr int GrenW = 256, GrenH = 144;
+constexpr int ClockW = 320, ClockH = 112;
+void SetClockImage(const uint32_t* px);                      // v234: clock under the map (ClockW x ClockH)
+void SetClockLayer(const XrPosef& pose, float width);
 void SetGrenadeImage(const uint32_t* px);                    // v234: grenade / molotov counter by the left hand (GrenW x GrenH)
 void SetGrenadeLayer(const XrPosef& pose, float width);
 void SetAmmoImage(const uint32_t* px);   // the mod's own ammo counter (RGBA premultiplied, AmmoW x AmmoH)
