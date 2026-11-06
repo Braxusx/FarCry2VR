@@ -165,6 +165,9 @@ bool ItemControls() { return g_itemMap || g_phoneOut; }
 void ClearPhone() { if (g_phoneOut) { g_phoneOut = false; LOG("controls: phone away (weapon back)"); } }
 static volatile LONG g_recapReq = 0; static volatile LONG g_watchReq = 0;
 int TakeWatchToggle() { return (int)InterlockedExchange(&g_watchReq, 0); }   // v234: left grip + X
+static volatile bool g_watchOut = false; static volatile LONG g_slotAgainReq = 0;
+void SetWatchOut(bool on) { g_watchOut = on; }
+void ReselectWeapon() { InterlockedExchange(&g_slotAgainReq, 1); }
 int TakeRecapture() { return (int)InterlockedExchange(&g_recapReq, 0); }
 int TakeHolsterToggle() { return (int)InterlockedExchange(&g_holsterReq, 0); }
 int TakeWeaponSelect() { return (int)InterlockedExchange(&g_selectReq, 0); }
@@ -356,6 +359,8 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     if (R.stickClick) b |= XINPUT_GAMEPAD_LEFT_SHOULDER;   // right stick click: syrette (heal yourself)
     g.bRightTrigger = poseFire ? (BYTE)lroundf(fminf(1.0f, R.trigger) * 255.0f) : 0;   // pose-guided fire needs tracked input; native vehicle/turret controls do not
     if (!g_c.macheteTrigger && MacheteSelected()) g.bRightTrigger = 0;   // machete: hits come from swinging it; the game's attack animation sways the camera
+    if (g_watchOut) g.bRightTrigger = 0;   // v234: the watch is in the hands - no firing
+    if (InterlockedExchange(&g_slotAgainReq, 0)) PulseBtn(kSlots[g_cycle & 3], now);   // v234: draw the weapon again (puts the watch away)
     // right grip: holster grab (weapon select) in a body zone, iron sight / reverse elsewhere
     // no holster grabs in a vehicle seat, nor in menus / loading screens (v234 test 36: a chest grab in the pause menu left
     // the mod thinking the machete was out - the gun in the hand then got the machete's hand angles, twisted)
