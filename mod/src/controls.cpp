@@ -492,6 +492,7 @@ void Install(HMODULE dunia, const Config& c) {
 }
 bool Active() { return g_active != 0; }
 bool MacheteSelected() { return g_cycle == 3; }
+bool SecondarySelected() { return g_cycle == 1; }   // the hip slot (pistols, SMGs, sawed-off, M-79, flare gun, IED)
 bool MapOpen() { return g_mapOpen; }
 void SetSightsAllowed(bool a) { g_sightsAllowed = a; }
 bool RightHandInHolsterZone() { return g_zoneNow; }
