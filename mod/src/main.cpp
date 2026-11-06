@@ -107,7 +107,7 @@ struct Config {
     int   ammoPanel = 1; float ammoPanelWidth = 0.055f, ammoPanelRight = 0.05f, ammoPanelRight2 = 0.06f, ammoPanelUp = 0.04f, ammoPanelFwd = 0.06f, ammoPanelYaw = 20.0f, ammoPanelTilt = 15.0f;
     int   grenPanel = 1; float grenPanelWidth = 0.045f, grenPanelLeft = 0.06f, grenPanelUp = 0.02f, grenPanelFwd = 0.0f, grenPanelSecs = 3.0f, grenPanelTilt = 30.0f;
     int   mapClock = 1, mapClock24 = 0; float mapClockWidth = 0.07f, mapClockUp = 0.0f;
-    int   gpsHealth = 1; float gpsHealthWidth = 0.06f, gpsHealthDown = 0.07f, gpsHealthRight = 0.0f, gpsHealthFwd = 0.0f;   // v234: health under the GPS   // v234: clock under the map   // v234: grenade counter by the left hand   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
+    int   mapHealth = 1; float mapHealthWidth = 0.06f, mapPanelGap = 0.004f;   // v234: health + syrettes beside the clock under the map   // v234: clock under the map   // v234: grenade counter by the left hand   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
     int   shadowMapSize = 2720;    // sun shadow cascade resolution (game: 2048 at Ultra High), max 2730, 0 = game's           // sun shadow cascades cover the whole VR view in cull mode 1   // hidden extra render area per side (fraction of the half-FOV) for screen-space reflections
     int   hangWatch = 1;            // freeze/crash reports (fc2vr_hang_N.txt/.dmp)
     float pauseMenuScale = 0.75f;  // in-game pause menu panel size factor (on top of HudScale)
@@ -2979,7 +2979,7 @@ static void DrawnBodyFix(float Mc[16]) {
     float dd = (T[12] - Mc[12]) * (T[12] - Mc[12]) + (T[13] - Mc[13]) * (T[13] - Mc[13]) + (T[14] - Mc[14]) * (T[14] - Mc[14]);
     if (dd < 0.5f * 0.5f) memcpy(Mc, T, 64);
 }
-// v234: health + syrettes under the GPS, in the game's style: syrette icons (white) over a segmented red health bar
+// v234: health + syrettes beside the map clock, in the game's style: syrette icons (white) over a segmented red health bar
 static void DrawHealth(float ratio, int segs, int syr) {
     const int W = xr::HealthW, H = xr::HealthH; static uint32_t out[xr::HealthW * xr::HealthH];
     auto put = [&](int x, int y, int r, int g, int b, int a) { if (x < 0 || y < 0 || x >= W || y >= H) return; out[y * W + x] = ((uint32_t)a << 24) | ((uint32_t)(b * a / 255) << 16) | ((uint32_t)(g * a / 255) << 8) | (uint32_t)(r * a / 255); };
@@ -3989,37 +3989,27 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 V3 xq = Norm(xw), yq = Norm(yh - xq * Dot(yh, xq)), zq = Cross(xq, yq);
                 V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
                 if (Dot(zq, mid - p0) < 0) { xq = xq * -1.0f; zq = zq * -1.0f; }   // the face toward you (text not mirrored)
-                const float hgt = g_cfg.mapClockWidth * (float)xr::ClockH / (float)xr::ClockW;
-                V3 p = p0 - yq * (hgt * 0.5f - g_cfg.mapClockUp) + zq * 0.002f;
+                // the clock on the left and the health + syrettes panel on the right, side by side, centred under the map,
+                // their top edges on the map's bottom edge
+                const bool hpOn = g_cfg.mapHealth && g_hudObj && !IsBadReadPtr(g_hudObj + 0x288, 0x24);
+                const float cwid = g_cfg.mapClockWidth, hwid = hpOn ? g_cfg.mapHealthWidth : 0.0f, gap = hpOn ? g_cfg.mapPanelGap : 0.0f;
+                const float total = cwid + gap + hwid;
+                const float hgt = cwid * (float)xr::ClockH / (float)xr::ClockW;
+                V3 p = p0 + xq * (-total * 0.5f + cwid * 0.5f) - yq * (hgt * 0.5f - g_cfg.mapClockUp) + zq * 0.002f;
                 XrPosef kp; kp.orientation = QuatFromBasis(xq, yq, zq); kp.position = { p.x, p.y, p.z };
-                xr::SetClockLayer(kp, g_cfg.mapClockWidth);
-            }
-        }
-        // v234: health + syrettes under the GPS, in the GPS model's own axes, moved to the drawn body update
-        if (g_cfg.gpsHealth && controls::MapOpen() && !controls::MonocularOut() && g_hudObj && !IsBadReadPtr(g_hudObj + 0x288, 0x24)) {
-            uint8_t* gg = arms::GpsGfx();
-            if (gg && !IsBadReadPtr(gg + 0x170, 64)) {
-                float raw = *(float*)(g_hudObj + 0x288); int segs = *(int*)(g_hudObj + 0x290), syr = *(int*)(g_hudObj + 0x2A8);
-                static float maxHp = 1500.0f; if (raw > maxHp) maxHp = raw;   // the player's health runs 0-1500 (5 segments of 300)
-                float ratio = raw / maxHp;
-                static float dRaw = -1; static int dSyr = -1, dSegs = -1;
-                if (raw != dRaw || syr != dSyr || segs != dSegs) {
-                    static int nl = 0; if (nl++ < 12) LOG("HUD: health %.3f (%d segments), syrettes %d", raw, segs, syr);
-                    dRaw = raw; dSyr = syr; dSegs = segs; DrawHealth(ratio, segs, syr);
-                }
-                float Mc[16]; memcpy(Mc, gg + 0x170, 64); DrawnBodyFix(Mc);
-                auto loc = [&](float x, float y, float z) { V3 w{ x * Mc[0] + y * Mc[4] + z * Mc[8] + Mc[12], x * Mc[1] + y * Mc[5] + z * Mc[9] + Mc[13], x * Mc[2] + y * Mc[6] + z * Mc[10] + Mc[14] };
-                    return frame.LocalPosition(frame.game.ReferencePosition(w)); };
-                V3 o = loc(0, 0, 0), gx = loc(1, 0, 0) - o, gy = loc(0, 1, 0) - o, gz = loc(0, 0, 1) - o;
-                const float sc = sqrtf(Dot(gx, gx)); if (sc > 1e-6f) {   // model units -> metres
-                    // the GPS model: -X = up its screen, +Z = right, -Y = out of the screen (log of test 50)
-                    V3 up = Norm(gx * -1.0f), xq = Norm(gz - up * Dot(gz, up)), yq = up, zq = Cross(xq, yq);
-                    V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
-                    V3 p = o - yq * g_cfg.gpsHealthDown + xq * g_cfg.gpsHealthRight + zq * g_cfg.gpsHealthFwd;
-                    if (Dot(zq, mid - p) < 0) { xq = xq * -1.0f; zq = zq * -1.0f; }
-                    static bool once = false; if (!once) { once = true; LOG("HUD: GPS axes (local) x %.2f %.2f %.2f  y %.2f %.2f %.2f  z %.2f %.2f %.2f, %.3f m per unit", gx.x / sc, gx.y / sc, gx.z / sc, gy.x / sc, gy.y / sc, gy.z / sc, gz.x / sc, gz.y / sc, gz.z / sc, sc); }
-                    XrPosef hp; hp.orientation = QuatFromBasis(xq, yq, zq); hp.position = { p.x, p.y, p.z };
-                    xr::SetHealthLayer(hp, g_cfg.gpsHealthWidth);
+                xr::SetClockLayer(kp, cwid);
+                if (hpOn) {
+                    float raw = *(float*)(g_hudObj + 0x288); int segs = *(int*)(g_hudObj + 0x290), syr = *(int*)(g_hudObj + 0x2A8);
+                    static float maxHp = 1500.0f; if (raw > maxHp) maxHp = raw;   // the player's health runs 0-1500 (5 segments of 300)
+                    static float dRaw = -1; static int dSyr = -1, dSegs = -1;
+                    if (raw != dRaw || syr != dSyr || segs != dSegs) {
+                        static int nl = 0; if (nl++ < 12) LOG("HUD: health %.0f (%d segments), syrettes %d", raw, segs, syr);
+                        dRaw = raw; dSyr = syr; dSegs = segs; DrawHealth(raw / maxHp, segs, syr);
+                    }
+                    const float hh = hwid * (float)xr::HealthH / (float)xr::HealthW;
+                    V3 q = p0 + xq * (total * 0.5f - hwid * 0.5f) - yq * (hh * 0.5f - g_cfg.mapClockUp) + zq * 0.002f;
+                    XrPosef hp; hp.orientation = kp.orientation; hp.position = { q.x, q.y, q.z };
+                    xr::SetHealthLayer(hp, hwid);
                 }
             }
         }
@@ -4570,7 +4560,7 @@ static void Install() {
         xr::SetScopeCrosshair((int)IniF("ScopeCrosshair", 2));
         g_cfg.scopeFromWeapon = (int)IniF("ScopeFromWeapon", 1); g_cfg.scopeSmoothing = IniF("ScopeSmoothing", 0.06f);
         g_cfg.testCheats = (int)IniF("TestCheats", 0); { char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); arms::SetIniPath(ip); } g_cfg.reticleDot = (int)IniF("ReticleDot", 1); g_cfg.reticleDistance = IniF("ReticleDistance", 10.0f); g_cfg.reticleSize = IniF("ReticleSize", 0.06f);
-        g_cfg.ammoPanel = (int)IniF("AmmoPanel", 1); g_cfg.ammoPanelWidth = IniF("AmmoPanelWidth", 0.055f); g_cfg.ammoPanelRight = IniF("AmmoPanelRight", 0.05f); g_cfg.ammoPanelRight2 = IniF("AmmoPanelRightSecondary", 0.06f); g_cfg.ammoPanelUp = IniF("AmmoPanelUp", 0.04f); g_cfg.ammoPanelFwd = IniF("AmmoPanelForward", 0.06f); g_cfg.grenPanel = (int)IniF("GrenadePanel", 1); g_cfg.grenPanelWidth = IniF("GrenadePanelWidth", 0.045f); g_cfg.grenPanelLeft = IniF("GrenadePanelLeft", 0.06f); g_cfg.grenPanelUp = IniF("GrenadePanelUp", 0.02f); g_cfg.grenPanelFwd = IniF("GrenadePanelForward", 0.0f); g_cfg.grenPanelSecs = IniF("GrenadePanelSeconds", 3.0f); g_cfg.grenPanelTilt = IniF("GrenadePanelTilt", 30.0f); g_cfg.mapClock = (int)IniF("MapClock", 1); g_cfg.mapClockWidth = IniF("MapClockWidth", 0.07f); g_cfg.mapClockUp = IniF("MapClockUp", 0.0f); g_cfg.mapClock24 = (int)IniF("MapClock24h", 0); g_cfg.gpsHealth = (int)IniF("GpsHealth", 1); g_cfg.gpsHealthWidth = IniF("GpsHealthWidth", 0.06f); g_cfg.gpsHealthDown = IniF("GpsHealthDown", 0.07f); g_cfg.gpsHealthRight = IniF("GpsHealthRight", 0.0f); g_cfg.gpsHealthFwd = IniF("GpsHealthForward", 0.0f);
+        g_cfg.ammoPanel = (int)IniF("AmmoPanel", 1); g_cfg.ammoPanelWidth = IniF("AmmoPanelWidth", 0.055f); g_cfg.ammoPanelRight = IniF("AmmoPanelRight", 0.05f); g_cfg.ammoPanelRight2 = IniF("AmmoPanelRightSecondary", 0.06f); g_cfg.ammoPanelUp = IniF("AmmoPanelUp", 0.04f); g_cfg.ammoPanelFwd = IniF("AmmoPanelForward", 0.06f); g_cfg.grenPanel = (int)IniF("GrenadePanel", 1); g_cfg.grenPanelWidth = IniF("GrenadePanelWidth", 0.045f); g_cfg.grenPanelLeft = IniF("GrenadePanelLeft", 0.06f); g_cfg.grenPanelUp = IniF("GrenadePanelUp", 0.02f); g_cfg.grenPanelFwd = IniF("GrenadePanelForward", 0.0f); g_cfg.grenPanelSecs = IniF("GrenadePanelSeconds", 3.0f); g_cfg.grenPanelTilt = IniF("GrenadePanelTilt", 30.0f); g_cfg.mapClock = (int)IniF("MapClock", 1); g_cfg.mapClockWidth = IniF("MapClockWidth", 0.07f); g_cfg.mapClockUp = IniF("MapClockUp", 0.0f); g_cfg.mapClock24 = (int)IniF("MapClock24h", 0); g_cfg.mapHealth = (int)IniF("MapHealth", 1); g_cfg.mapHealthWidth = IniF("MapHealthWidth", 0.06f); g_cfg.mapPanelGap = IniF("MapPanelGap", 0.004f);
         g_cfg.ammoPanelYaw = IniF("AmmoPanelYaw", 20.0f); g_cfg.ammoPanelTilt = IniF("AmmoPanelTilt", 15.0f);
         ac.handOfs[0] = IniF("HandOffsetX", 0); ac.handOfs[1] = IniF("HandOffsetY", 0); ac.handOfs[2] = IniF("HandOffsetZ", 0);
         ac.leftHandRoll = IniF("LeftHandRoll", 45.0f); ac.macheteAngle = IniF("MacheteAngle", 60.0f);
@@ -4626,7 +4616,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 51: GPS health panel level; v234 test 50: health + syrettes under the GPS; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
