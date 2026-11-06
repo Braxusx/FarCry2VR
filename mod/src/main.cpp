@@ -140,7 +140,22 @@ static float IniF(const char* k, float def) {
     GetPrivateProfileStringA("VR", k, d, buf, 64, path);
     return (float)atof(buf);
 }
+// v234: an ini from 1.0.3 keeps its old values when the launcher adds new keys - update the two whose old default is now
+// wrong (only when they still hold that old default), once, then mark the ini as IniVersion=234
+static void MigrateIni() {
+    char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir);
+    if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES || (int)IniF("IniVersion", 0) >= 234) return;
+    char v[512];
+    GetPrivateProfileStringA("VR", "CameraOnBodyClock", "", v, sizeof v, path);
+    if (!strcmp(v, "1")) { WritePrivateProfileStringA("VR", "CameraOnBodyClock", "2", path); LOG("ini: CameraOnBodyClock 1 -> 2 (v234 view on the drawn body update)"); }
+    GetPrivateProfileStringA("VR", "UiSkipTex", "", v, sizeof v, path);
+    if (!strcmp(v, "256x512x71v18,128x32x77v6,512x256x71v24,8x16x77v24,8x16x77v12,64x64x77v6#d8a4a289,64x64x77v6#f10a347f,64x64x77v6#72fa7106")) {
+        WritePrivateProfileStringA("VR", "UiSkipTex", "256x512x71v18,512x256x71v24,8x16x77v24,8x16x77v12,64x64x77v6#d8a4a289,64x64x77v6#72fa7106", path);
+        LOG("ini: UiSkipTex updated (weapon swap icons and prompt arrow shown again)"); }
+    WritePrivateProfileStringA("VR", "IniVersion", "234", path);
+}
 static void LoadConfig() {
+    MigrateIni();
     g_cfg.enable     = (int)IniF("Enable", 1);
     g_cfg.worldScale = IniF("WorldScale", 1.0f);
     g_cfg.cullMargin = IniF("CullMargin", 1.25f);
