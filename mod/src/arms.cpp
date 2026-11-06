@@ -11,6 +11,7 @@
 #include "log.h"
 #include "gameaddr.h"
 #include "xr.h"
+#include "common/hand_roles.h"
 #include "controls.h"
 #include "common/shoulder_frame.h"
 #include <cstdio>
@@ -20,6 +21,7 @@
 #include <wincrypt.h>
 
 namespace arms {
+static void RoleHaptic(int role,float amplitude,float seconds) { xr::Haptic(fc2vr::hands::Physical(role),amplitude,seconds); }
 
 static uintptr_t g_base = 0;
 static inline uintptr_t A(uintptr_t va) { uint32_t v = gameaddr::Xlate((uint32_t)va); return v ? g_base + (v - 0x10000000) : 0; }
@@ -313,7 +315,7 @@ static void SaveHold(uint32_t key, const M4& r, const M4& l, int axis, float sig
 }
  static void* volatile g_curWeapon = nullptr;
 static bool ShotCurrent(const fc2vr::authority::Stamp& source, void* weapon) {
-    return fc2vr::authority::SameOwner(weapon,g_curWeapon) && xr::InputCurrent(source,1);
+    return fc2vr::authority::SameOwner(weapon,g_curWeapon) && xr::InputCurrent(source,fc2vr::hands::Physical(1));
 }
 static bool ReadAim(float o[3], float d[3], float* cameraForward = nullptr) {
     fc2vr::authority::Stamp shotSource,scopeSource; void* shotWeapon; void* scopeWeapon;
@@ -954,7 +956,7 @@ static void Apply(uint8_t* skel) {
         // A hold is taken once per weapon (type) and then kept: automatic renewals picked up the game's special poses
         // (town, phone, map). Left grip + A takes the current hold again on request (when one looks wrong).
         static ULONGLONG recapUntil = 0;
-        if (controls::TakeRecapture()) { recapUntil = t + 3000; LOG("arms: hold for weapon %p will be taken again (left grip + A)", w); xr::Haptic(1, 0.4f, 0.05f); }
+        if (controls::TakeRecapture()) { recapUntil = t + 3000; LOG("arms: hold for weapon %p will be taken again (left grip + A)", w); RoleHaptic(1, 0.4f, 0.05f); }
         bool manual = recapUntil > t;
         g_relCached = false;   // no automatic renewals
         bool due = g_c.steadyHands && (!g_relHave || manual) && t - tChange > 300 && t - stableSince > (manual ? 200u : 400u) && !f.map && controls::NormalControls();
@@ -997,7 +999,7 @@ static void Apply(uint8_t* skel) {
             if (fabsf(dAx[best]) > 0.85f) { g_curAxis = best; g_curSign = dAx[best] > 0 ? 1.0f : -1.0f; LOG("arms: weapon %p (type %08x) barrel axis %c%c", w, key, g_curSign > 0 ? '+' : '-', "XYZ"[best]); }
         }
         if (due) {
-            if (manual) { recapUntil = 0; g_haveOff0 = false; xr::Haptic(1, 0.6f, 0.08f); LOG("arms: hold for weapon %p taken again on request", w); }
+            if (manual) { recapUntil = 0; g_haveOff0 = false; RoleHaptic(1, 0.6f, 0.08f); LOG("arms: hold for weapon %p taken again on request", w); }
             if (g_relCached) LOG("arms: steady hold renewed for weapon %p (%.1f s after the change, %.1f deg from the remembered one)", w, (t - tChange) / 1000.0, rotAngle(g_relR, relNow));
             else LOG("arms: steady hold taken for weapon %p (type %08x, %.1f s after the change)", w, key, (t - tChange) / 1000.0);
             g_relCached = false;
@@ -1135,7 +1137,7 @@ static void Apply(uint8_t* skel) {
       Normalize(sf);
       float sr[3], sfr[3]; Put3(sfr, f.game.ReferenceDirection(Read3(sf))); toRef(so, sr);
       float cro[3], crd[3]; Put3(crd, f.game.ReferenceDirection(Read3(cf))); toRef(co, cro);   // raw native camera line: turrets still aim along it
-      const bool authority = f.handAuthority && f.weapon && f.weapon == g_curWeapon && xr::InputCurrent(f.source,1);
+      const bool authority = f.handAuthority && f.weapon && f.weapon == g_curWeapon && xr::InputCurrent(f.source,fc2vr::hands::Physical(1));
       Lock(); if (g_shotWeapon != f.weapon) g_scopeTick = 0;
       g_shotSource = f.source; g_shotWeapon = f.weapon;
       for (int k = 0; k < 3; ++k) so[k] += O[k];
@@ -1883,13 +1885,13 @@ static RagUpd_t o_RagUpd = nullptr;
 static void __fastcall Hook_RagUpd(void* impl, void* edx, float dt) {
     o_RagUpd(impl, edx, dt);
     NpcDrive snapshot[2]; Lock(); memcpy(snapshot,g_npcDrive,sizeof snapshot); Unlock();
-    for (auto& d : snapshot) if (d.impl == impl && d.rb && GetTickCount()-d.tick < 200 && d.hand >= 0 && xr::InputCurrent(d.source,d.hand)) RbSetVel(d.rb,d.v,false);
+    for (auto& d : snapshot) if (d.impl == impl && d.rb && GetTickCount()-d.tick < 200 && d.hand >= 0 && xr::InputCurrent(d.source,fc2vr::hands::Physical(d.hand))) RbSetVel(d.rb,d.v,false);
 }
 typedef void (__fastcall *ProxyMove_t)(void* proxy, void* edx, float* in);
 static ProxyMove_t o_ProxyMove = nullptr;
 static void __fastcall Hook_ProxyMove(void* proxy, void* edx, float* in) {
     NpcDrive snapshot[2]; Lock(); memcpy(snapshot,g_npcDrive,sizeof snapshot); Unlock();
-    if (in) for (auto& d : snapshot) if (d.proxy == proxy && GetTickCount()-d.tick < 200 && d.hand >= 0 && xr::InputCurrent(d.source,d.hand) && !IsBadWritePtr(in,12)) {
+    if (in) for (auto& d : snapshot) if (d.proxy == proxy && GetTickCount()-d.tick < 200 && d.hand >= 0 && xr::InputCurrent(d.source,fc2vr::hands::Physical(d.hand)) && !IsBadWritePtr(in,12)) {
         in[0] += d.lead[0]; in[1] += d.lead[1];
         static int lg = 0; if (lg < 3 && (d.lead[0] != 0 || d.lead[1] != 0)) { ++lg; LOG("npc: led by the hand (%.2f %.2f m/s)", d.lead[0], d.lead[1]); }
     }
@@ -2462,7 +2464,7 @@ static void __fastcall Hook_ThrowCalc(void* strat, void* edx, void* ctx) {
     float pos[3],vel[3]; fc2vr::authority::Stamp source; int hand;
     Lock(); const bool pending = g_throwPend && pd == g_pendingPd && GetTickCount()-g_pendT < 3000;
     source = g_pendingSource; hand = g_pendingHand; memcpy(pos,g_pendPos,12); memcpy(vel,g_pendVel,12); g_throwPend = false; Unlock();
-    if (pending && xr::AcceptedInputCurrent(source,hand)) {
+    if (pending && xr::AcceptedInputCurrent(source,fc2vr::hands::Physical(hand))) {
         float* gp = (float*)(st + 0xA4); float* gv = (float*)(st + 0xB0);
         LOG("throw: arc launch from %.2f %.2f %.2f vel %.2f %.2f %.2f (game: from %.2f %.2f %.2f vel %.2f %.2f %.2f)",
             pos[0],pos[1],pos[2],vel[0],vel[1],vel[2],gp[0],gp[1],gp[2],gv[0],gv[1],gv[2]);
@@ -2543,11 +2545,11 @@ static void ThrowArcUpdate(const Frame& f, uint8_t* pd, TW toWorld, TR toRef) {
     void* throwable = pd ? ((Q_t)A(0x10129EC0))(pd + 0x4F0) : nullptr;
     if (release) {
         const bool tracked = g_arcHand == 1 ? f.handValid : g_arcHand == 0 ? f.leftValid : false;
-        if (g_arcValid && throwable && tracked && xr::InputCurrent(g_arcSource,g_arcHand)) {
+        if (g_arcValid && throwable && tracked && xr::InputCurrent(g_arcSource,fc2vr::hands::Physical(g_arcHand))) {
             Lock(); memcpy(g_pendPos,g_arcPos,12); memcpy(g_pendVel,g_arcVel,12); g_pendT = GetTickCount(); g_throwPend = true;
             g_pendingSource = g_arcSource; g_pendingHand = g_arcHand; g_pendingPd = pd; Unlock();
             controls::FireThrow();
-            xr::Haptic(lastHand, 0.6f, 0.08f);
+            RoleHaptic(lastHand, 0.6f, 0.08f);
             LOG("throw: released - throwing along the arc");
         } else LOG("throw: released without %s", throwable ? "an arc" : "a grenade or molotov");
     }
@@ -2730,7 +2732,7 @@ static void MacheteSwing(const Frame& f, uint8_t* playerEnt, TW toWorld, void* w
         ((Clr_t)A(0x1012E9D0))(weapon, nullptr);
         int slot = 0; double oldest = 1e30; for (int i = 0; i < 8; ++i) if (g_meleeRecent[i].t < oldest) { oldest = g_meleeRecent[i].t; slot = i; }
         g_meleeRecent[slot] = { hitEnt, t };
-        xr::Haptic(1, 0.9f, 0.1f);
+        RoleHaptic(1, 0.9f, 0.1f);
         LOG("machete: swing hit entity %p at %.1f m/s", (void*)hitEnt, tipV);
     }
     for (int i = 0; i < nh; ++i) HandleRelease(hs[i]);
@@ -2741,12 +2743,12 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
     if (!f.valid || g_camBoneSeq == 0) return;
     if (!xr::InputCurrent()) controls::CancelPendingInput();
     // Keep presentation fallback out of gameplay, including when render publication stops.
-    f.handValid = f.handValid && f.handAuthority && xr::InputCurrent(f.source,1);
-    f.leftValid = f.leftValid && f.leftAuthority && xr::InputCurrent(f.source,0);
+    f.handValid = f.handValid && f.handAuthority && xr::InputCurrent(f.source,fc2vr::hands::Physical(1));
+    f.leftValid = f.leftValid && f.leftAuthority && xr::InputCurrent(f.source,fc2vr::hands::Physical(0));
     f.headValid = f.headValid && f.headAuthority && xr::HeadCurrent(f.source);
     static fc2vr::authority::Stamp previousInput;
     for (int hnd = 0; hnd < 2; ++hnd) {
-        if (previousInput.generation != f.source.generation || previousInput.handGeneration[hnd] != f.source.handGeneration[hnd]) {
+        if (previousInput.generation != f.source.generation || previousInput.handGeneration[fc2vr::hands::Physical(hnd)] != f.source.handGeneration[fc2vr::hands::Physical(hnd)]) {
             // A short dropout can occur entirely between game ticks. Cancel old
             // holds/history once even if the newest sample is tracked again.
             if (hnd) f.handValid = false; else f.leftValid = false;
@@ -2923,7 +2925,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
                         D.lead[0] = lx; D.lead[1] = ly;
                     }
                     bool down = gap[2] < -g_c.npcKnockDown, tooFar = sqrtf(Dot3(gap, gap)) > g_c.npcKnockPull;
-                    if (down || tooFar) { if (N.strain == 0) N.strain = tNow; else if (tNow - N.strain > 0.25) { F->drv = 1; LOG("npc: %s (%.2f m from the hand, %.2f m below)", down ? "pulled to the ground" : "pulled over", sqrtf(Dot3(gap, gap)), -gap[2]); xr::Haptic(hnd, 0.7f, 0.08f); } }
+                    if (down || tooFar) { if (N.strain == 0) N.strain = tNow; else if (tNow - N.strain > 0.25) { F->drv = 1; LOG("npc: %s (%.2f m from the hand, %.2f m below)", down ? "pulled to the ground" : "pulled over", sqrtf(Dot3(gap, gap)), -gap[2]); RoleHaptic(hnd, 0.7f, 0.08f); } }
                     else N.strain = 0;
                 }
                 float v[3]; for (int k = 0; k < 3; ++k) v[k] = gap[k] / dt * g_c.npcGain;
@@ -2986,7 +2988,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
                     bool ok = ((Give_t)vt[0x90 / 4])(H.pickup, nullptr, player, 0);
                     if (ok && *((uint8_t*)H.pickup + 0x17)) ((Despawn_t)vt[0x80 / 4])(H.pickup, nullptr);
                     LOG("hands: consumed at the mouth (%s)", ok ? "ok" : "refused");
-                    xr::Haptic(hnd, 0.6f, 0.1f);
+                    RoleHaptic(hnd, 0.6f, 0.1f);
                     HandleRelease(H.h); H = Held{};
                     continue;
                 }
@@ -3040,7 +3042,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
                 bool ok = ((Give_t)vt[0x90 / 4])(H.pickup, nullptr, player, 0);
                 if (ok && *((uint8_t*)H.pickup + 0x17)) ((Despawn_t)vt[0x80 / 4])(H.pickup, nullptr);
                 LOG("hands: %s hand stored the item in the backpack (%s)", hnd ? "right" : "left", ok ? "taken" : "refused");
-                xr::Haptic(hnd, ok ? 0.8f : 0.3f, ok ? 0.12f : 0.05f);
+                RoleHaptic(hnd, ok ? 0.8f : 0.3f, ok ? 0.12f : 0.05f);
                 HandleRelease(H.h); H = Held{};
                 continue;
             }
@@ -3056,7 +3058,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
             if (H.dyn) { float z[3] = { 0, 0, 0 }; RigidSetVel(H.rg, tv, tsp > 0.5f ? nullptr : z); HandleRelease(H.h); }
             else StartFall(H.h, tv);   // the fall owns the handle now
             LOG("hands: %s hand %s the item (%.1f m/s)", hnd ? "right" : "left", tsp > 0.5f ? "threw" : "dropped", tsp);
-            if (tsp > 0.5f) xr::Haptic(hnd, 0.3f, 0.04f);
+            if (tsp > 0.5f) RoleHaptic(hnd, 0.3f, 0.04f);
             H = Held{};
             continue;
         }
@@ -3064,7 +3066,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
         // already climbing: any grip takes a new hold right where the hand is (you never fall while a grip is held)
         if (g_c.climbing && (g_climb[0].on || g_climb[1].on || ClimbHanging())) {
             g_climb[hnd].on = true; memcpy(g_climb[hnd].anchor, hp, 12); memcpy(g_climb[hnd].now, hp, 12); g_climb[hnd].gen = ++g_climbGen;
-            xr::Haptic(hnd, 0.5f, 0.05f);
+            RoleHaptic(hnd, 0.5f, 0.05f);
             LOG("climb: %s hand takes the next hold", hnd ? "right" : "left");
             continue;
         }
@@ -3115,7 +3117,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
             M4 hinv; if (!Inv(Hm, hinv)) { HandleRelease(H.h); H = Held{}; continue; }
             H.rel = Mul(em, hinv);
             if (!H.dyn) { H.rel.m[3][0] = 0; H.rel.m[3][1] = -0.03f; H.rel.m[3][2] = -0.04f; }   // pickups sit in the palm
-            xr::Haptic(hnd, 0.5f, 0.05f);
+            RoleHaptic(hnd, 0.5f, 0.05f);
             LOG("hands: %s hand picked up %s %.2f m away (body type %d, %.1f kg, radius %.2f m)", hnd ? "right" : "left", bestComp ? "a pickup" : "an object", bestD, H.rg.type, H.rg.n ? H.rg.mass : 0.0f, H.rg.radius);
             continue;
         }
@@ -3129,7 +3131,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
                 NpcForce* F0 = NpcForceGet(nc);
                 N.living = F0 != nullptr || drv != 1;   // knocked down by us = still alive
                 if (N.living) NpcForceSet(nc, true, 0, nh->ent, F0 ? F0->drv : (g_c.npcActive ? 3 : 1));   // the game's next ragdoll update (every frame) takes it there
-                xr::Haptic(hnd, 0.6f, 0.06f);
+                RoleHaptic(hnd, 0.6f, 0.06f);
                 LOG("npc: %s hand grabs %s %.2f m away (entity %p, driver %d -> %d)", hnd ? "right" : "left", N.living ? "a living NPC" : "a body", nd, (void*)nh->ent, drv, NpcDriver(nc));
                 continue;
             }
@@ -3137,7 +3139,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
         // a building at the hand: hold on to it (climbing)
         if (g_c.climbing && !(hnd && controls::RightHandInHolsterZone()) && ClimbProbe(hp, hr, hb, hnd, playerEnt)) {
             g_climb[hnd].on = true; memcpy(g_climb[hnd].anchor, hp, 12); memcpy(g_climb[hnd].now, hp, 12); g_climb[hnd].gen = ++g_climbGen;
-            xr::Haptic(hnd, 0.5f, 0.05f);
+            RoleHaptic(hnd, 0.5f, 0.05f);
             LOG("climb: %s hand holds on", hnd ? "right" : "left");
             continue;
         }

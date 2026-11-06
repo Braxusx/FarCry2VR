@@ -26,6 +26,7 @@
 #include "hang.h"
 #include "dlss_fc2.h"
 #include "body_yaw_fixture.h"
+#include "common/hand_roles.h"
 #include "grass_facing_dx10.h"
 namespace sounddiag { void Tick(); }
 #include "afw_fc2.h"
@@ -135,6 +136,7 @@ static float IniF(const char* k, float def) {
     return (float)atof(buf);
 }
 static void LoadConfig() {
+    fc2vr::hands::Configure(IniF("LeftHandedWeapon",0)!=0);
     grass_facing::Configure(IniF("GrassHeadYawFix",0)!=0);
     g_cfg.enable     = (int)IniF("Enable", 1);
     g_cfg.worldScale = IniF("WorldScale", 1.0f);
@@ -2707,11 +2709,11 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
     TurnMenu();
     MacheteMenu(fv);
     {   // controller pose for the arms/weapon and shots (game thread reads it)
-        arms::Frame af; const xr::HandState rh = SmoothHand(1, fv.displayTime);
+        arms::Frame af; const xr::HandState rh = SmoothHand(fc2vr::hands::Weapon(), fv.displayTime);
         xr::HandState physical[2]; XrPosef inputHead; bool inputHeadValid = false;
         const bool inputCurrent = xr::InputSnapshot(physical,inputHead,inputHeadValid,&af.source);
-        af.handAuthority = inputCurrent && physical[1].gripValid && physical[1].aimValid;
-        af.leftAuthority = inputCurrent && physical[0].gripValid && physical[0].aimValid;
+        af.handAuthority = inputCurrent && physical[fc2vr::hands::Weapon()].gripValid && physical[fc2vr::hands::Weapon()].aimValid;
+        af.leftAuthority = inputCurrent && physical[fc2vr::hands::Support()].gripValid && physical[fc2vr::hands::Support()].aimValid;
         af.headAuthority = inputCurrent && inputHeadValid;
         af.weapon = arms::CurrentWeapon();
         af.valid = true; af.handValid = rh.aimValid && rh.gripValid;
@@ -2773,7 +2775,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             put(af.aimB, frame.ReferenceDirection(QRot(rh.aim.orientation, { 0, 0, 1 })));
             put(af.gripO, frame.ReferencePosition(ToV3(rh.grip.position)));
         }
-        const xr::HandState lh = SmoothHand(0, fv.displayTime);
+        const xr::HandState lh = SmoothHand(fc2vr::hands::Support(), fv.displayTime);
         af.leftValid = lh.aimValid && lh.gripValid;
         af.lSqueeze = af.leftAuthority ? lh.squeeze : 0; af.rSqueeze = af.handAuthority ? rh.squeeze : 0;
         af.machete = controls::MacheteSelected(); af.map = controls::MapOpen();
@@ -2806,7 +2808,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
         // faces) at this moment is added to MacheteAngle / MacheteYaw and saved, so the pose you hold becomes the default
         if (g_macheteCalAt > 0) {   // countdown: a tick on the right controller each second
             static int lastTick = -1; double left = g_macheteCalAt - NowMs(); int tick = (int)ceil(left / 1000.0);
-            if (left > 0 && tick != lastTick) { lastTick = tick; xr::Haptic(1, 0.3f, 0.05f); }
+            if (left > 0 && tick != lastTick) { lastTick = tick; xr::Haptic(fc2vr::hands::Weapon(), 0.3f, 0.05f); }
         }
         if (g_macheteCalAt > 0 && NowMs() >= g_macheteCalAt) {
             g_macheteCalAt = 0;
@@ -2821,7 +2823,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
                 snprintf(v, sizeof v, "%.0f", a1); WritePrivateProfileStringA("VR", "MacheteAngle", v, path);
                 snprintf(v, sizeof v, "%.0f", y1); WritePrivateProfileStringA("VR", "MacheteYaw", v, path);
                 LOG("machete pose set: controller tilt %.1f up, %.1f inward -> MacheteAngle %.0f (was %.0f), MacheteYaw %.0f (was %.0f), saved", pitch, yaw, a1, a0, y1, y0);
-                xr::Haptic(1, 0.7f, 0.15f);
+                xr::Haptic(fc2vr::hands::Weapon(), 0.7f, 0.15f);
             } else LOG("machete pose: ignored (machete not in the right hand)");
         }
         // two-handed grip: left grip pressed with the left hand near the weapon's foregrip (or the pistol grip)
@@ -2838,7 +2840,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             if (g && !gripDown && af.handAuthority && af.leftAuthority && arms::Foregrip(fg, oneH)) {
                 V3 d = V3{ af.lgripO[0] - fg[0], af.lgripO[1] - fg[1], af.lgripO[2] - fg[2] };
                 float dist = sqrtf(Dot(d, d));
-                if (dist < g_cfg.grabDistance * s) { grabbing = true; xr::Haptic(0, 0.5f, 0.05f); LOG("arms: two-handed grip (%s, %.2f m, hand span %.2f)", oneH ? "pistol" : "rifle", dist / s, arms::LastHandSpan()); }
+                if (dist < g_cfg.grabDistance * s) { grabbing = true; xr::Haptic(fc2vr::hands::Support(), 0.5f, 0.05f); LOG("arms: two-handed grip (%s, %.2f m, hand span %.2f)", oneH ? "pistol" : "rifle", dist / s, arms::LastHandSpan()); }
                 else LOG("arms: left grip %.2f m from the weapon (span %.2f, %s): not grabbing", dist / s, arms::LastHandSpan(), oneH ? "pistol" : "rifle");
             }
             if (!g) grabbing = false;

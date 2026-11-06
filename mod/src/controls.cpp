@@ -4,6 +4,7 @@
 // so the game's gamepad bindings, hints and menus all work unchanged.
 #include "controls.h"
 #include "xr.h"
+#include "common/hand_roles.h"
 #include "log.h"
 #include "gameaddr.h"
 #include <xinput.h>
@@ -11,6 +12,7 @@
 #include <cstring>
 
 namespace controls {
+static void RoleHaptic(int role,float amplitude,float seconds) { xr::Haptic(fc2vr::hands::Physical(role),amplitude,seconds); }
 static volatile float g_rtValue = 0;
 static volatile bool g_mono = false, g_monoFace = false;   // v212 monocular: out (the aim button held for the game), at the face (scope view, trigger tags)
 bool MonocularOut() { return g_mono; }
@@ -229,6 +231,7 @@ static void StickToHead(float& sx, float& sy, const XrPosef& head) {
 }
 static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head, bool headValid) {
     memset(&g, 0, sizeof g);
+    xr::HandState roles[2]; fc2vr::hands::Controls(h,roles); h=roles;
     xr::HandState hm[2];
     if (g_menuMode) { hm[0] = h[0]; hm[1] = h[1]; for (auto& x : hm) { x.stick.x = x.stick.y = 0; x.stickClick = false; } h = hm; }   // the sticks drive the mod's menu
     ULONGLONG now = GetTickCount64();
@@ -358,13 +361,13 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     // monocular out (the game raises it while its aim button is held) or puts it back (the map and GPS return)
     bool monoToggle = grip && !g_rGripDown && z == Z_NONE && g_c.monocular && g_vehMode == 0 && (g_mono || (g_mapCompass == 1 && g_mapReal && !g_phoneOut));
     if (monoToggle) {
-        g_mono = !g_mono; g_monoFace = false; g_rGripAim = false; xr::Haptic(1, 0.5f, 0.05f);
+        g_mono = !g_mono; g_monoFace = false; g_rGripAim = false; RoleHaptic(1, 0.5f, 0.05f);
         LOG("controls: monocular %s (right grip)", g_mono ? "out" : "away - map and GPS back");
     } else if (grip && !g_rGripDown) {
         if (z != Z_NONE) { g_mapOpen = false; if (g_mono) { g_mono = false; LOG("controls: monocular away (holster grab)"); } }
-        if (z == Z_SHOULDER) { PulseBtn(g_shoulderNext ? kSlots[2] : kSlots[0], now); g_cycle = g_shoulderNext ? 2 : 0; g_shoulderNext ^= 1; g_rGripAim = false; xr::Haptic(1, 0.6f, 0.06f); }
-        else if (z == Z_HIP) { PulseBtn(kSlots[1], now); g_cycle = 1; g_rGripAim = false; xr::Haptic(1, 0.6f, 0.06f); }
-        else if (z == Z_CHEST) { PulseBtn(kSlots[3], now); g_cycle = 3; g_rGripAim = false; xr::Haptic(1, 0.6f, 0.06f); }
+        if (z == Z_SHOULDER) { PulseBtn(g_shoulderNext ? kSlots[2] : kSlots[0], now); g_cycle = g_shoulderNext ? 2 : 0; g_shoulderNext ^= 1; g_rGripAim = false; RoleHaptic(1, 0.6f, 0.06f); }
+        else if (z == Z_HIP) { PulseBtn(kSlots[1], now); g_cycle = 1; g_rGripAim = false; RoleHaptic(1, 0.6f, 0.06f); }
+        else if (z == Z_CHEST) { PulseBtn(kSlots[3], now); g_cycle = 3; g_rGripAim = false; RoleHaptic(1, 0.6f, 0.06f); }
         else g_rGripAim = true;
         if (z != Z_NONE) { LOG("controls: holster grab at %s", ZoneName(z)); InterlockedExchange(&g_selectReq, 1); }
     }
@@ -376,7 +379,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         float d = sqrtf(dx * dx + dy * dy + dz * dz);
         bool was = g_sightOn;
         g_sightOn = (g_leftClaimed || !g_c.sightNeedsGrip) && d < (g_sightOn ? g_c.sightOff : g_c.sightOn);
-        if (g_sightOn != was) { xr::Haptic(1, 0.3f, 0.03f); LOG("controls: sights %s (hand %.2f m from head)", g_sightOn ? "up" : "down", d); }
+        if (g_sightOn != was) { RoleHaptic(1, 0.3f, 0.03f); LOG("controls: sights %s (hand %.2f m from head)", g_sightOn ? "up" : "down", d); }
     } else g_sightOn = false;
     if (g_sightOn && g_sightsAllowed) g.bLeftTrigger = 255;
     if (g_mono) {
@@ -384,7 +387,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
             float dx = R.grip.position.x - head.position.x, dy = R.grip.position.y - head.position.y, dz = R.grip.position.z - head.position.z;
             float d = sqrtf(dx * dx + dy * dy + dz * dz); bool was = g_monoFace;
             g_monoFace = d < (g_monoFace ? g_c.sightOff : g_c.sightOn);
-            if (g_monoFace != was) { xr::Haptic(1, 0.3f, 0.03f); LOG("controls: monocular %s (hand %.2f m from head)", g_monoFace ? "at the eye" : "lowered", d); }
+            if (g_monoFace != was) { RoleHaptic(1, 0.3f, 0.03f); LOG("controls: monocular %s (hand %.2f m from head)", g_monoFace ? "at the eye" : "lowered", d); }
         }
         g.bLeftTrigger = 255;                                    // the game keeps the monocular raised
         g.bRightTrigger = g_monoFace ? g.bRightTrigger : 0;     // tagging only while looking through it
@@ -408,7 +411,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
             // only a free hand aims a throw: the right one with no weapon in it, the left one when it isn't on the weapon
             if (g_c.throwArcRight && g_rightFree && rT && !rPrev && g_rGripAim && R.gripValid && R.aimValid) g_aimHand = 1;
             else if (lT && !lPrev && g_lGripDown && !g_leftClaimed && L.gripValid && L.aimValid) g_aimHand = 0;
-            if (g_aimHand >= 0) { xr::Haptic(g_aimHand, 0.35f, 0.05f); LOG("controls: %s grip + trigger - aiming a throw", g_aimHand ? "right" : "left"); }
+            if (g_aimHand >= 0) { RoleHaptic(g_aimHand, 0.35f, 0.05f); LOG("controls: %s grip + trigger - aiming a throw", g_aimHand ? "right" : "left"); }
         } else {
             const xr::HandState& H = g_aimHand ? R : L;
             if (!(H.trigger > 0.35f && H.squeeze > 0.35f)) { InterlockedExchange(&g_throwRelease, 1); g_aimHand = -1; }
@@ -424,10 +427,10 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     if (lt && !g_lTrigDown && g_c.flashlight && headValid && L.gripValid) {
         const XrQuaternionf& q = head.orientation;   // the head's right axis (+X rotated)
         float rx = 1 - 2 * (q.y * q.y + q.z * q.z), ry = 2 * (q.x * q.y + q.w * q.z), rz = 2 * (q.x * q.z - q.w * q.y);
-        float tx = head.position.x - rx * 0.08f, ty = head.position.y - ry * 0.08f, tz = head.position.z - rz * 0.08f;   // left temple
+        float tx = head.position.x + rx * (fc2vr::hands::Support()?0.08f:-0.08f), ty = head.position.y + ry * (fc2vr::hands::Support()?0.08f:-0.08f), tz = head.position.z + rz * (fc2vr::hands::Support()?0.08f:-0.08f);   // left temple
         float dx = L.grip.position.x - tx, dy = L.grip.position.y - ty, dz = L.grip.position.z - tz;
         float d = sqrtf(dx * dx + dy * dy + dz * dz);
-        if (d < g_c.flashRadius) { g_flash = !g_flash; g_lTrigFlash = true; xr::Haptic(0, 0.5f, 0.06f); LOG("controls: flashlight %s (left hand %.2f m from the temple)", g_flash ? "on" : "off", d); }
+        if (d < g_c.flashRadius) { g_flash = !g_flash; g_lTrigFlash = true; RoleHaptic(0, 0.5f, 0.06f); LOG("controls: flashlight %s (left hand %.2f m from the temple)", g_flash ? "on" : "off", d); }
     }
     if (!lt) g_lTrigFlash = false;
     if (lt && !g_lTrigDown && !g_lTrigFlash) { g_lTrigGrenade = g_rGripAim; if (!g_lTrigGrenade) InterlockedExchange(&g_reloadPress, 1); }
@@ -436,7 +439,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     // B: tap = next weapon slot, hold = next throwable type (grenade / molotov)
     // left grip + B: put the weapon away (or bring it back) - a combo, so a single press in a fight can't do it
     auto& g_bCombo = g_history.bCombo;
-    if (R.btn2 && !g_bDown && L.squeeze > 0.6f) { g_bCombo = true; InterlockedExchange(&g_holsterReq, 1); xr::Haptic(1, 0.5f, 0.05f); LOG("controls: left grip + B - weapon away / back"); }
+    if (R.btn2 && !g_bDown && L.squeeze > 0.6f) { g_bCombo = true; InterlockedExchange(&g_holsterReq, 1); RoleHaptic(1, 0.5f, 0.05f); LOG("controls: left grip + B - weapon away / back"); }
     if (g_bCombo) { if (!R.btn2) g_bCombo = false; g_bDown = R.btn2; g_bHoldFired = true; }
     if (R.btn2 && !g_bDown) { g_bTime = now; g_bHoldFired = false; }
     if (R.btn2 && !g_bHoldFired && now - g_bTime >= (ULONGLONG)g_c.holdMs) { PulseBtn(XINPUT_GAMEPAD_RIGHT_THUMB, now); g_bHoldFired = true; }
@@ -474,7 +477,7 @@ static DWORD WINAPI Hook_GetState(DWORD idx, XINPUT_STATE* st) {
 }
 static DWORD WINAPI Hook_SetState(DWORD idx, XINPUT_VIBRATION* v) {
     if (g_active && idx == 0) {
-        if (v && g_c.rumble) xr::SetRumble(v->wLeftMotorSpeed / 65535.0f * g_c.rumble, v->wRightMotorSpeed / 65535.0f * g_c.rumble);
+        if (v && g_c.rumble) xr::SetRumble((fc2vr::hands::leftHanded ? v->wRightMotorSpeed : v->wLeftMotorSpeed) / 65535.0f * g_c.rumble, (fc2vr::hands::leftHanded ? v->wLeftMotorSpeed : v->wRightMotorSpeed) / 65535.0f * g_c.rumble);
         return ERROR_SUCCESS;
     }
     return o_SetState ? o_SetState(idx, v) : ERROR_DEVICE_NOT_CONNECTED;
