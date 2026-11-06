@@ -72,13 +72,14 @@ int wmain(int argc,wchar_t** argv) {
     const bool confirm=argc==3 && !wcscmp(argv[1],L"--menu-key") && !wcscmp(argv[2],L"confirm");
     const bool capture=argc==3 && !wcscmp(argv[1],L"--capture-window");
     const bool handToggle=argc==2 && !wcscmp(argv[1],L"--weapon-hand-toggle");
-    if(!inspect && !confirm && !capture && !handToggle){std::fputs("Use --inspect-game-focus, --menu-key confirm, --weapon-hand-toggle, or --capture-window <png>\n",stderr);return 2;}
+    const bool weaponSlot=argc==3 && !wcscmp(argv[1],L"--weapon-slot") && wcslen(argv[2])==1 && argv[2][0]>=L'1' && argv[2][0]<=L'4';
+    if(!inspect && !confirm && !capture && !handToggle && !weaponSlot){std::fputs("Use --inspect-game-focus, --menu-key confirm, --weapon-hand-toggle, --weapon-slot 1..4, or --capture-window <png>\n",stderr);return 2;}
     SetProcessDPIAware();Client c;EnumWindows(FindClient,reinterpret_cast<LPARAM>(&c));
     if(!c.window || c.ambiguous){std::fputs("No unique visible Far Cry 2 client found\n",stderr);return 1;}
     if(inspect){std::printf("{\"pid\":%lu,\"foreground\":%d}\n",static_cast<unsigned long>(c.pid),GetAncestor(GetForegroundWindow(),GA_ROOT)==GetAncestor(c.window,GA_ROOT));return 0;}
     if(capture)return Capture(c.window,argv[2])?0:1;
     if(!Focus(c.window)){std::fputs("Game focus failed; no key sent\n",stderr);return 1;}
-    INPUT key{};key.type=INPUT_KEYBOARD;key.ki.wScan=handToggle?0x3b:0x1c;key.ki.dwFlags=KEYEVENTF_SCANCODE;
+    INPUT key{};key.type=INPUT_KEYBOARD;key.ki.wScan=weaponSlot?WORD(2+argv[2][0]-L'1'):handToggle?0x3b:0x1c;key.ki.dwFlags=KEYEVENTF_SCANCODE;
     const bool down=SendInput(1,&key,sizeof key)==1;Sleep(100);key.ki.dwFlags|=KEYEVENTF_KEYUP;
     const bool up=SendInput(1,&key,sizeof key)==1;
     return down && up?0:1;

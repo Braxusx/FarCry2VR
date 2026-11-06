@@ -35,6 +35,7 @@ require_text(arms "fc2vr::hands::TryWriteGuard transition;if(!transition)return 
 require_text(arms "f.handLayout!=fc2vr::hands::Generation()")
 require_text(arms "g_frame.valid=false;g_frame.handAuthority=g_frame.leftAuthority=false;")
 require_text(arms "LeftWeaponAttachment(true)")
+require_text(arms "fc2vr::melee_motion::Continuous(previousWeapon,(uintptr_t)weapon,previousLayout,f.handLayout,previousSource,f.source,fc2vr::hands::Weapon(),t-tPrev)")
 require_text(main "af.handLayout=fc2vr::hands::Generation()")
 require_text(main "GetAsyncKeyState(VK_F1)")
 require_text(main "lastSpaceGeneration != fv.spaceGeneration")

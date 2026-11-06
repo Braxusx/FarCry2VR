@@ -73,8 +73,19 @@ component's +0x54 is not that slot.** No resource pointer at +0x40 is treated as
 a skeleton. Native shot spread is rotated from the camera basis onto the
 barrel; the reticle/scope reference ray is derived from the same world muzzle.
 The close-range aim query starts 1 cm from the muzzle rather than skipping
-the first half metre. Non-firearm machete attachment retains its previous
-calibration when no muzzle exists; its full visual/melee acceptance is pending.
+the first half metre. The observed Steam machete (`570988e9`, three bones)
+has an authored dummy_muzzle locator at slot 1 (`af2676da`) but no firearm
+effects updater. Its qualified blade locator supplies the reflection plane;
+the old unmirrored fallback is removed. It does not acquire firearm shot
+authority. Native machete placement matches the mirrored right-hand reference;
+physical comfort and melee acceptance still need testing.
+
+With `FreezeReload=1`, the left adapter retains the captured native mount for
+the owned entity, including when reload changes the parent bone or supplies an
+animated offset. It does not relearn that animation or its tail as the new rest.
+Non-reload nonzero holster offsets retain their native behavior. Blade motion
+history rebaselines after F1, weapon changes or tracking-context changes so a
+hand switch cannot synthesize a melee swing.
 
 The native runner's `-LeftWeapon` option enables a visual-only test fixture:
 physical left/right controller targets are generated for rendering, but never
@@ -95,6 +106,15 @@ the run directory. They check both physical wrists, both-eye attachment chains,
 restoration of the original right-hand offset, advancing layout/input
 generations and unchanged body-yaw heading/reference. Controller fixtures stay
 visual-only in both modes; no synthetic fire/reload is sent.
+
+`-MacheteComparison` selects the real blade with keyboard slot 1 and captures
+left/right/left presentation. Run `check_machete_native.py` afterward.
+`-ReloadAttachmentReplay` selects the observed RPG with slot 4 and replays
+displaced right-hand/camera-parent offsets on its owned attachment node. Run
+`check_reload_attachment_native.py` and `test_melee_reload_native_rejections.py`
+on a run containing both cases. This replay checks attachment drift/recovery;
+it does not exercise actual reload animation or model-internal root motion.
+These explicit fixtures and observations are absent from production.
 
 This checks actual Steam left/right bone readback against the weapon and
 reach-limited support targets and mirrored dominant-wrist orientation, plus
@@ -135,7 +155,11 @@ against original right-handed calibration. It requires a new physical test:
    (primary/special), at its matching hip while pointing down (secondary), and
    at centre chest (machete). Check the opposite shoulder/hip does not select
    those weapons. Switch with F1, release controls to rearm, then repeat on the
-   other side. Physical holster acceptance is pending.
+   other side. The user has accepted shoulder, hip and chest selection.
+9. Compare the corrected machete with F1 and perform intentional swings. Check
+   an actual left-handed RPG reload for drift; the owned replay cannot accept
+   the real reload animation. Cosmetic finger poses are still native animation
+   poses and remain low priority.
 
 Body yaw stopping with map/radio out is a separately reported eligibility issue;
 this runtime comparison does not change the body-yaw feature's mode policy.

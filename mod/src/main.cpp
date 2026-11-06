@@ -2789,6 +2789,11 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
         af.leftValid = lh.aimValid && lh.gripValid;
         af.lSqueeze = af.leftAuthority ? lh.squeeze : 0; af.rSqueeze = af.handAuthority ? rh.squeeze : 0;
         af.machete = controls::MacheteSelected(); af.map = controls::MapOpen();
+#if defined(FC2VR_BODY_YAW_TESTING)
+        // The owned runner selects the real blade with a keyboard slot. Its
+        // visual-only controller fixture does not run the gamepad slot tracker.
+        if(body_yaw_fixture::current.configured){const auto phase=body_yaw_fixture::current.sequence/100000;if(phase>=22 && phase<=24)af.machete=true;}
+#endif
         if (af.leftValid) {
             put(af.laimO, frame.ReferencePosition(ToV3(lh.aim.position)));
             put(af.laimR, frame.ReferenceDirection(QRot(lh.aim.orientation, { 1, 0, 0 })));

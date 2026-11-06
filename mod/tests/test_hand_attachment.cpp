@@ -1,4 +1,6 @@
 #include "common/hand_attachment.h"
+#include "common/left_attachment_policy.h"
+#include <initializer_list>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -21,6 +23,25 @@ static float Error(const Matrix& a,const Matrix& b) {
     float e=0;for(int i=0;i<16;++i)e=std::fmax(e,std::fabs(a.m[i]-b.m[i]));return e;
 }
 int main() {
+    using fc2vr::left_attachment::NativeOffset;using fc2vr::left_attachment::Offset;
+    auto check=[](bool ok,const char* what){if(!ok){std::fprintf(stderr,"FAIL: %s\n",what);std::exit(1);}};
+    check(NativeOffset(false,true,false,81,81,56,false,false)==Offset::Capture,"first native right mount is captured");
+    check(NativeOffset(false,true,true,15,81,56,false,false)==Offset::Reject,"reload cannot borrow an unknown rest offset");
+    check(NativeOffset(false,true,false,81,81,56,true,false)==Offset::Reject,"converted offset cannot become an initial rest");
+    check(NativeOffset(true,false,false,81,81,56,false,false)==Offset::Capture,"non-frozen native animations can update their offset");
+    check(NativeOffset(true,false,false,81,81,56,true,false)==Offset::Reuse,"never capture our converted offset");
+    check(NativeOffset(true,true,false,15,81,56,false,false)==Offset::Reject,"non-reload holster offsets remain native");
+    check(NativeOffset(true,true,false,15,81,56,false,true)==Offset::Reuse,"existing zero-offset reattachment recovery remains supported");
+    const Matrix rest=Pose(.2f,-.1f,.03f,-.02f,.07f);Matrix cached=rest;
+    for(int frame=0;frame<600;++frame){
+        const int indices[]={81,56,15,105};const int index=indices[frame%4];
+        const Matrix animated=Pose(frame*.03f,.6f,.35f+frame*.0001f,.2f,-.1f);
+        const auto action=NativeOffset(true,true,true,index,81,56,false,false);
+        check(action==Offset::Reuse,"all active-reload parent/offset changes retain the known native rest");
+        if(action==Offset::Capture)cached=animated;
+        check(Error(cached,rest)==0,"RPG animation cannot drift the cached rest onto the right side");
+    }
+    check(NativeOffset(true,true,false,81,81,56,false,false)==Offset::Reuse,"animation tail after reload completion cannot poison rest");
     int checks=0;
     for(int turn=-720;turn<=720;turn+=3)for(int pitch=-60;pitch<=60;pitch+=20) {
         const float radians=turn*0.01745329252f,p=pitch*0.01745329252f;

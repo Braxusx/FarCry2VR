@@ -1,6 +1,7 @@
 #include "common/hand_roles.h"
 #include "common/hand_switch.h"
 #include "common/pose_authority.h"
+#include "common/melee_motion.h"
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -28,6 +29,14 @@ int main(){
     finish=true;reader.join();
     fc2vr::authority::Stamp old{};old.sequence=1;old.receivedMs=100;old.generation=1;old.focused=old.synced=true;
     auto current=old;
+    Check(fc2vr::melee_motion::Continuous(1,1,1,1,old,current,0,.016),"normal blade samples retain motion");
+    Check(!fc2vr::melee_motion::Continuous(1,1,1,2,old,current,0,.016),"F1 hand displacement cannot synthesize a machete swing");
+    Check(!fc2vr::melee_motion::Continuous(1,2,1,1,old,current,0,.016),"drawing another weapon cannot synthesize a swing");
+    Check(!fc2vr::melee_motion::Continuous(1,1,1,1,old,current,0,.3),"long observation gap rebaselines blade motion");
+    ++current.handGeneration[0];
+    Check(!fc2vr::melee_motion::Continuous(1,1,1,1,old,current,0,.016),"weapon tracking rearm rebaselines blade motion");
+    Check(fc2vr::melee_motion::Continuous(1,1,1,1,old,current,1,.016),"support dropout does not borrow or cancel weapon motion context");
+    current=old;
     for(int i=0;i<4;++i){
         const bool wasLeft=leftHanded;const auto oldLayout=Generation();
         TryWriteGuard writer;Check(bool(writer),"transition exclusive lock available");

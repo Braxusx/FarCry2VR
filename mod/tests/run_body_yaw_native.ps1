@@ -9,7 +9,9 @@ param(
     [switch]$GrassMotion,
     [switch]$BodyOnly,
     [switch]$LeftWeapon,
-    [switch]$WeaponHandToggle
+    [switch]$WeaponHandToggle,
+    [switch]$MacheteComparison,
+    [switch]$ReloadAttachmentReplay
 )
 # Owned, bounded native test. Supply the existing source-built trial manifest.
 # Does not patch original game binaries or send save commands. Restores DLL/settings.
@@ -140,6 +142,35 @@ try{
             Start-Sleep -Seconds 3
             & $Probe --capture-window "$out/hand-$phase.png" *> "$out/capture-$phase.log"
         }
+    }
+    if($MacheteComparison){
+        if(!$LeftWeapon){throw 'MacheteComparison requires left-handed startup'}
+        & $Probe --weapon-slot 1
+        if($LASTEXITCODE){throw 'Blade selection key failed'}
+        Set-Phase 22 macheteLeft 0 0 0 1 1 2;Start-Sleep -Seconds 6
+        & $Probe --capture-window "$out/machete-left.png" *> "$out/machete-left-capture.log"
+        Set-Phase 23 macheteRight 0 0 0 1 1 2
+        & $Probe --weapon-hand-toggle
+        if($LASTEXITCODE){throw 'Blade right comparison F1 failed'}
+        Start-Sleep -Seconds 4
+        & $Probe --capture-window "$out/machete-right.png" *> "$out/machete-right-capture.log"
+        Set-Phase 24 macheteLeftReturn 0 0 0 1 1 2
+        & $Probe --weapon-hand-toggle
+        if($LASTEXITCODE){throw 'Blade left return F1 failed'}
+        Start-Sleep -Seconds 4
+        & $Probe --capture-window "$out/machete-left-return.png" *> "$out/machete-left-return-capture.log"
+    }
+    if($ReloadAttachmentReplay){
+        if(!$LeftWeapon){throw 'ReloadAttachmentReplay requires left-handed startup'}
+        Set-Phase 25 rpgNativeRest 0 0 0 1 1 2
+        & $Probe --weapon-slot 4
+        if($LASTEXITCODE){throw 'Special weapon selection key failed'}
+        Start-Sleep -Seconds 6
+        Set-Phase 26 rpgRightParentReload 0 0 0 1 1 2;Start-Sleep -Seconds 4
+        & $Probe --capture-window "$out/rpg-reload-right-parent.png" *> "$out/rpg-capture-26.log"
+        Set-Phase 27 rpgCameraParentReload 0 0 0 1 1 2;Start-Sleep -Seconds 4
+        & $Probe --capture-window "$out/rpg-reload-camera-parent.png" *> "$out/rpg-capture-27.log"
+        Set-Phase 28 rpgAfterReload 0 0 0 1 1 2;Start-Sleep -Seconds 4
     }
     & $Probe --capture-window "$out/final.png" *> "$out/capture.log"
     'Native run completed; trace assertions still required.' | Set-Content "$out/run-completed.txt"
