@@ -59,6 +59,9 @@ static DXGI_FORMAT g_eyeChainFmt = DXGI_FORMAT_UNKNOWN;
 struct Shared {
     ID3D10Texture2D*  tex10 = nullptr;   // owned by the game's D3D10 device
     ID3D11Texture2D*  tex11 = nullptr;   // same memory opened on our D3D11 device
+    IDXGIKeyedMutex*  km10 = nullptr;    // v234 test 63: keyed mutex (texture made with SHARED_KEYEDMUTEX), D3D10 side
+    IDXGIKeyedMutex*  km11 = nullptr;    // and D3D11 side
+    bool held10 = false, held11 = false;
 };
 static Shared g_shared[5];   // 0,1 = eyes, 2 = screen quad, 3 = HUD, 4 = reticle
 
@@ -218,7 +221,14 @@ static bool CreateD3D11(const LUID& luid) {
 
 static ID3D10Query* g_evt10 = nullptr;
 
-static bool CreateShared(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt) {
+static bool g_kmOk = true;   // every shared texture has a keyed mutex (else: the render thread waits for the GPU)
+static void ReleaseShared(Shared& s) {
+    if (s.km11 && s.held11) s.km11->ReleaseSync(0);
+    if (s.km10 && s.held10) s.km10->ReleaseSync(0);
+    s.held10 = s.held11 = false;
+    SafeRelease(s.km10); SafeRelease(s.km11); SafeRelease(s.tex10); SafeRelease(s.tex11);
+}
+static bool CreateSharedPlain(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt) {
     D3D10_TEXTURE2D_DESC td{};
     td.Width = w; td.Height = h; td.MipLevels = 1; td.ArraySize = 1;
     td.Format = fmt; td.SampleDesc.Count = 1; td.Usage = D3D10_USAGE_DEFAULT;
@@ -233,11 +243,28 @@ static bool CreateShared(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt) {
     if (FAILED(hr) || !sh) { LOG("XR: GetSharedHandle hr=%08lx", (unsigned long)hr); return false; }
     hr = g_dev11->OpenSharedResource(sh, __uuidof(ID3D11Texture2D), (void**)&s.tex11);
     if (FAILED(hr)) { LOG("XR: D3D11 OpenSharedResource hr=%08lx", (unsigned long)hr); return false; }
-    if (!g_evt10) {
-        D3D10_QUERY_DESC qd{ D3D10_QUERY_EVENT, 0 };
-        g_dev10->CreateQuery(&qd, &g_evt10);
-    }
     return true;
+}
+// v234 test 63: each shared texture carries its own keyed mutex, so the GPU orders every hand-over of that texture
+// between the two devices (test 54-56 used one separate 1x1 keyed-mutex texture as a fence; drivers only order the
+// resource the mutex belongs to, and a slower GPU showed the right eye - written last - from an unfinished frame).
+// Made on our D3D11 device and opened on the game's D3D10 device (the order that works; needs the DXGI 1.1 factory).
+static bool CreateShared(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt) {
+    if (!g_evt10) { D3D10_QUERY_DESC qd{ D3D10_QUERY_EVENT, 0 }; g_dev10->CreateQuery(&qd, &g_evt10); }
+    const char* step = "D3D11 CreateTexture2D"; HANDLE sh = nullptr;
+    D3D11_TEXTURE2D_DESC td{}; td.Width = w; td.Height = h; td.MipLevels = td.ArraySize = 1; td.Format = fmt;
+    td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    td.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    HRESULT hr = g_dev11->CreateTexture2D(&td, nullptr, &s.tex11);
+    if (SUCCEEDED(hr)) { step = "GetSharedHandle"; IDXGIResource* r = nullptr; s.tex11->QueryInterface(__uuidof(IDXGIResource), (void**)&r); hr = r ? r->GetSharedHandle(&sh) : E_NOINTERFACE; if (r) r->Release(); }
+    if (SUCCEEDED(hr) && sh) { step = "D3D10 OpenSharedResource"; hr = g_dev10->OpenSharedResource(sh, __uuidof(ID3D10Texture2D), (void**)&s.tex10); }
+    if (SUCCEEDED(hr) && s.tex10) { step = "keyed mutex"; hr = s.tex10->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&s.km10); }
+    if (SUCCEEDED(hr) && s.km10) hr = s.tex11->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&s.km11);
+    if (SUCCEEDED(hr) && s.km11) { step = "first AcquireSync"; hr = s.km10->AcquireSync(0, 100); }
+    if (hr == S_OK) { s.held10 = true; return true; }
+    LOG("XR: keyed-mutex shared texture %ux%u fmt %d failed (%s hr=%08lx) - plain shared texture, the render thread waits for the GPU", w, h, (int)fmt, step, (unsigned long)hr);
+    ReleaseShared(s); g_kmOk = false;
+    return CreateSharedPlain(s, w, h, fmt);
 }
 
 // Make the D3D10 copies visible to D3D11: flush the game device and wait for its GPU work to finish.
@@ -251,72 +278,35 @@ static void Sync10Wait() {
         YieldProcessor();
     }
 }
-// v234 test 54: GPU-side handover. A tiny keyed-mutex texture used as a fence between the game's D3D10 device and our
-// D3D11 device: D3D10 releases key 1 after all of this frame's work (queued in order behind it), D3D11 acquires key 1
-// (the GPU waits, the CPU goes on), copies, releases key 0, and D3D10 takes key 0 back at once so its next frame's
-// writes into the shared textures wait on the GPU for our copies. The render thread no longer waits for the GPU.
-static ID3D10Texture2D* g_fenceTex10 = nullptr; static ID3D11Texture2D* g_fenceTex11 = nullptr;
-static IDXGIKeyedMutex* g_km10 = nullptr; static IDXGIKeyedMutex* g_km11 = nullptr; static bool g_km10Held = false, g_km11Held = false;
+// v234 test 54/63: GPU-side handover. The game's D3D10 device holds every shared texture's keyed mutex (key 0) while
+// it renders a frame. At the end it releases them with key 1 (queued behind its work), our D3D11 device acquires key 1
+// (the GPU waits, the CPU goes on), copies, releases key 0, and D3D10 takes key 0 back at once, so its next writes wait
+// on the GPU for our copies. The render thread no longer waits for the GPU. EndFrameWait=1: it also waits as before.
 static bool g_gpuHandover = false;   // ini EndFrameWait=0
-static double g_hoMs = 0, g_hoMax = 0; static int g_hoN = 0, g_hoFallbacks = 0; static bool g_hoLastGpu = false;
-static void FenceRelease() {
-    if (g_km11 && g_km11Held) g_km11->ReleaseSync(0);
-    if (g_km10 && g_km10Held) g_km10->ReleaseSync(0);
-    g_km10Held = g_km11Held = false;
-    SafeRelease(g_km10); SafeRelease(g_km11); SafeRelease(g_fenceTex10); SafeRelease(g_fenceTex11);
-}
-static void FenceCreate() {
-    FenceRelease();
-    // created on our D3D11 device (keyed-mutex sharing is best supported there) and opened on the game's D3D10 device;
-    // the D3D10-created variant is the fallback. Each failing step is logged.
-    const char* step = "D3D11 CreateTexture2D"; HRESULT hr = E_FAIL; HANDLE sh = nullptr;
-    {   D3D11_TEXTURE2D_DESC td{}; td.Width = td.Height = 1; td.MipLevels = td.ArraySize = 1; td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-        td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-        td.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-        hr = g_dev11->CreateTexture2D(&td, nullptr, &g_fenceTex11);
-        if (SUCCEEDED(hr)) { step = "GetSharedHandle(11)"; IDXGIResource* r = nullptr; g_fenceTex11->QueryInterface(__uuidof(IDXGIResource), (void**)&r); hr = r ? r->GetSharedHandle(&sh) : E_NOINTERFACE; if (r) r->Release(); }
-        if (SUCCEEDED(hr) && sh) { step = "D3D10 OpenSharedResource"; hr = g_dev10->OpenSharedResource(sh, __uuidof(ID3D10Texture2D), (void**)&g_fenceTex10); }
-    }
-    if (FAILED(hr) || !g_fenceTex10) {
-        LOG("XR: GPU handover fence: %s hr=%08lx - trying the D3D10-created texture", step, (unsigned long)hr);
-        SafeRelease(g_fenceTex10); SafeRelease(g_fenceTex11); sh = nullptr;
-        D3D10_TEXTURE2D_DESC td{}; td.Width = td.Height = 1; td.MipLevels = td.ArraySize = 1; td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-        td.SampleDesc.Count = 1; td.Usage = D3D10_USAGE_DEFAULT; td.BindFlags = D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE;
-        td.MiscFlags = D3D10_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-        step = "D3D10 CreateTexture2D"; hr = g_dev10->CreateTexture2D(&td, nullptr, &g_fenceTex10);
-        if (SUCCEEDED(hr)) { step = "GetSharedHandle(10)"; IDXGIResource* r = nullptr; g_fenceTex10->QueryInterface(__uuidof(IDXGIResource), (void**)&r); hr = r ? r->GetSharedHandle(&sh) : E_NOINTERFACE; if (r) r->Release(); }
-        if (SUCCEEDED(hr) && sh) { step = "D3D11 OpenSharedResource"; hr = g_dev11->OpenSharedResource(sh, __uuidof(ID3D11Texture2D), (void**)&g_fenceTex11); }
-    }
-    if (SUCCEEDED(hr) && g_fenceTex10 && g_fenceTex11) { step = "keyed mutex (10)"; hr = g_fenceTex10->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&g_km10); }
-    if (SUCCEEDED(hr) && g_km10) { step = "keyed mutex (11)"; hr = g_fenceTex11->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&g_km11); }
-    if (SUCCEEDED(hr) && g_km11) { step = "first AcquireSync"; hr = g_km10->AcquireSync(0, 100); }
-    if (hr != S_OK) { LOG("XR: GPU handover fence unavailable (%s hr=%08lx) - the render thread waits for the GPU as before", step, (unsigned long)hr); FenceRelease(); return; }
-    g_km10Held = true;
-    LOG("XR: GPU handover fence ready (keyed mutex)");
-}
-// after our D3D11 copies of the shared textures: D3D11 releases key 0 (queued after the copies) and D3D10 takes it
-// back, so the game's next writes into those textures wait on the GPU for the copies
+static double g_hoMs = 0, g_hoMax = 0; static int g_hoN = 0; static bool g_hoLastGpu = false;
+static EyeFilter g_eyeFilter = nullptr; static bool g_copyBack = false;
+// after our D3D11 work on the shared textures: give them back to D3D10
 static void HandoverDone() {
-    if (!g_km11Held) return;
-    g_km11->ReleaseSync(0); g_km11Held = false;
-    g_ctx11->Flush();
-    if (g_km10->AcquireSync(0, 100) == S_OK) g_km10Held = true;
-    else { LOG("XR: GPU handover: D3D10 could not take the fence back - wait mode"); g_gpuHandover = false; ++g_hoFallbacks; }
+    for (Shared& s : g_shared) if (s.km11 && s.held11) { s.km11->ReleaseSync(0); s.held11 = false; }
+    for (Shared& s : g_shared) if (s.km10 && !s.held10) {
+        if (s.km10->AcquireSync(0, 100) == S_OK) s.held10 = true;
+        else LOG("XR: handover: D3D10 could not take a shared texture back");
+    }
 }
 static void Sync10() {
     HandoverDone();
-    double t0 = QpcMs(); bool gpu = false;
-    if (g_gpuHandover && g_km10 && g_km11 && g_km10Held) {
-        g_km10->ReleaseSync(1); g_km10Held = false;
-        g_dev10->Flush();
-        HRESULT hr = g_km11->AcquireSync(1, 100);
-        if (hr == S_OK) { gpu = true; g_km11Held = true; }   // given back in HandoverDone, after our copies
-        else {
-            LOG("XR: GPU handover: D3D11 acquire hr=%08lx - wait mode", (unsigned long)hr); g_gpuHandover = false; ++g_hoFallbacks;
-        }
+    double t0 = QpcMs();
+    // DLSS / AFW move more textures between the devices (plain shared ones): those still need the GPU to be done
+    const bool wait = !g_gpuHandover || !g_kmOk || g_eyeFilter || g_copyBack;
+    if (wait) Sync10Wait(); else g_dev10->Flush();
+    for (Shared& s : g_shared) if (s.km10 && s.held10) { s.km10->ReleaseSync(1); s.held10 = false; }
+    g_dev10->Flush();
+    for (Shared& s : g_shared) if (s.km11 && !s.held11) {
+        HRESULT hr = s.km11->AcquireSync(1, 100);
+        if (hr == S_OK) s.held11 = true;
+        else { static int n = 0; if (n++ < 5) LOG("XR: handover: D3D11 acquire hr=%08lx", (unsigned long)hr); }
     }
-    if (!gpu) Sync10Wait();
-    double d = QpcMs() - t0; g_hoMs += d; if (d > g_hoMax) g_hoMax = d; ++g_hoN; g_hoLastGpu = gpu;
+    double d = QpcMs() - t0; g_hoMs += d; if (d > g_hoMax) g_hoMax = d; ++g_hoN; g_hoLastGpu = !wait;
 }
 
 static bool CreateChain(Chain& c, int32_t w, int32_t h, int64_t fmt) {
@@ -627,8 +617,7 @@ void Haptic(int side, float amplitude, float seconds, float frequency) {
 // ---------------------------------------------------------------- init
 static void Teardown() {
     InvalidateInput("teardown",true); g_referenceChanges.clear(); ++g_spaceGeneration;
-    FenceRelease();
-    for (int i = 0; i < 5; ++i) { SafeRelease(g_shared[i].tex10); SafeRelease(g_shared[i].tex11); }
+    for (int i = 0; i < 5; ++i) ReleaseShared(g_shared[i]);
     g_hud = Chain{}; g_ret = Chain{}; g_dot = Chain{}; SafeRelease(g_dotTex); g_menu = Chain{}; SafeRelease(g_menuTex); g_ammo = Chain{}; SafeRelease(g_ammoTex); g_wammo = Chain{}; SafeRelease(g_wammoTex); g_gren = Chain{}; SafeRelease(g_grenTex); g_clk = Chain{}; SafeRelease(g_clkTex); g_hp = Chain{}; SafeRelease(g_hpTex); g_vig = Chain{}; SafeRelease(g_vigTex); SafeRelease(g_vigPlainTex); SafeRelease(g_vigMonoTex[0]); SafeRelease(g_vigMonoTex[1]);
     g_eye[0] = Chain{}; g_eye[1] = Chain{}; g_screen = Chain{};
     if (g_inst && p_xrDestroyInstance) p_xrDestroyInstance(g_inst);   // also destroys session/space/swapchains
@@ -752,9 +741,8 @@ static bool SwapchainsImpl(const D3D10_TEXTURE2D_DESC& eye, const D3D10_TEXTURE2
     if (!CreateChain(g_screen, (int32_t)g_w, (int32_t)g_h, fs)) return false;
     for (int i = 0; i < 2; ++i) if (!CreateShared(g_shared[i], g_eyeW, g_eyeH, g_eyeFormat)) { snprintf(g_err, sizeof(g_err), "shared eye texture %d failed", i); return false; }
     if (!CreateShared(g_shared[2], g_w, g_h, g_bbFormat)) { snprintf(g_err, sizeof(g_err), "shared screen texture failed"); return false; }
-    FenceCreate();
     if (CreateChain(g_hud, (int32_t)g_eyeW, (int32_t)g_eyeH, fe) && CreateShared(g_shared[3], g_eyeW, g_eyeH, g_eyeFormat)) LOG("XR: HUD layer %ux%u ready", g_eyeW, g_eyeH);
-    else { LOG("XR: HUD layer unavailable"); SafeRelease(g_shared[3].tex10); SafeRelease(g_shared[3].tex11); }
+    else { LOG("XR: HUD layer unavailable"); ReleaseShared(g_shared[3]); }
     if (CreateChain(g_ret, (int32_t)g_eyeW, (int32_t)g_eyeH, fe) && CreateShared(g_shared[4], g_eyeW, g_eyeH, g_eyeFormat)) LOG("XR: reticle layer ready");
     if (CreateChain(g_ammo, AmmoW, AmmoH, fe)) {
         D3D11_TEXTURE2D_DESC td{}; td.Width = AmmoW; td.Height = AmmoH; td.MipLevels = td.ArraySize = 1; td.Format = (DXGI_FORMAT)fe;
@@ -851,7 +839,7 @@ static bool SwapchainsImpl(const D3D10_TEXTURE2D_DESC& eye, const D3D10_TEXTURE2
             if (FAILED(g_dev11->CreateTexture2D(&td, &sd, &g_vigMonoTex[k]))) g_vigMonoTex[k] = nullptr;
         }
     }
-    else { LOG("XR: reticle layer unavailable"); SafeRelease(g_shared[4].tex10); SafeRelease(g_shared[4].tex11); }
+    else { LOG("XR: reticle layer unavailable"); ReleaseShared(g_shared[4]); }
     g_ready = true; g_fatal = false;
     LOG("XR: ready");
     return true;
@@ -943,6 +931,7 @@ static bool WaitBegin(XrFrameState& fs) {
 }
 
 bool BeginFrame(FrameViews& out) {
+    HandoverDone();   // the game's device must hold the shared textures before it writes them this frame
     out = FrameViews{};
     if (!SessionRunning() || g_frameBegun) return false;
     XrFrameState fs{ XR_TYPE_FRAME_STATE };
@@ -1129,10 +1118,9 @@ static void DrawArc(ID3D11Texture2D* tex, int e, const XrRect2Di& rect) {
     g_ctx11->Draw(nv, 0);
     ID3D11RenderTargetView* none = nullptr; g_ctx11->OMSetRenderTargets(1, &none, nullptr);
 }
-static EyeFilter g_eyeFilter = nullptr;
 void SetEyeFilter(EyeFilter f) { g_eyeFilter = f; }
 // the eye image, or what the filter (DLSS) made of it
-static bool g_copyBack = false; static ID3D11Query* g_copyQ = nullptr; static bool g_copyPending = false;
+static ID3D11Query* g_copyQ = nullptr; static bool g_copyPending = false;
 void SetCopyBack(bool on) { g_copyBack = on; }
 ID3D10Texture2D* EyeTexture10(int e) { return (e == 0 || e == 1) ? g_shared[e].tex10 : nullptr; }
 // the D3D10 device may read the eye textures again once the D3D11 copy-backs of the last frame are done
@@ -1488,8 +1476,8 @@ void Shutdown() {
 
 namespace xr {
 void SetGpuHandover(bool on) { g_gpuHandover = on; LOG("XR: end-of-frame handover: %s", on ? "GPU (render thread does not wait)" : "render thread waits for the GPU"); }
-bool GpuHandover() { return g_gpuHandover && g_km10 != nullptr; }
-bool GpuHandoverAvailable() { return g_km10 != nullptr; }
+bool GpuHandover() { return g_gpuHandover && g_kmOk; }
+bool GpuHandoverAvailable() { return g_kmOk; }
 bool HandoverStats(double& avgMs, double& maxMs, int& frames, bool& gpu) {
     if (!g_hoN) return false;
     avgMs = g_hoMs / g_hoN; maxMs = g_hoMax; frames = g_hoN; gpu = g_hoLastGpu;
