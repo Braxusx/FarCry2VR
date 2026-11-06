@@ -18,8 +18,8 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "Far Cry 2 VR Launcher"
       VALUE "ProductName", "Far Cry 2 VR"
-      VALUE "FileVersion", "1.0.4 test 3"
-      VALUE "ProductVersion", "1.0.4 test 3"
+      VALUE "FileVersion", "1.0.4 test 4"
+      VALUE "ProductVersion", "1.0.4 test 4"
       VALUE "CompanyName", "Braxus"
       VALUE "LegalCopyright", "Far Cry VR Mod by Braxus"
     END
