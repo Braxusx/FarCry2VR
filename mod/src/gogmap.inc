@@ -73,6 +73,7 @@ static const uint32_t kGogMap[][2] = {
     { 0x103766A0, 0x103686B0 },
     { 0x10379C36, 0x1036BC76 },
     { 0x1037F860, 0x10371930 },
+    { 0x1038110E, 0x1037311E },   // buffer allocator: call [IsBadWritePtr] (v234 test 62)
     { 0x1038E6E0, 0x103805B0 },
     { 0x10395E40, 0x10387BF0 },
     { 0x10396CB0, 0x10388A40 },

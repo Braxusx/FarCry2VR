@@ -1822,6 +1822,20 @@ static bool PatchFactoryCall() {
     }
     return true;
 }
+// v234 test 62: the engine's dynamic buffer allocator (Steam 0x10380xxx) checks every freshly mapped D3D buffer pointer
+// with IsBadWritePtr (call at Steam 0x1038110E / GOG 0x1037311E). That probes every page of the mapped GPU memory by
+// reading and writing it back - reads from write-combined GPU memory are slow - about 0.4 ms per VR frame on an RTX 5090
+// (profiler: KERNEL32!IsBadWritePtr in both eyes). A pointer returned by a successful Map is always writable for the
+// mapped size, so only a null pointer is "bad". FastMapCheck=0 keeps the game's check.
+static BOOL WINAPI FastIsBadWritePtr(void* p, UINT_PTR n) { return p == nullptr && n != 0; }
+static void PatchMapCheck() {
+    uint8_t* p = (uint8_t*)A(0x1038110E);
+    if (!p || p[0] != 0xFF || p[1] != 0x15) { LOG("fast map check: unexpected bytes - not patched"); return; }
+    DWORD old; VirtualProtect(p, 6, PAGE_EXECUTE_READWRITE, &old);
+    p[0] = 0xE8; *(int32_t*)(p + 1) = (int32_t)((uintptr_t)&FastIsBadWritePtr - (uintptr_t)(p + 5)); p[5] = 0x90;
+    VirtualProtect(p, 6, old, &old); FlushInstructionCache(GetCurrentProcess(), p, 6);
+    LOG("fast map check: on (the buffer allocator's IsBadWritePtr probe replaced)");
+}
 // v234: indestructible buggy / hang glider (optional). Every health loss of a vehicle goes through
 // CVehiclePhysComponent::ApplyHealthDamage (Steam 0x10067170, thiscall phys, float dmg, ret 4); explosions through the
 // engine's explosion trigger 0x10107BF0 (ret 4) and explode 0x101075F0 (ret 8, also run by explosion events); engine
@@ -4763,6 +4777,7 @@ static void Install() {
     InstallFramePacing();
     g_cfg.gpuHandover = IniF("EndFrameWait", 0) == 0; g_cfg.dxvk = (int)IniF("Dxvk", 0);   // read before the device patches below
     g_dxvkWanted = g_cfg.dxvk != 0;
+    if (IniF("FastMapCheck", 1) != 0) PatchMapCheck();
     if (g_cfg.gpuHandover || g_dxvkWanted) LOG("DXGI 1.1 factory patch: %d", PatchFactoryCall());
     bool ok1 = PatchJmp(A(eng::RenderViewport), eng::RenderViewportPrologue, (void*)&Hook_RenderViewport, (void**)&o_RenderViewport);
     bool ok2 = PatchJmp(A(eng::PresentWrapper), eng::PresentPrologue, (void*)&Hook_Present, (void**)&o_Present);
@@ -4852,7 +4867,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 61: counters on the runtime implementations, profiler names system functions; v234 test 60: Profile=1 work breakdown (shadows, draws, state calls); v234 test 59: flat CPU-busy measurement, dxvk.conf; v234 test 58: Dxvk ini read before the device patch; v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 62: fast map check (FastMapCheck=1); v234 test 61: counters on the runtime implementations, profiler names system functions; v234 test 60: Profile=1 work breakdown (shadows, draws, state calls); v234 test 59: flat CPU-busy measurement, dxvk.conf; v234 test 58: Dxvk ini read before the device patch; v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
