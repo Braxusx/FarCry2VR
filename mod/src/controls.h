@@ -36,10 +36,7 @@ void SetLeftGripClaimed(bool c);
 void PulseUse();
 bool SightsUp();
 bool MacheteSelected();
-bool SecondarySelected();
-int TakeWatchToggle();
-void SetWatchOut(bool on);  // v234: the watch is out (no firing)
-void ReselectWeapon();      // v234: press the current weapon slot once (draws it again)     // v234: 1 once per left grip + X press (show / put away the watch)   // v234: the secondary (hip) slot is out (the mod's guess from your selections)
+bool SecondarySelected();   // v234: the secondary (hip) slot is out (the mod's guess from your selections)
 float RightTriggerValue();
 bool MonocularOut();              // the monocular is out (the game's aim button held with the map up)
 bool FlashlightOn();

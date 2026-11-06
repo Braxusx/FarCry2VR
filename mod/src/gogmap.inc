@@ -29,15 +29,10 @@ static const uint32_t kGogMap[][2] = {
     { 0x10119100, 0x10118570 },   // env lighting blend (v223 rim light)
     { 0x101260C0, 0x101253E0 },
     { 0x101260D0, 0x101253F0 },
-    { 0x101260E0, 0x10125400 },   // inventory IsLocked (v234 watch)
     { 0x10127DA0, 0x10127180 },
-    { 0x10129DF0, 0x10129240 },   // inventory FindGadget (v234 watch)
     { 0x10129E20, 0x10129270 },
     { 0x10129EC0, 0x10129310 },
     { 0x10129F10, 0x10129360 },
-    { 0x10129F40, 0x10129390 },   // inventory PushSelection (v234 watch)
-    { 0x1012B3A0, 0x1012A7F0 },   // inventory PopSelection (v234 watch)
-    { 0x1012E400, 0x1012D850 },   // inventory SelectGadget (v234 watch)
     { 0x1012E9D0, 0x1012DE20 },
     { 0x1012F130, 0x1012E560 },
     { 0x101496C0, 0x10148C40 },

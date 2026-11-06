@@ -163,11 +163,7 @@ static volatile bool g_phoneOut = false; static ULONGLONG g_phoneT = 0;
 bool PhoneOut() { return g_phoneOut; }
 bool ItemControls() { return g_itemMap || g_phoneOut; }
 void ClearPhone() { if (g_phoneOut) { g_phoneOut = false; LOG("controls: phone away (weapon back)"); } }
-static volatile LONG g_recapReq = 0; static volatile LONG g_watchReq = 0;
-int TakeWatchToggle() { return (int)InterlockedExchange(&g_watchReq, 0); }   // v234: left grip + X
-static volatile bool g_watchOut = false; static volatile LONG g_slotAgainReq = 0;
-void SetWatchOut(bool on) { g_watchOut = on; }
-void ReselectWeapon() { InterlockedExchange(&g_slotAgainReq, 1); }
+static volatile LONG g_recapReq = 0;
 int TakeRecapture() { return (int)InterlockedExchange(&g_recapReq, 0); }
 int TakeHolsterToggle() { return (int)InterlockedExchange(&g_holsterReq, 0); }
 int TakeWeaponSelect() { return (int)InterlockedExchange(&g_selectReq, 0); }
@@ -272,12 +268,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         if (g_c.moveDir == 1 && headValid && g_bodyValid) StickToHead(sx, sy, head);
         g.sThumbLX = Axis(sx); g.sThumbLY = Axis(sy); g_moveMag = sqrtf(sx * sx + sy * sy); }
     if (L.stickClick) b |= XINPUT_GAMEPAD_LEFT_THUMB;      // sprint
-    // v234: left grip + X shows / puts away the wristwatch (the game's safehouse watch), instead of "use"
-    { static bool xPrev = false, xCombo = false;
-      if (L.btn1 && !xPrev && L.squeeze > 0.6f && !g_menuMode && !g_menuMap && !g_loadingMap) { xCombo = true; InterlockedExchange(&g_watchReq, 1); LOG("controls: left grip + X - watch"); }
-      if (!L.btn1) xCombo = false;
-      xPrev = L.btn1;
-      if (L.btn1 && !g_menuMode && !xCombo) b |= XINPUT_GAMEPAD_Y; }   // X: interact / use (E) - doors, turrets, weapons on the ground
+    if (L.btn1 && !g_menuMode) b |= XINPUT_GAMEPAD_Y;     // X: interact / use (E) - doors, turrets, weapons on the ground
     { auto& held = g_history.gadgetHeld; auto& delayed = g_history.gadgetDelayed; auto& at = g_history.gadgetAt;   // map / gadget
       if (L.btn2 && !held) { delayed = g_handsAway; if (delayed) { InterlockedExchange(&g_mapLiftReq, 1); at = now + 150; LOG("controls: map button with the weapon away - lifting the holster lock first"); } }
       held = L.btn2;
@@ -359,8 +350,6 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     if (R.stickClick) b |= XINPUT_GAMEPAD_LEFT_SHOULDER;   // right stick click: syrette (heal yourself)
     g.bRightTrigger = poseFire ? (BYTE)lroundf(fminf(1.0f, R.trigger) * 255.0f) : 0;   // pose-guided fire needs tracked input; native vehicle/turret controls do not
     if (!g_c.macheteTrigger && MacheteSelected()) g.bRightTrigger = 0;   // machete: hits come from swinging it; the game's attack animation sways the camera
-    if (g_watchOut) g.bRightTrigger = 0;   // v234: the watch is in the hands - no firing
-    if (InterlockedExchange(&g_slotAgainReq, 0)) PulseBtn(kSlots[g_cycle & 3], now);   // v234: draw the weapon again (puts the watch away)
     // right grip: holster grab (weapon select) in a body zone, iron sight / reverse elsewhere
     // no holster grabs in a vehicle seat, nor in menus / loading screens (v234 test 36: a chest grab in the pause menu left
     // the mod thinking the machete was out - the gun in the hand then got the machete's hand angles, twisted)

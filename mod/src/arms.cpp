@@ -2348,59 +2348,6 @@ static void SnapUpdate(uint8_t* playerEnt, float dt) {
     verify = 3;
 }
 
-// ---------------------------------------------------------------- v234: the watch anywhere (left grip + X)
-// The safehouse bed selects the "watch" gadget (hash 0x500B4A26 = crc32("watch")) like the map: inventory
-// (pawn data + 0x4F0) PushSelection 0x10129F40 (saves the weapon), SelectGadget 0x1012E400 (thiscall inv, &hash),
-// then the "draw gadget" graph signal 0x2A47E3A3 (pawn vt+0x78 -> graph, 0x1029DA10). Putting it away: PopSelection
-// 0x1012B3A0 (weapon back). The watch use-strategy (*(*(gadget+0x24)+8)) only sleeps through the bed whose id it keeps
-// at +0x50/+0x54 and only in time-setting mode (+0x80 == 1): both are cleared first, so it can only show the time.
-static bool s_watchOut = false;
-// inventory state for the log: +0x50 lock, +0x74 selection type (1 weapon, 2 gadget), +0x80 saved selections
-static void InvLog(const char* what, uint8_t* inv) {
-    uint8_t* in = !IsBadReadPtr(inv + 4, 4) ? *(uint8_t**)(inv + 4) : nullptr;
-    if (!in || IsBadReadPtr(in + 0x50, 0x34)) { LOG("watch: %s", what); return; }
-    LOG("watch: %s (inventory lock %d, selection %d, saved %d)", what, in[0x50], *(int*)(in + 0x74), *(int*)(in + 0x80));
-}
-static void WatchTick() {
-    int req = controls::TakeWatchToggle();
-    if (!g_pawn || IsBadReadPtr(g_pawn + 0x10, 4)) return;
-    uint8_t* pd = *(uint8_t**)(g_pawn + 0x10); if (!pd || IsBadReadPtr(pd + 0x4F0, 8)) return;
-    uint8_t* inv = pd + 0x4F0;
-    uint8_t* in = !IsBadReadPtr(inv + 4, 4) ? *(uint8_t**)(inv + 4) : nullptr;
-    auto selType = [&]() { return in && !IsBadReadPtr(in + 0x74, 4) ? *(int*)(in + 0x74) : -1; };
-    auto saved = [&]() { return in && !IsBadReadPtr(in + 0x80, 4) ? *(int*)(in + 0x80) : -1; };
-    typedef void* (__fastcall *Get_t)(void* inv, void* edx);
-    typedef void* (__fastcall *Find_t)(void* inv, void* edx, const uint32_t* h);
-    typedef bool (__fastcall *Sel_t)(void* inv, void* edx, const uint32_t* h);
-    typedef void (__fastcall *Act_t)(void* inv, void* edx);
-    typedef bool (__fastcall *Is_t)(void* inv, void* edx);
-    static const uint32_t kWatch = 0x500B4A26u;
-    void* watch = ((Find_t)A(0x10129DF0))(inv, nullptr, &kWatch);
-    if (s_watchOut && selType() != 2) { s_watchOut = false; controls::SetWatchOut(false); InvLog("put away by the game", inv); }
-    if (!req) return;
-    if (s_watchOut) {   // put it away as the game's watch does (unlock if needed, then the saved selection back)
-        if (((Is_t)A(0x101260E0))(inv, nullptr)) ((Act_t)A(0x101260D0))(inv, nullptr);
-        if (saved() > 0) ((Act_t)A(0x1012B3A0))(inv, nullptr);
-        if (selType() == 2) { controls::ReselectWeapon(); InvLog("put away - weapon drawn again", inv); }   // nothing saved / still the gadget: draw the weapon
-        else InvLog("put away", inv);
-        s_watchOut = false; controls::SetWatchOut(false); xr::Haptic(0, 0.5f, 0.05f); return;
-    }
-    if (!watch) { LOG("watch: no watch in the inventory"); return; }
-    if (selType() == 2) { controls::ReselectWeapon(); InvLog("a gadget is up - weapon drawn again", inv); return; }   // left over from before: clean up
-    if (((Is_t)A(0x101260E0))(inv, nullptr)) { InvLog("not now (weapon put away / locked)", inv); xr::Haptic(0, 0.3f, 0.15f); return; }
-    if (!((Get_t)A(0x10127DA0))(inv, nullptr)) { InvLog("not now (nothing in the hand to put back afterwards)", inv); xr::Haptic(0, 0.3f, 0.15f); return; }
-    uint8_t* g = (uint8_t*)watch;
-    if (!IsBadReadPtr(g + 0x24, 4)) { uint8_t* u = *(uint8_t**)(g + 0x24);
-        if (u && !IsBadReadPtr(u + 8, 4)) { uint8_t* st = *(uint8_t**)(u + 8);
-            if (st && !IsBadWritePtr(st + 0x50, 0x34)) { *(int*)(st + 0x50) = -1; *(int*)(st + 0x54) = -1; *(int*)(st + 0x80) = 0; } } }
-    int s0 = saved();
-    ((Act_t)A(0x10129F40))(inv, nullptr);
-    bool pushed = saved() > s0;
-    if (!((Sel_t)A(0x1012E400))(inv, nullptr, &kWatch)) { if (pushed) ((Act_t)A(0x1012B3A0))(inv, nullptr); InvLog("the game refused", inv); xr::Haptic(0, 0.3f, 0.15f); return; }
-    { typedef void* (__fastcall *Graph_t)(void* pawn, void* edx); typedef void (__fastcall *Post_t)(void* graph, void* edx, uint32_t sig);
-      void** vt = *(void***)g_pawn; void* graph = ((Graph_t)vt[0x78 / 4])(g_pawn, nullptr); if (graph) ((Post_t)A(0x1029DA10))(graph, nullptr, 0x2A47E3A3u); }
-    s_watchOut = true; controls::SetWatchOut(true); xr::Haptic(0, 0.5f, 0.05f); InvLog(pushed ? "out" : "out (weapon not saved)", inv);
-}
 // ---------------------------------------------------------------- safehouse watch (sleep): the right stick sets the time
 // CGadgetUseWatchStrategy update (0x1072DFD0, thiscall this, float dt): in its time-setting mode (+0x80 == 1) the
 // time hand turns by the input axis at +0x68 (written by the input listener from A / D); the right stick writes it.
@@ -2767,7 +2714,6 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
         HeldWeaponGfx(nullptr);   // game thread, each frame
         CallerReport();
         AttachWatch();
-        WatchTick();
         MonoWatch(); FlashTick();
     }
     typedef void* (__fastcall *CurWeap_t)(void* inv);
