@@ -6,6 +6,12 @@ The game renders each eye itself through its own engine, with the headset's per-
 
 **Version 1.0.3.1**, mod build v233. Supports the **Steam** and **GOG** versions with the same DLL.
 
+Optional headset-driven body rotation is available for the supported Steam
+binary. In `[VR]` in `fc2vr.ini`, set `HeadsetBodyYaw=1` and
+`GrassHeadYawFix=1` together to turn the on-foot body with your physical heading
+while keeping grass facing stable. Both default off. This adapter is not yet
+supported on GOG; see [behavior, limits and tests](mod/tests/BODY_YAW.md).
+
 ## Features
 
 - **Native stereo rendering:**

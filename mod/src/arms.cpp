@@ -12,16 +12,49 @@
 #include "gameaddr.h"
 #include "xr.h"
 #include "controls.h"
+#include "common/shoulder_frame.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
+#include <wincrypt.h>
 
 namespace arms {
 
 static uintptr_t g_base = 0;
 static inline uintptr_t A(uintptr_t va) { uint32_t v = gameaddr::Xlate((uint32_t)va); return v ? g_base + (v - 0x10000000) : 0; }
 static Config g_c;
+static SRWLOCK g_bodyYawLock = SRWLOCK_INIT;
+static fc2vr::body_yaw::State g_bodyYaw;
+static bool g_bodyYawSupported = false;
+static void BodyYawTick(uint8_t* pawn, uint8_t* pd);
+
+// Steam Dunia.dll 0,1,0,1 SHA256 6353936a...862765 only. The yaw adapter
+// below reuses the already-supported character orientation interface and
+// pawn headings (+180/+18C/+310); unknown images never gain write authority.
+static bool BodyYawImageSupported() {
+    wchar_t path[MAX_PATH];
+    HMODULE module = GetModuleHandleW(L"Dunia.dll");
+    const DWORD length=module?GetModuleFileNameW(module,path,MAX_PATH):0;
+    if (!length || length>=MAX_PATH) return false;
+    HANDLE file = CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    HCRYPTPROV provider = 0; HCRYPTHASH hash = 0;
+    bool ok = CryptAcquireContextW(&provider,nullptr,nullptr,PROV_RSA_AES,CRYPT_VERIFYCONTEXT)
+        && CryptCreateHash(provider,CALG_SHA_256,0,0,&hash);
+    BYTE buffer[16384]; DWORD count = 0;
+    while (ok) {
+        if (!ReadFile(file,buffer,sizeof buffer,&count,nullptr)) { ok=false; break; }
+        if (!count) break;
+        ok = CryptHashData(hash,buffer,count,0) != FALSE;
+    }
+    BYTE digest[32]{}; DWORD size=sizeof digest;
+    if (ok) ok=CryptGetHashParam(hash,HP_HASHVAL,digest,&size,0) && size==sizeof digest;
+    constexpr BYTE expected[]={0x63,0x53,0x93,0x6a,0x54,0xaa,0x84,0x13,0x50,0xbb,0x30,0xff,0x00,0x57,0x27,0x85,0x9c,0xde,0xf1,0xaa,0x10,0xc2,0x09,0x20,0x9b,0x22,0x0b,0x39,0x9e,0x86,0x27,0x65};
+    ok=ok && memcmp(digest,expected,sizeof digest)==0;
+    if(hash)CryptDestroyHash(hash);if(provider)CryptReleaseContext(provider,0);CloseHandle(file);
+    return ok;
+}
 
 // ---------------------------------------------------------------- math (row-vector convention, as the engine)
 struct M4 { float m[4][4]; };
@@ -157,6 +190,7 @@ static void __fastcall Hook_CamUpdate(void* self, void* edx, uint32_t a1, uint32
     if (!pawn) return;
     uint8_t* pd = *(uint8_t**)((uint8_t*)pawn + 0x10);
     if (!pd) return;
+    BodyYawTick((uint8_t*)pawn,pd);
     uint8_t* helper = pd + 4;
     uint8_t* gfx = *(uint8_t**)(helper + 8);
     if (!gfx || !*(void**)(helper + 4)) return;
@@ -1113,9 +1147,8 @@ static void Apply(uint8_t* skel) {
     if (g_c.ik && f.headValid) {
         float hp[3], hf[3], hr[3], up[3] = { f.game.U.x, f.game.U.y, f.game.U.z };
         toWorld(f.headO, hp, true); toWorld(f.headF, hf, false);
-        float d = Dot3(hf, up); for (int k = 0; k < 3; ++k) hf[k] -= up[k] * d; Normalize(hf);
-        hr[0] = hf[1] * up[2] - hf[2] * up[1]; hr[1] = hf[2] * up[0] - hf[0] * up[2]; hr[2] = hf[0] * up[1] - hf[1] * up[0]; Normalize(hr);
-        if (Dot3(hr, f.game.R) < 0) for (int k = 0; k < 3; ++k) hr[k] = -hr[k];
+        const float bodyRight[3]={f.game.R.x,f.game.R.y,f.game.R.z};
+        if(!fc2vr::shoulder::Basis(hf,up,hr)){memcpy(hf,&f.game.F.x,12);memcpy(hr,bodyRight,12);}
         for (int side = 0; side < 2; ++side) {
             int clav = g_slot[side ? 15 : 19], upa = g_slot[side ? 14 : 18], fore = g_slot[side ? 13 : 17], hand = g_slot[side ? 12 : 20];
             if (clav < 0 || upa < 0 || fore < 0 || hand < 0 || clav >= n || upa >= n || fore >= n || hand >= n) continue;
@@ -1908,6 +1941,81 @@ static bool CharGetPos(uint8_t* c, float* p) { typedef float* (__fastcall *F)(vo
 // orientation (quaternion x, y, z, w): +0x8C GetOrientation(out*) ret 4, +0x88 SetOrientation(const q*) ret 4
 static void CharGetRot(uint8_t* c, float* q) { typedef float* (__fastcall *F)(void*, void*, float*); alignas(16) float t[4] = { 0, 0, 0, 1 }; ((F)(*(void***)c)[0x8C / 4])(c, nullptr, t); memcpy(q, t, 16); }
 static void CharSetRot(uint8_t* c, const float* q) { typedef void (__fastcall *F)(void*, void*, const float*); alignas(16) float t[4] = { q[0], q[1], q[2], q[3] }; ((F)(*(void***)c)[0x88 / 4])(c, nullptr, t); }
+
+void ResetBodyYaw() {
+    AcquireSRWLockExclusive(&g_bodyYawLock); g_bodyYaw.Reset(); ReleaseSRWLockExclusive(&g_bodyYawLock);
+}
+uintptr_t BodyYawOwner() {
+    AcquireSRWLockShared(&g_bodyYawLock); auto owner=g_bodyYaw.owner; ReleaseSRWLockShared(&g_bodyYawLock); return owner;
+}
+bool BodyYawBasis(float cameraYaw,bool onFoot,float& corrected,float& transferred,uint64_t& reference) {
+    if(!g_c.headsetBodyYaw || !g_bodyYawSupported) return false;
+    AcquireSRWLockExclusive(&g_bodyYawLock);
+    float position[3]{}, heading=0;
+    bool native=onFoot && g_bodyYaw.owner==reinterpret_cast<uintptr_t>(g_pawn) && PlayerState(position,&heading);
+    // During save loading the pawn can exist before its camera is placed.
+    // Steam's settled camera forward is native heading +90 degrees; do not
+    // learn a permanent bias from the loading camera at a different heading.
+    if(native && !g_bodyYaw.calibrated && fabsf(fc2vr::body_yaw::Wrap(cameraYaw-heading-fc2vr::body_yaw::Pi/2))>0.05f) native=false;
+    const bool ok=g_bodyYaw.Render(cameraYaw,heading,native,corrected);
+    transferred=g_bodyYaw.transferred;reference=g_bodyYaw.reference;
+    ReleaseSRWLockExclusive(&g_bodyYawLock);
+    return ok;
+}
+static void BodyYawTick(uint8_t* pawn,uint8_t* pd) {
+    if(!g_c.headsetBodyYaw || !g_bodyYawSupported) return;
+    Handle* player=*(Handle**)(pawn+8); uint8_t* entity=player?player->ent:nullptr;
+    if(!entity) return;
+    g_pawn=pawn;g_playerEntR=entity;
+    Frame frame;Lock();frame=g_frame;Unlock();
+    auto sample=frame.bodyYaw;
+    bool headCurrent=frame.headAuthority && xr::HeadCurrent(frame.source);
+#if defined(FC2VR_BODY_YAW_TESTING)
+    headCurrent=headCurrent || frame.bodyYawFixture;
+#endif
+    sample.tracked=sample.tracked && headCurrent;
+    sample.onFoot=sample.onFoot && controls::NormalControls() && controls::VehicleMode()==0 && !controls::MountedWeapon();
+    AcquireSRWLockExclusive(&g_bodyYawLock);
+    g_bodyYaw.Owner(reinterpret_cast<uintptr_t>(pawn));
+    const float delta=g_bodyYaw.Plan(sample,GetTickCount64());
+    if(delta!=0){
+        uint8_t* character=PlayerCharComp(entity);
+        constexpr int offsets[]={0x180,0x18C,0x310};float old[3]{},q[4]{};
+        bool valid=character && !IsBadWritePtr(pd+0x180,0x194);
+        for(int i=0;valid && i<3;++i){old[i]=*(float*)(pd+offsets[i]);valid=std::isfinite(old[i]) && fabsf(old[i])<7;}
+        if(valid){CharGetRot(character,q);float n=0;for(float v:q)n+=v*v;valid=std::isfinite(n) && fabsf(n-1)<0.02f && fabsf(q[0])+fabsf(q[1])<0.1f;}
+        if(valid){
+            const float s=sinf(delta*0.5f),c=cosf(delta*0.5f);
+            const float next[]={c*q[0]-s*q[1],c*q[1]+s*q[0],c*q[2]+s*q[3],c*q[3]-s*q[2]};
+            CharSetRot(character,next);
+            for(int i=0;i<3;++i)*(float*)(pd+offsets[i])=fc2vr::body_yaw::Wrap(old[i]+delta);
+            float readback[4]{};CharGetRot(character,readback);
+            const float error=fc2vr::body_yaw::Wrap(2*atan2f(readback[2],readback[3])-2*atan2f(next[2],next[3]));
+            valid=std::isfinite(error) && fabsf(error)<0.01f;
+            if(valid)g_bodyYaw.Commit(fc2vr::body_yaw::Wrap(*(float*)(pd+0x310)-old[2]));
+            else{CharSetRot(character,q);for(int i=0;i<3;++i)*(float*)(pd+offsets[i])=old[i];}
+        }
+        if(!valid)g_bodyYaw.refused=true;
+        static uint64_t lastLog=0;const uint64_t now=GetTickCount64();
+        if(now-lastLog>500 || !valid){lastLog=now;LOG("body-yaw apply seq=%llu owner=%p head=%.6f native=%.6f transferred=%.6f delta=%.6f accepted=%d thread=%lu",(unsigned long long)sample.sequence,pawn,sample.headYaw,valid?*(float*)(pd+0x310):old[2],g_bodyYaw.transferred,delta,valid,GetCurrentThreadId());}
+    }
+#if defined(FC2VR_BODY_YAW_TESTING)
+    if(frame.bodyYawFixture){
+        // Read on stationary ticks too: immediate setter readback alone cannot
+        // detect a later game update putting the character orientation back.
+        float q[4]{};uint8_t* c=PlayerCharComp(entity);if(c)CharGetRot(c,q);
+        LOG("body-yaw-native sample=%llu native=%.6f character=%.6f have=%d transferred=%.6f",(unsigned long long)sample.sequence,*(float*)(pd+0x310),2*atan2f(q[2],q[3]),c!=nullptr,g_bodyYaw.transferred);
+    }
+#endif
+    if(g_c.bodyYawDiagnostics){
+        static uint64_t lastStatus=0;const auto now=GetTickCount64();
+        if(now-lastStatus>=1000){
+            lastStatus=now;float q[4]{};auto* c=PlayerCharComp(entity);if(c)CharGetRot(c,q);
+            LOG("body-yaw status seq=%llu head=%.6f native=%.6f character=%.6f have=%d transferred=%.6f tracked=%d foot=%d calibrated=%d refused=%d reference=%llu",(unsigned long long)sample.sequence,sample.headYaw,*(float*)(pd+0x310),2*atan2f(q[2],q[3]),c!=nullptr,g_bodyYaw.transferred,sample.tracked,sample.onFoot,g_bodyYaw.calibrated,g_bodyYaw.refused,(unsigned long long)g_bodyYaw.reference);
+        }
+    }
+    ReleaseSRWLockExclusive(&g_bodyYawLock);
+}
 static void CharSetPos(uint8_t* c, const float* p) { typedef void (__fastcall *F)(void*, void*, const float*); alignas(16) float t[4] = { p[0], p[1], p[2], 0 }; ((F)(*(void***)c)[0x80 / 4])(c, nullptr, t); }
 // is there something climbable right at the hand? (short rays: pointing direction, palm side, down)
 static bool ClimbProbe(const float* hp, const float* hr, const float* hb, int hnd, uint8_t* playerEnt) {
@@ -3290,9 +3398,10 @@ static void __fastcall Hook_EnvLight(void* env, void* edx, float t, uint8_t* out
 // ---------------------------------------------------------------- install
 void Install(uintptr_t base, const Config& c, PatchFn patch) {
     g_base = base; g_c = c;
+    if(c.headsetBodyYaw){g_bodyYawSupported=BodyYawImageSupported();LOG("body-yaw configured enabled=1 exactSteamImage=%d; default=off",g_bodyYawSupported);}
     if (!g_csInit) { InitializeCriticalSection(&g_cs); g_csInit = true; }
     for (int i = 0; i < 21; ++i) g_slot[i] = -1;
-    if (!c.weaponInHand && !c.aimFromController && !c.dump) { LOG("arms: off"); return; }
+    if (!c.weaponInHand && !c.aimFromController && !c.dump && !c.headsetBodyYaw) { LOG("arms: off"); return; }
     static const uint8_t pro[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF0 };   // push ebp; mov ebp,esp; and esp,-16
     bool a = patch(A(0x10693C00), pro, 6, (void*)&Hook_CamUpdate, (void**)&o_CamUpdate);
     bool b = patch(A(0x103322C0), pro, 6, (void*)&Hook_Hier, (void**)&o_Hier);
