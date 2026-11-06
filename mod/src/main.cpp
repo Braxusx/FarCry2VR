@@ -106,7 +106,7 @@ struct Config {
     int   testCheats = 0; int   reticleDot = 1; float reticleDistance = 10.0f, reticleSize = 0.06f;   // aiming dot
     int   ammoPanel = 1; float ammoPanelWidth = 0.055f, ammoPanelRight = 0.05f, ammoPanelRight2 = 0.06f, ammoPanelUp = 0.04f, ammoPanelFwd = 0.06f, ammoPanelYaw = 20.0f, ammoPanelTilt = 15.0f;
     int   grenPanel = 1; float grenPanelWidth = 0.045f, grenPanelLeft = 0.06f, grenPanelUp = 0.02f, grenPanelFwd = 0.0f, grenPanelSecs = 3.0f, grenPanelTilt = 30.0f;
-    int   mapClock = 1; float mapClockWidth = 0.07f, mapClockUp = 0.0f;   // v234: clock under the map   // v234: grenade counter by the left hand   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
+    int   mapClock = 1, mapClock24 = 0; float mapClockWidth = 0.07f, mapClockUp = 0.0f;   // v234: clock under the map   // v234: grenade counter by the left hand   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
     int   shadowMapSize = 2720;    // sun shadow cascade resolution (game: 2048 at Ultra High), max 2730, 0 = game's           // sun shadow cascades cover the whole VR view in cull mode 1   // hidden extra render area per side (fraction of the half-FOV) for screen-space reflections
     int   hangWatch = 1;            // freeze/crash reports (fc2vr_hang_N.txt/.dmp)
     float pauseMenuScale = 0.75f;  // in-game pause menu panel size factor (on top of HudScale)
@@ -2927,15 +2927,16 @@ static void DrawGrenades(int count) {
     }
     xr::SetGrenadeImage(out);
 }
-// v234: the clock under the map: HH:MM (24 h) in one wide framed light orange box
+// v234: the clock under the map: h:mm AM/PM (or HH:MM with MapClock24h=1) in one wide framed light orange box
 static void DrawClock(int hh, int mm) {
-    static HDC dc = nullptr; static HBITMAP bmp = nullptr; static uint32_t* bits = nullptr; static HFONT fBig = nullptr;
+    static HDC dc = nullptr; static HBITMAP bmp = nullptr; static uint32_t* bits = nullptr; static HFONT fBig = nullptr, fSmall = nullptr;
     const int W = xr::ClockW, H = xr::ClockH;
     if (!dc) {
         dc = CreateCompatibleDC(nullptr);
         BITMAPINFO bi{}; bi.bmiHeader.biSize = sizeof bi.bmiHeader; bi.bmiHeader.biWidth = W; bi.bmiHeader.biHeight = -H; bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
         bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, (void**)&bits, nullptr, 0); SelectObject(dc, bmp);
         fBig = CreateFontA(84, 0, 0, 0, FW_BOLD, 0, 0, 0, ANSI_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, "Arial");
+        fSmall = CreateFontA(46, 0, 0, 0, FW_BOLD, 0, 0, 0, ANSI_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, "Arial");
         SetBkMode(dc, TRANSPARENT);
     }
     if (!bits) return;
@@ -2943,8 +2944,17 @@ static void DrawClock(int hh, int mm) {
     const RECT box{ 6, 6, W - 6, H - 6 };
     HPEN pen = CreatePen(PS_SOLID, 6, RGB(255, 255, 255)); HGDIOBJ op = SelectObject(dc, pen); HGDIOBJ ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
     RoundRect(dc, box.left, box.top, box.right, box.bottom, 30, 30); SelectObject(dc, op); SelectObject(dc, ob); DeleteObject(pen);
-    char t[16]; snprintf(t, sizeof t, "%02d:%02d", hh, mm);
-    SetTextColor(dc, RGB(255, 255, 255)); SelectObject(dc, fBig); RECT tr = box; DrawTextA(dc, t, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SetTextColor(dc, RGB(255, 255, 255));
+    if (g_cfg.mapClock24) { char t[16]; snprintf(t, sizeof t, "%02d:%02d", hh, mm); SelectObject(dc, fBig); RECT tr = box; DrawTextA(dc, t, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE); }
+    else {   // 12 hour: "5:42" large with a smaller AM / PM, centred together on a common baseline
+        char t[16], ap[4]; int h12 = hh % 12 == 0 ? 12 : hh % 12; snprintf(t, sizeof t, "%d:%02d", h12, mm); snprintf(ap, sizeof ap, "%s", hh < 12 ? "AM" : "PM");
+        SIZE s1, s2; SelectObject(dc, fBig); GetTextExtentPoint32A(dc, t, (int)strlen(t), &s1); SelectObject(dc, fSmall); GetTextExtentPoint32A(dc, ap, 2, &s2);
+        int gap = 10, x = (W - (s1.cx + gap + s2.cx)) / 2, base = H / 2 + 28;
+        SetTextAlign(dc, TA_BASELINE | TA_LEFT);
+        SelectObject(dc, fBig); TextOutA(dc, x, base, t, (int)strlen(t));
+        SelectObject(dc, fSmall); TextOutA(dc, x + s1.cx + gap, base, ap, 2);
+        SetTextAlign(dc, TA_TOP | TA_LEFT);
+    }
     GdiFlush();
     static uint32_t out[xr::ClockW * xr::ClockH];
     for (int i = 0; i < W * H; ++i) {
@@ -4497,7 +4507,7 @@ static void Install() {
         xr::SetScopeCrosshair((int)IniF("ScopeCrosshair", 2));
         g_cfg.scopeFromWeapon = (int)IniF("ScopeFromWeapon", 1); g_cfg.scopeSmoothing = IniF("ScopeSmoothing", 0.06f);
         g_cfg.testCheats = (int)IniF("TestCheats", 0); { char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); arms::SetIniPath(ip); } g_cfg.reticleDot = (int)IniF("ReticleDot", 1); g_cfg.reticleDistance = IniF("ReticleDistance", 10.0f); g_cfg.reticleSize = IniF("ReticleSize", 0.06f);
-        g_cfg.ammoPanel = (int)IniF("AmmoPanel", 1); g_cfg.ammoPanelWidth = IniF("AmmoPanelWidth", 0.055f); g_cfg.ammoPanelRight = IniF("AmmoPanelRight", 0.05f); g_cfg.ammoPanelRight2 = IniF("AmmoPanelRightSecondary", 0.06f); g_cfg.ammoPanelUp = IniF("AmmoPanelUp", 0.04f); g_cfg.ammoPanelFwd = IniF("AmmoPanelForward", 0.06f); g_cfg.grenPanel = (int)IniF("GrenadePanel", 1); g_cfg.grenPanelWidth = IniF("GrenadePanelWidth", 0.045f); g_cfg.grenPanelLeft = IniF("GrenadePanelLeft", 0.06f); g_cfg.grenPanelUp = IniF("GrenadePanelUp", 0.02f); g_cfg.grenPanelFwd = IniF("GrenadePanelForward", 0.0f); g_cfg.grenPanelSecs = IniF("GrenadePanelSeconds", 3.0f); g_cfg.grenPanelTilt = IniF("GrenadePanelTilt", 30.0f); g_cfg.mapClock = (int)IniF("MapClock", 1); g_cfg.mapClockWidth = IniF("MapClockWidth", 0.07f); g_cfg.mapClockUp = IniF("MapClockUp", 0.0f);
+        g_cfg.ammoPanel = (int)IniF("AmmoPanel", 1); g_cfg.ammoPanelWidth = IniF("AmmoPanelWidth", 0.055f); g_cfg.ammoPanelRight = IniF("AmmoPanelRight", 0.05f); g_cfg.ammoPanelRight2 = IniF("AmmoPanelRightSecondary", 0.06f); g_cfg.ammoPanelUp = IniF("AmmoPanelUp", 0.04f); g_cfg.ammoPanelFwd = IniF("AmmoPanelForward", 0.06f); g_cfg.grenPanel = (int)IniF("GrenadePanel", 1); g_cfg.grenPanelWidth = IniF("GrenadePanelWidth", 0.045f); g_cfg.grenPanelLeft = IniF("GrenadePanelLeft", 0.06f); g_cfg.grenPanelUp = IniF("GrenadePanelUp", 0.02f); g_cfg.grenPanelFwd = IniF("GrenadePanelForward", 0.0f); g_cfg.grenPanelSecs = IniF("GrenadePanelSeconds", 3.0f); g_cfg.grenPanelTilt = IniF("GrenadePanelTilt", 30.0f); g_cfg.mapClock = (int)IniF("MapClock", 1); g_cfg.mapClockWidth = IniF("MapClockWidth", 0.07f); g_cfg.mapClockUp = IniF("MapClockUp", 0.0f); g_cfg.mapClock24 = (int)IniF("MapClock24h", 0);
         g_cfg.ammoPanelYaw = IniF("AmmoPanelYaw", 20.0f); g_cfg.ammoPanelTilt = IniF("AmmoPanelTilt", 15.0f);
         ac.handOfs[0] = IniF("HandOffsetX", 0); ac.handOfs[1] = IniF("HandOffsetY", 0); ac.handOfs[2] = IniF("HandOffsetZ", 0);
         ac.leftHandRoll = IniF("LeftHandRoll", 45.0f); ac.macheteAngle = IniF("MacheteAngle", 60.0f);
@@ -4553,7 +4563,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 48: map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 49: 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
