@@ -88,6 +88,8 @@ static const Setting kSettings[] = {
     { 0, "Upscaling & anti-aliasing", L"DlssPreset", "DLSS preset", "K and J are the tested models. M suits Performance and L suits Ultra Performance; \"NVIDIA recommended\" picks K, M or L by mode.", SCombo, 0, 0, nullptr, 0, kPreset, 5, "11" },
     { 0, "Performance", L"ShareShadows", "Shared shadow maps", "The sun's shadows are drawn once and used by both eyes. A big saving in busy areas; looks the same.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
     { 0, "Performance", L"Afw", "AFW (alternate frame warping)", "Renders one eye per frame and rebuilds the other: much lighter, with some artefacts in motion. Works with DLAA only (not the upscaling modes).", SCheck, 0, 0, nullptr, 0, nullptr, 0, "0" },
+    { 0, "Performance", L"CpuPlacement", "Best CPU cores", "Keeps the game on the CPU's fastest cores for games: the performance cores on Intel CPUs with E-cores, the 3D V-Cache cores on AMD X3D CPUs. Other programs keep the rest.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
+    { 0, "Performance", L"CpuPriority", "Higher game priority", "Runs the game above normal priority, so background programs can't hold it up.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "0" },
     { 0, "Performance", L"CullMode", "Culling", "How the game decides what's in view for both eyes.", SCombo, 0, 0, nullptr, 0, kCull, 4, "1" },
     { 0, "Shadows", L"ShadowRadialScale", "Sharp shadow reach", "How far around you sun shadows stay sharp (game: 20 m). Lower it for frame rate.", SSlider, 1.0f, 10.0f, "%.0f m", 20, nullptr, 0, "7.0" },
     { 0, "Shadows", L"ShadowMapSize", "Shadow resolution", nullptr, SCombo, 0, 0, nullptr, 0, kShadowRes, 2, "2720" },

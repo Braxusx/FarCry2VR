@@ -4978,13 +4978,49 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 70: machete taken from the held weapon, not the slot guess; v234 test 69: at most one frame ahead of the GPU (FrameAheadLimit=1); v234 test 68: DLSS hand-over guides made on the D3D10 device; v234 test 67: DlssGuideHandover A/B; v234 test 66: DLSS guides handed over with keyed mutexes (no CPU wait with DLSS); v234 test 65: merged main (PR #8 headset body yaw, grass fix, shoulder fix); v234 test 64: GPU handover with DLSS off even when the DLSS module is loaded; v234 test 63: keyed mutex on every shared texture (right-eye twitch fix); v234 test 62: fast map check (FastMapCheck=1); v234 test 61: counters on the runtime implementations, profiler names system functions; v234 test 60: Profile=1 work breakdown (shadows, draws, state calls); v234 test 59: flat CPU-busy measurement, dxvk.conf; v234 test 58: Dxvk ini read before the device patch; v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 71: CPU placement (CpuPlacement, CpuPriority); v234 test 70: machete taken from the held weapon, not the slot guess; v234 test 69: at most one frame ahead of the GPU (FrameAheadLimit=1); v234 test 68: DLSS hand-over guides made on the D3D10 device; v234 test 67: DlssGuideHandover A/B; v234 test 66: DLSS guides handed over with keyed mutexes (no CPU wait with DLSS); v234 test 65: merged main (PR #8 headset body yaw, grass fix, shoulder fix); v234 test 64: GPU handover with DLSS off even when the DLSS module is loaded; v234 test 63: keyed mutex on every shared texture (right-eye twitch fix); v234 test 62: fast map check (FastMapCheck=1); v234 test 61: counters on the runtime implementations, profiler names system functions; v234 test 60: Profile=1 work breakdown (shadows, draws, state calls); v234 test 59: flat CPU-busy measurement, dxvk.conf; v234 test 58: Dxvk ini read before the device patch; v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
             char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir);
             int lim = (int)GetPrivateProfileIntA("VR", "CoreLimit", 16, ip);
             DWORD_PTR pm = 0, sm = 0;
+            // v234 test 71: CpuPlacement=1 - keep the game on the best cores before the limit picks the first ones:
+            // Intel hybrid CPUs -> the performance cores (highest efficiency class), AMD X3D with two CCDs -> the cores
+            // that share the largest L3 (the 3D V-Cache). Background work keeps the other cores.
+            if (GetPrivateProfileIntA("VR", "CpuPlacement", 1, ip) && GetProcessAffinityMask(GetCurrentProcess(), &pm, &sm)) {
+                DWORD len = 0; GetLogicalProcessorInformationEx(RelationAll, nullptr, &len);
+                std::vector<uint8_t> buf(len);
+                if (len && GetLogicalProcessorInformationEx(RelationAll, (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buf.data(), &len)) {
+                    DWORD_PTR best = 0; int bestClass = -1, classes = 0; bool seen[256] = {};
+                    DWORD l3Size[16] = {}; DWORD_PTR l3Mask[16] = {}; int nl3 = 0;
+                    for (DWORD o = 0; o < len; ) {
+                        auto* e = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)(buf.data() + o);
+                        if (e->Relationship == RelationProcessorCore && e->Processor.GroupCount && e->Processor.GroupMask[0].Group == 0) {
+                            int c = e->Processor.EfficiencyClass; if (!seen[c]) { seen[c] = true; ++classes; }
+                            if (c > bestClass) { bestClass = c; best = 0; }
+                            if (c == bestClass) best |= (DWORD_PTR)e->Processor.GroupMask[0].Mask;
+                        } else if (e->Relationship == RelationCache && e->Cache.Level == 3 && e->Cache.GroupMask.Group == 0 && nl3 < 16) {
+                            l3Size[nl3] = e->Cache.CacheSize; l3Mask[nl3] = (DWORD_PTR)e->Cache.GroupMask.Mask; ++nl3;
+                        }
+                        o += e->Size; if (!e->Size) break;
+                    }
+                    DWORD_PTR want = 0; const char* why = nullptr;
+                    if (classes > 1 && (best & pm)) { want = best & pm; why = "performance cores"; }
+                    else if (nl3 > 1) {
+                        int b = 0; for (int i = 1; i < nl3; ++i) if (l3Size[i] > l3Size[b]) b = i;
+                        bool differ = false; for (int i = 0; i < nl3; ++i) if (l3Size[i] != l3Size[b]) differ = true;
+                        if (differ && (l3Mask[b] & pm)) { want = l3Mask[b] & pm; char t[64]; snprintf(t, sizeof t, "the cores with the %lu MB L3 cache", (unsigned long)(l3Size[b] >> 20)); static char tb[64]; memcpy(tb, t, sizeof tb); why = tb; }
+                    }
+                    if (want && want != pm) {
+                        int n = 0; for (int b = 0; b < (int)(sizeof(DWORD_PTR) * 8); ++b) if (want & ((DWORD_PTR)1 << b)) ++n;
+                        LOG("cpu placement: %s - %d logical processors, mask %08lx (%s)", why, n, (unsigned long)want, SetProcessAffinityMask(GetCurrentProcess(), want) ? "set" : "failed");
+                    } else if (want) LOG("cpu placement: already on %s (mask %08lx)", why, (unsigned long)want);
+                    else LOG("cpu placement: all cores are alike (%d efficiency class%s, %d L3 cache%s) - no change", classes, classes == 1 ? "" : "es", nl3, nl3 == 1 ? "" : "s");
+                }
+            }
+            if (GetPrivateProfileIntA("VR", "CpuPriority", 0, ip))   // v234 test 71: above normal - background programs can't delay the game
+                LOG("cpu priority: above normal (%s)", SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS) ? "set" : "failed");
             if (lim > 0 && GetProcessAffinityMask(GetCurrentProcess(), &pm, &sm)) {
                 DWORD_PTR m = 0; int n = 0, all = 0;
                 for (int b = 0; b < (int)(sizeof(DWORD_PTR) * 8); ++b) if (pm & ((DWORD_PTR)1 << b)) { ++all; if (n < lim) { m |= (DWORD_PTR)1 << b; ++n; } }
