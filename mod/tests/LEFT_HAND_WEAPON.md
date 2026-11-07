@@ -1,4 +1,4 @@
-# Left weapon-hand prototype
+# Left-handed weapon controls
 
 Set `LeftHandedWeapon=1` in `[VR]` in `fc2vr.ini` for a left-handed startup.
 Default 0 starts right-handed. Press **F1** while the game has keyboard focus
@@ -47,7 +47,9 @@ attachment adapter is gated to the exact Steam image listed in BODY_YAW.md.
 The G3KA4 (`4d786da0`) has a 15 mm rightward support-palm contact adjustment
 while gripping with the right hand in left-weapon mode. This follows the carried
 grip frame and changes wrist position only; the grab hotspot, two-hand aim and
-support wrist orientation stay unchanged. The amount awaits physical VR confirmation.
+support wrist orientation stay unchanged. The corrected contact position has
+been confirmed in a physical VR test.
+
 Shoulder and hip holster zones follow the current weapon-hand side, including
 live F1 switches. The weapon controller reaches over its own shoulder for
 primary/special weapons or down at its own hip (pointing down) for the secondary.
@@ -214,11 +216,7 @@ shooter-filter lookup **without spawning projectiles**. They do not establish
 actual rocket flight, collisions or reload-animation acceptance. A successful
 mirror comparison also does not prove native calibration or controller comfort.
 
-Body yaw stopping with map/radio out is a separately reported eligibility issue;
-this runtime comparison does not change the body-yaw feature's mode policy.
-
 Pending checks: IED/mortar handedness, DLC weapons, and broader weapon firing/reload coverage.
 
 Do not infer acceptance of vehicles, map/phone/monocular, throwing, climbing or
-holsters from the on-foot weapon test alone. No changes from this branch belong in
-the separate upstream body-yaw PR.
+holsters from the on-foot weapon test alone.
