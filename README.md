@@ -24,7 +24,8 @@ supported on GOG; see [behavior, limits and tests](mod/tests/BODY_YAW.md).
 - **Head-based movement (optional):** the left stick walks you where you look instead of where your body faces.
 - **Motion controls:** the Quest controllers drive the game's own gamepad input, so every menu, vehicle and button prompt works.
   - **Weapons in your hands:** each weapon has its own grip pose, two-handed holds, and aiming down sights and scopes by raising the gun to your eye.
-  - **Body holsters:** rifle over the right shoulder, pistol at the right hip, machete in front of the chest.
+  - **Optional left-handed play:** select the weapon hand in `fc2vr.ini`, or press **F1** during gameplay (supported Steam build).
+  - **Body holsters:** rifle over the weapon-side shoulder, pistol at the weapon-side hip, machete in front of the chest.
   - **Physical machete swings.**
   - **Grenades and molotovs:** thrown with an arc preview.
   - **Optional VR climbing and NPC grabbing.**
@@ -95,6 +96,8 @@ The NVIDIA DLSS runtime (`nvngx_dlss.dll`) is redistributed only inside the rele
 
 ## Controls (Quest controllers, on foot)
 
+The table below describes the default right-handed layout. See left-handed play below for weapon-hand changes.
+
 | Control | Action |
 |---|---|
 | Left stick | Move. Click: sprint. Hold in for 1 s: recenter. |
@@ -125,12 +128,27 @@ The NVIDIA DLSS runtime (`nvngx_dlss.dll`) is redistributed only inside the rele
 
 | Key | Action |
 |---|---|
+| F1 | Toggle the weapon hand between right and left for this session. |
 | F8 | Recenter |
 | End | Hand-angle menu |
 | Home | Smooth turning speed |
 | F9 | Stereo on/off |
 
 All settings live in `fc2vr.ini`, which has a comment on each key. The launcher edits them for you.
+
+### Left-handed play
+
+In `fc2vr.ini`, under `[VR]`, choose the weapon hand used at startup:
+
+```ini
+LeftHandedWeapon=1
+```
+
+`1` selects the left hand; `0` selects the right hand (default). In left-handed mode, the left controller holds, aims and fires the weapon, and the right controller provides support grip and reload. Shoulder and hip holsters move to the weapon side; the chest holster stays centred. Movement stays on the left stick, turning stays on the right, and face buttons keep their physical mappings.
+
+Press **F1** with the game window focused to switch hands during gameplay. This does not save the choice to the INI; restarting uses `LeftHandedWeapon` again. Release triggers and grips after switching before using them again. Switching waits during reload or while grabbing an object, NPC or climbing surface.
+
+Left-handed conversion currently targets the supported Steam binary. IED and mortar conversion remain pending. See [behavior, limits and automated tests](mod/tests/LEFT_HAND_WEAPON.md).
 
 ## Building from source
 

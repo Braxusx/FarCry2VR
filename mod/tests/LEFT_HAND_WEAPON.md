@@ -212,6 +212,8 @@ mirror comparison also does not prove native calibration or controller comfort.
 Body yaw stopping with map/radio out is a separately reported eligibility issue;
 this runtime comparison does not change the body-yaw feature's mode policy.
 
+Pending checks: IED/mortar handedness, DLC weapons, and broader weapon firing/reload coverage.
+
 Do not infer acceptance of vehicles, map/phone/monocular, throwing, climbing or
 holsters from the on-foot weapon test alone. No changes from this branch belong in
 the separate upstream body-yaw PR.
