@@ -290,24 +290,27 @@ static bool g_wfActive = false; static M4 g_wfOff; static float g_wfCam[3], g_wf
 // the gun's sight line; its place relative to the gun is saved per gun type ([Sights] in fc2vr.ini) and the dot and shots
 // start from it
 static volatile bool g_calReq = false; static float g_wfDe[3] = { 1, 0, 0 };
-struct SightCal { uint32_t key; float p[3]; bool have; };
+struct SightCal { uint32_t key; float p[3]; bool have; float adj[2]; };   // adj: the dot turned right / up (deg)
 static SightCal g_sightCal[32]; static int g_nSightCal = 0;
 static char g_ini[MAX_PATH];
-static bool SightCalGet(uint32_t key, float out[3]) {
+static float g_wfAdj[2] = { 0, 0 };
+static bool SightCalGet(uint32_t key, float out[3], float adj[2] = nullptr) {
     if (!key) return false;
-    for (int i = 0; i < g_nSightCal; ++i) if (g_sightCal[i].key == key) { if (g_sightCal[i].have) memcpy(out, g_sightCal[i].p, 12); return g_sightCal[i].have; }
-    SightCal c{ key, {}, false };
+    for (int i = 0; i < g_nSightCal; ++i) if (g_sightCal[i].key == key) { if (g_sightCal[i].have) { memcpy(out, g_sightCal[i].p, 12); if (adj) memcpy(adj, g_sightCal[i].adj, 8); } return g_sightCal[i].have; }
+    SightCal c{ key, {}, false, { 0, 0 } };
     if (g_ini[0]) { char k[16], v[96]; snprintf(k, sizeof k, "S%08X", key); GetPrivateProfileStringA("Sights", k, "", v, sizeof v, g_ini);
-                    if (sscanf(v, "%f %f %f", &c.p[0], &c.p[1], &c.p[2]) == 3 && std::isfinite(c.p[0]) && fabsf(c.p[0]) < 1 && fabsf(c.p[1]) < 1 && fabsf(c.p[2]) < 1) c.have = true; }
+                    if (sscanf(v, "%f %f %f %f %f", &c.p[0], &c.p[1], &c.p[2], &c.adj[0], &c.adj[1]) >= 3 && std::isfinite(c.p[0]) && fabsf(c.p[0]) < 1 && fabsf(c.p[1]) < 1 && fabsf(c.p[2]) < 1) c.have = true; }
     if (g_nSightCal < 32) g_sightCal[g_nSightCal++] = c;
-    if (c.have) { memcpy(out, c.p, 12); LOG("arms: gun %08x sight line from its calibration %.3f %.3f %.3f", key, c.p[0], c.p[1], c.p[2]); }
+    if (!std::isfinite(c.adj[0]) || fabsf(c.adj[0]) > 10) c.adj[0] = 0; if (!std::isfinite(c.adj[1]) || fabsf(c.adj[1]) > 10) c.adj[1] = 0;
+    if (g_nSightCal <= 32 && g_nSightCal > 0) g_sightCal[g_nSightCal - 1].adj[0] = c.adj[0], g_sightCal[g_nSightCal - 1].adj[1] = c.adj[1];
+    if (c.have) { memcpy(out, c.p, 12); if (adj) memcpy(adj, c.adj, 8); LOG("arms: gun %08x sight line from its calibration %.3f %.3f %.3f, dot turned %.2f right %.2f up", key, c.p[0], c.p[1], c.p[2], c.adj[0], c.adj[1]); }
     return c.have;
 }
-static void SightCalPut(uint32_t key, const float p[3]) {
+static void SightCalPut(uint32_t key, const float p[3], const float adj[2]) {
     int s = -1; for (int i = 0; i < g_nSightCal; ++i) if (g_sightCal[i].key == key) s = i;
     if (s < 0) s = g_nSightCal < 32 ? g_nSightCal++ : 31;
-    g_sightCal[s] = { key, { p[0], p[1], p[2] }, true };
-    if (g_ini[0]) { char k[16], v[96]; snprintf(k, sizeof k, "S%08X", key); snprintf(v, sizeof v, "%.4f %.4f %.4f", p[0], p[1], p[2]); WritePrivateProfileStringA("Sights", k, v, g_ini); }
+    g_sightCal[s] = { key, { p[0], p[1], p[2] }, true, { adj[0], adj[1] } };
+    if (g_ini[0]) { char k[16], v[96]; snprintf(k, sizeof k, "S%08X", key); snprintf(v, sizeof v, "%.4f %.4f %.4f %.2f %.2f", p[0], p[1], p[2], adj[0], adj[1]); WritePrivateProfileStringA("Sights", k, v, g_ini); }
 }
 void RequestSightCalibration() { g_calReq = true; }
 static bool g_wfAds = false; static float g_wfAdsDir[3], g_wfAdsUp[3];   // v234 test 78: the sight line measured in the game's aim pose
@@ -1287,7 +1290,7 @@ static void Apply(uint8_t* skel) {
                             float de[3] = { 0.931f, -0.138f, 0.338f };
                             if (wf.ads && wf.adsCam[0] < 1e8f) memcpy(de, wf.adsDir, 12); else if (wf.haveDir) memcpy(de, wf.dir, 12);
                             Normalize(de); memcpy(g_wfDe, de, 12);
-                            float cal[3]; if (SightCalGet(g_typeKey, cal)) memcpy(g_wfCam, cal, 12);   // v234 test 80: calibrated
+                            float cal[3]; g_wfAdj[0] = g_wfAdj[1] = 0; if (SightCalGet(g_typeKey, cal, g_wfAdj)) memcpy(g_wfCam, cal, 12);   // v234 test 80: calibrated
                         }
                     }
                 }
@@ -1386,7 +1389,24 @@ static void Apply(uint8_t* skel) {
           M4 Wf = Mul(g_wfOff, Mul(Bw[rh], Map)); XformPt(Wf, g_wfCam, so); memcpy(sf, g_wfFwd, 12); memcpy(su, g_wfUp, 12);
           {   // v234 test 80: sight calibration - average both eyes relative to the gun over 1 s; the one on the sight line wins
               static bool on = false; static ULONGLONG t0 = 0; static double acc[2][3]; static int n = 0; static uint32_t key = 0;
+              static bool adjOn = false; static float adjP[3], adj[2]; static ULONGLONG lastA = 0;   // v234 test 81: dot nudge after the capture
               const ULONGLONG tn = GetTickCount64();
+              if (adjOn && (g_calReq || key != g_typeKey || HeldMelee() != 0)) {   // Ctrl+F1 again (or another weapon): save
+                  g_calReq = false; adjOn = false; controls::SetMenuMode(false);
+                  SightCalPut(key, adjP, adj); xr::Haptic(1, 0.5f, 0.06f);
+                  LOG("arms: gun %08x sight line saved: %.3f %.3f %.3f, dot turned %.2f deg right %.2f deg up", key, adjP[0], adjP[1], adjP[2], adj[0], adj[1]);
+              }
+              if (adjOn) {   // the right stick moves the dot (up to 3 deg/s; a light push for fine steps)
+                  float dt = lastA ? (float)(tn - lastA) * 0.001f : 0; lastA = tn; if (dt > 0.1f) dt = 0.1f;
+                  xr::HandState hs[2]; XrPosef hp; bool hv = false;
+                  if (xr::InputSnapshot(hs, hp, hv)) for (int a = 0; a < 2; ++a) {
+                      float v = a ? hs[1].stick.y : hs[1].stick.x; if (fabsf(v) < 0.15f) continue;
+                      float sg = v > 0 ? 1.0f : -1.0f; v = (fabsf(v) - 0.15f) / 0.85f;
+                      adj[a] += sg * v * v * 3.0f * dt; if (adj[a] > 8) adj[a] = 8; if (adj[a] < -8) adj[a] = -8;
+                  }
+                  memcpy(g_wfAdj, adj, 8);
+                  static ULONGLONG lastL = 0; if (tn - lastL > 1000) { lastL = tn; LOG("arms: sight nudge gun %08x - dot %.2f deg right %.2f deg up", key, adj[0], adj[1]); }
+              }
               if (g_calReq) { g_calReq = false;
                   if (HeldMelee() != 0 || !g_typeKey || !f.headValid) { LOG("arms: sight calibration - hold a gun first"); xr::Haptic(1, 0.6f, 0.4f); }
                   else { on = true; t0 = tn; n = 0; key = g_typeKey; memset(acc, 0, sizeof acc); xr::Haptic(1, 0.3f, 0.05f); } }
@@ -1399,19 +1419,28 @@ static void Apply(uint8_t* skel) {
                       on = false; float best = 1e9f; int be = -1; float pe[2][3];
                       for (int e = 0; e < 2; ++e) {
                           for (int k = 0; k < 3; ++k) pe[e][k] = (float)(acc[e][k] / n);
-                          float v[3] = { pe[e][0] - g_wfCam[0], pe[e][1] - g_wfCam[1], pe[e][2] - g_wfCam[2] }; float a = Dot3(v, g_wfDe);
-                          for (int k = 0; k < 3; ++k) v[k] -= g_wfDe[k] * a;
-                          float dl = sqrtf(Dot3(v, v)); if (dl < best) { best = dl; be = e; }
+                          // v234 test 81: the eye nearer the gun's centre plane (the sights sit on it), not the one nearer the old line
+                          float uw[3] = { -g_wfDe[0] * g_wfDe[2], -g_wfDe[1] * g_wfDe[2], 1.0f - g_wfDe[2] * g_wfDe[2] }; Normalize(uw);
+                          float sw[3] = { g_wfDe[1] * uw[2] - g_wfDe[2] * uw[1], g_wfDe[2] * uw[0] - g_wfDe[0] * uw[2], g_wfDe[0] * uw[1] - g_wfDe[1] * uw[0] };
+                          float dl = fabsf(Dot3(pe[e], sw)); if (dl < best) { best = dl; be = e; }
                       }
-                      LOG("arms: sight calibration for gun %08x - left eye %.3f %.3f %.3f, right eye %.3f %.3f %.3f (gun frame); %s eye %.1f cm from the old sight line",
+                      LOG("arms: sight calibration for gun %08x - left eye %.3f %.3f %.3f, right eye %.3f %.3f %.3f (gun frame); %s eye %.1f cm beside the gun's centre",
                           key, pe[0][0], pe[0][1], pe[0][2], pe[1][0], pe[1][1], pe[1][2], be ? "right" : "left", best * 100.0f);
-                      if (be >= 0 && best < 0.12f && Dot3(pe[be], pe[be]) < 0.8f * 0.8f) { SightCalPut(key, pe[be]); memcpy(g_wfCam, pe[be], 12); XformPt(Wf, g_wfCam, so);
-                          xr::Haptic(1, 0.5f, 0.06f); LOG("arms: gun %08x sight line saved: %.3f %.3f %.3f", key, pe[be][0], pe[be][1], pe[be][2]); }
+                      if (be >= 0 && best < 0.15f && Dot3(pe[be], pe[be]) < 0.8f * 0.8f) {
+                          memcpy(adjP, pe[be], 12); memcpy(adj, g_wfAdj, 8); adjOn = true; lastA = 0; controls::SetMenuMode(true);
+                          SightCalPut(key, adjP, adj); memcpy(g_wfCam, pe[be], 12); XformPt(Wf, g_wfCam, so);
+                          xr::Haptic(1, 0.5f, 0.06f); LOG("arms: gun %08x sight line captured: %.3f %.3f %.3f - right stick moves the dot, Ctrl+F1 saves", key, pe[be][0], pe[be][1], pe[be][2]); }
                       else { LOG("arms: sight calibration rejected - neither eye was behind the sights"); xr::Haptic(1, 0.8f, 0.5f); }
                   }
               }
           }
           // v234 test 79: the gun is turned so its own sight line runs along the controller, so the dot follows the controller
+          if (HeldMelee() == 0 && (g_wfAdj[0] != 0 || g_wfAdj[1] != 0)) {   // v234 test 81: the calibrated nudge (right / up)
+              float r[3] = { sf[1] * su[2] - sf[2] * su[1], sf[2] * su[0] - sf[0] * su[2], sf[0] * su[1] - sf[1] * su[0] }; Normalize(r);
+              const float ty = tanf(g_wfAdj[0] * 0.0174533f), tp = tanf(g_wfAdj[1] * 0.0174533f);
+              for (int k = 0; k < 3; ++k) sf[k] += r[k] * ty + su[k] * tp;
+              Normalize(sf);
+          }
       } else if (g_calReq) { g_calReq = false; LOG("arms: sight calibration - not available now (weapon follow off: weapon %p, map %d, normal controls %d)", g_curWeapon, (int)f.map, (int)controls::NormalControls()); xr::Haptic(1, 0.6f, 0.4f);
       } else if (g_c.steadyHands && g_relHave && !f.map) {
           M4 ir; if (Inv(g_relR, ir)) {
