@@ -290,34 +290,34 @@ static bool g_wfActive = false; static M4 g_wfOff; static float g_wfCam[3], g_wf
 // the gun's sight line; its place relative to the gun is saved per gun type ([Sights] in fc2vr.ini) and the dot and shots
 // start from it
 static float g_wfDe[3] = { 1, 0, 0 };
-struct SightCal { uint32_t key; float p[3]; bool have; float adj[2]; };   // adj: the dot turned right / up (deg)
+struct SightCal { uint32_t key; float p[3]; bool have; float adj[4]; };   // adj: the gun turned right / up, the dot turned right / up (deg)
 static SightCal g_sightCal[32]; static int g_nSightCal = 0;
 static char g_ini[MAX_PATH];
-static float g_wfAdj[2] = { 0, 0 }; static volatile bool g_calAdjOn = false; static float g_calAdjLive[2] = { 0, 0 };   // v234 test 82: the gun turned right / up (deg)
-static bool SightCalGet(uint32_t key, float out[3], float adj[2] = nullptr) {
+static float g_wfAdj[4] = { 0, 0, 0, 0 }; static volatile bool g_calAdjOn = false; static float g_calAdjLive[4] = { 0, 0, 0, 0 };   // v234 test 82: the gun turned right / up (deg)
+static bool SightCalGet(uint32_t key, float out[3], float adj[4] = nullptr) {
     if (!key) return false;
-    for (int i = 0; i < g_nSightCal; ++i) if (g_sightCal[i].key == key) { if (g_sightCal[i].have) { memcpy(out, g_sightCal[i].p, 12); if (adj) memcpy(adj, g_sightCal[i].adj, 8); } return g_sightCal[i].have; }
-    SightCal c{ key, {}, false, { 0, 0 } };
+    for (int i = 0; i < g_nSightCal; ++i) if (g_sightCal[i].key == key) { if (g_sightCal[i].have) { memcpy(out, g_sightCal[i].p, 12); if (adj) memcpy(adj, g_sightCal[i].adj, 16); } return g_sightCal[i].have; }
+    SightCal c{ key, {}, false, { 0, 0, 0, 0 } };
     if (g_ini[0]) { char k[16], v[96]; snprintf(k, sizeof k, "S%08X", key); GetPrivateProfileStringA("Sights", k, "", v, sizeof v, g_ini);
-                    if (sscanf(v, "%f %f %f %f %f", &c.p[0], &c.p[1], &c.p[2], &c.adj[0], &c.adj[1]) >= 3 && std::isfinite(c.p[0]) && fabsf(c.p[0]) < 1 && fabsf(c.p[1]) < 1 && fabsf(c.p[2]) < 1) c.have = true; }
+                    if (sscanf(v, "%f %f %f %f %f %f %f", &c.p[0], &c.p[1], &c.p[2], &c.adj[0], &c.adj[1], &c.adj[2], &c.adj[3]) >= 3 && std::isfinite(c.p[0]) && fabsf(c.p[0]) < 1 && fabsf(c.p[1]) < 1 && fabsf(c.p[2]) < 1) c.have = true; }
     if (g_nSightCal < 32) g_sightCal[g_nSightCal++] = c;
-    if (!std::isfinite(c.adj[0]) || fabsf(c.adj[0]) > 10) c.adj[0] = 0; if (!std::isfinite(c.adj[1]) || fabsf(c.adj[1]) > 10) c.adj[1] = 0;
-    if (g_nSightCal <= 32 && g_nSightCal > 0) g_sightCal[g_nSightCal - 1].adj[0] = c.adj[0], g_sightCal[g_nSightCal - 1].adj[1] = c.adj[1];
-    if (c.have) { memcpy(out, c.p, 12); if (adj) memcpy(adj, c.adj, 8); LOG("arms: gun %08x sight line from its calibration %.3f %.3f %.3f, gun turned %.2f right %.2f up", key, c.p[0], c.p[1], c.p[2], c.adj[0], c.adj[1]); }
+    for (float& a : c.adj) if (!std::isfinite(a) || fabsf(a) > 10) a = 0;
+    if (g_nSightCal <= 32 && g_nSightCal > 0 && g_sightCal[g_nSightCal - 1].key == key) memcpy(g_sightCal[g_nSightCal - 1].adj, c.adj, 16);
+    if (c.have) { memcpy(out, c.p, 12); if (adj) memcpy(adj, c.adj, 16); LOG("arms: gun %08x sight line from its calibration %.3f %.3f %.3f, gun turned %.2f right %.2f up, dot %.2f right %.2f up", key, c.p[0], c.p[1], c.p[2], c.adj[0], c.adj[1], c.adj[2], c.adj[3]); }
     return c.have;
 }
-static void SightCalPut(uint32_t key, const float p[3], const float adj[2]) {
+static void SightCalPut(uint32_t key, const float p[3], const float adj[4]) {
     int s = -1; for (int i = 0; i < g_nSightCal; ++i) if (g_sightCal[i].key == key) s = i;
     if (s < 0) s = g_nSightCal < 32 ? g_nSightCal++ : 31;
-    g_sightCal[s] = { key, { p[0], p[1], p[2] }, true, { adj[0], adj[1] } };
-    if (g_ini[0]) { char k[16], v[96]; snprintf(k, sizeof k, "S%08X", key); snprintf(v, sizeof v, "%.4f %.4f %.4f %.2f %.2f", p[0], p[1], p[2], adj[0], adj[1]); WritePrivateProfileStringA("Sights", k, v, g_ini); }
+    g_sightCal[s] = { key, { p[0], p[1], p[2] }, true, { adj[0], adj[1], adj[2], adj[3] } };
+    if (g_ini[0]) { char k[16], v[96]; snprintf(k, sizeof k, "S%08X", key); snprintf(v, sizeof v, "%.4f %.4f %.4f %.2f %.2f %.2f %.2f", p[0], p[1], p[2], adj[0], adj[1], adj[2], adj[3]); WritePrivateProfileStringA("Sights", k, v, g_ini); }
 }
-static volatile bool g_alignWant = false; static volatile int g_alignState = 0; static volatile uint32_t g_alignKey = 0; static float g_alignAdj[2];
-void SetAlignMode(bool on) { g_alignWant = on; if (on) g_alignState = 0; LOG("arms: weapon alignment %s", on ? "ticked" : "unticked"); }
-int AlignStatus(uint32_t* key, float adj[2]) {
+static volatile int g_alignWant = 0; static volatile int g_alignState = 0; static volatile uint32_t g_alignKey = 0; static float g_alignAdj[4];   // g_alignWant: 0 off, 1 the gun, 2 the dot
+void SetAlignMode(int mode) { if (!g_alignWant && mode) g_alignState = 0; g_alignWant = mode; static const char* nm[3] = { "off", "turn the gun", "move the dot" }; LOG("arms: weapon alignment: %s", nm[mode < 0 || mode > 2 ? 0 : mode]); }
+int AlignStatus(uint32_t* key, float adj[4]) {
     const int st = g_alignWant ? g_alignState : 0;
     if (key) *key = st ? g_alignKey : g_typeKey;
-    if (adj) { if (st == 2) memcpy(adj, g_alignAdj, 8); else { adj[0] = adj[1] = 0; float c[3]; SightCalGet(g_typeKey, c, adj); } }
+    if (adj) { if (st == 2) memcpy(adj, g_alignAdj, 16); else { adj[0] = adj[1] = adj[2] = adj[3] = 0; float c[3]; SightCalGet(g_typeKey, c, adj); } }
     if (st) return st;
     return (HeldMelee() == 0 && g_typeKey) ? 3 : 0;
 }
@@ -1282,7 +1282,7 @@ static void Apply(uint8_t* skel) {
                     for (int i = 0; i < 3; ++i) for (int k = 0; k < 3; ++k) R[i][k] = de[i] * fw[k] + uw[i] * uc[k] + sw[i] * cw[k];
                     // v234 test 82: the calibrated turn of the gun on the controller (right / up, deg) - the dot stays on the
                     // controller line; the gun's sights are brought onto it
-                    float ga[2] = { 0, 0 }; { float cal[3]; if (g_calAdjOn) memcpy(ga, g_calAdjLive, 8); else SightCalGet(g_typeKey, cal, ga); }
+                    float ga[4] = { 0, 0, 0, 0 }; { float cal[3]; if (g_calAdjOn) memcpy(ga, g_calAdjLive, 16); else SightCalGet(g_typeKey, cal, ga); }
                     if (ga[0] != 0 || ga[1] != 0) {
                         float rt[3] = { fw[1] * uc[2] - fw[2] * uc[1], fw[2] * uc[0] - fw[0] * uc[2], fw[0] * uc[1] - fw[1] * uc[0] }; Normalize(rt);
                         const float ty = tanf(ga[0] * 0.0174533f), tp = tanf(ga[1] * 0.0174533f);
@@ -1312,7 +1312,7 @@ static void Apply(uint8_t* skel) {
                             float de[3] = { 0.931f, -0.138f, 0.338f };
                             if (wf.ads && wf.adsCam[0] < 1e8f) memcpy(de, wf.adsDir, 12); else if (wf.haveDir) memcpy(de, wf.dir, 12);
                             Normalize(de); memcpy(g_wfDe, de, 12);
-                            float cal[3]; g_wfAdj[0] = g_wfAdj[1] = 0; if (SightCalGet(g_typeKey, cal, g_wfAdj)) memcpy(g_wfCam, cal, 12);   // v234 test 80: calibrated
+                            float cal[3]; g_wfAdj[0] = g_wfAdj[1] = g_wfAdj[2] = g_wfAdj[3] = 0; if (SightCalGet(g_typeKey, cal, g_wfAdj)) memcpy(g_wfCam, cal, 12);   // v234 test 80: calibrated
                         }
                     }
                 }
@@ -1413,13 +1413,17 @@ static void Apply(uint8_t* skel) {
               // them becomes the gun's sight line start (test 80) - then the right stick turns the gun onto the dot (test 82).
               // Unticked (or another gun drawn): saved per gun type ([Sights] in fc2vr.ini).
               static bool on = false; static ULONGLONG t0 = 0; static double acc[2][3]; static int n = 0; static uint32_t key = 0;
-              static bool adjOn = false; static float adjP[3], adj[2]; static ULONGLONG lastA = 0;
+              static bool adjOn = false; static float adjP[3], adj[4]; static ULONGLONG lastA = 0;
               const ULONGLONG tn = GetTickCount64();
               const bool gun = HeldMelee() == 0 && g_typeKey;
               if ((on || adjOn) && (!g_alignWant || key != g_typeKey || !gun)) {   // untick or another weapon: save
                   if (adjOn) { SightCalPut(key, adjP, adj); xr::Haptic(1, 0.5f, 0.06f);
-                      LOG("arms: gun %08x alignment saved: sight line %.3f %.3f %.3f, gun turned %.2f deg right %.2f deg up", key, adjP[0], adjP[1], adjP[2], adj[0], adj[1]); }
+                      LOG("arms: gun %08x alignment saved: sight line %.3f %.3f %.3f, gun turned %.2f deg right %.2f deg up, dot %.2f deg right %.2f deg up", key, adjP[0], adjP[1], adjP[2], adj[0], adj[1], adj[2], adj[3]); }
                   on = adjOn = false; g_calAdjOn = false; g_alignState = 0;
+              }
+              if (g_alignWant == 2 && !on && !adjOn && gun) {   // the dot: no eye reading, straight to the stick
+                  key = g_typeKey; g_alignKey = key; memcpy(adjP, g_wfCam, 12); memcpy(adj, g_wfAdj, 16); memcpy(g_calAdjLive, adj, 16); memcpy(g_alignAdj, adj, 16);
+                  g_calAdjOn = true; adjOn = true; lastA = 0; g_alignState = 2; xr::Haptic(1, 0.3f, 0.05f);
               }
               if (g_alignWant && !on && !adjOn) {
                   if (gun && f.headValid) { on = true; t0 = tn; n = 0; key = g_typeKey; memset(acc, 0, sizeof acc); g_alignKey = key; g_alignState = 1; xr::Haptic(1, 0.3f, 0.05f); }
@@ -1431,9 +1435,10 @@ static void Apply(uint8_t* skel) {
                   if (xr::InputSnapshot(hs, hp, hv)) for (int a2 = 0; a2 < 2; ++a2) {
                       float v = a2 ? hs[1].stick.y : hs[1].stick.x; if (fabsf(v) < 0.15f) continue;
                       float sg = v > 0 ? 1.0f : -1.0f; v = (fabsf(v) - 0.15f) / 0.85f;
-                      adj[a2] += sg * v * v * 3.0f * dt; if (adj[a2] > 10) adj[a2] = 10; if (adj[a2] < -10) adj[a2] = -10;
+                      const int ix = (g_alignWant == 2 ? 2 : 0) + a2;
+                      adj[ix] += sg * v * v * 3.0f * dt; if (adj[ix] > 10) adj[ix] = 10; if (adj[ix] < -10) adj[ix] = -10;
                   }
-                  memcpy(g_calAdjLive, adj, 8); memcpy(g_alignAdj, adj, 8);
+                  memcpy(g_calAdjLive, adj, 16); memcpy(g_alignAdj, adj, 16);
               }
               M4 iwf;
               if (on && f.headValid && Inv(Wf, iwf)) {
@@ -1452,12 +1457,21 @@ static void Apply(uint8_t* skel) {
                           key, pe[0][0], pe[0][1], pe[0][2], pe[1][0], pe[1][1], pe[1][2], be ? "right" : "left", best * 100.0f);
                       if (be >= 0 && best < 0.15f && Dot3(pe[be], pe[be]) < 0.8f * 0.8f) { memcpy(adjP, pe[be], 12); memcpy(g_wfCam, pe[be], 12); XformPt(Wf, g_wfCam, so); }
                       else { memcpy(adjP, g_wfCam, 12); LOG("arms: alignment - neither eye was behind the sights, the sight line start is kept"); }
-                      memcpy(adj, g_wfAdj, 8); memcpy(g_calAdjLive, adj, 8); memcpy(g_alignAdj, adj, 8); g_calAdjOn = true; adjOn = true; lastA = 0; g_alignState = 2;
+                      memcpy(adj, g_wfAdj, 16); memcpy(g_calAdjLive, adj, 16); memcpy(g_alignAdj, adj, 16); g_calAdjOn = true; adjOn = true; lastA = 0; g_alignState = 2;
                       xr::Haptic(1, 0.5f, 0.06f); LOG("arms: gun %08x alignment - right stick turns the gun onto the dot", key);
                   }
               }
           }
           // v234 test 79: the gun is turned so its own sight line runs along the controller, so the dot follows the controller
+          if (HeldMelee() == 0) {   // v234 test 84: the dot's own turn (right / up), set in the alignment menu
+              const float* da = g_calAdjOn ? g_calAdjLive + 2 : g_wfAdj + 2;
+              if (da[0] != 0 || da[1] != 0) {
+                  float r[3] = { sf[1] * su[2] - sf[2] * su[1], sf[2] * su[0] - sf[0] * su[2], sf[0] * su[1] - sf[1] * su[0] }; Normalize(r);
+                  const float ty = tanf(da[0] * 0.0174533f), tp = tanf(da[1] * 0.0174533f);
+                  for (int k = 0; k < 3; ++k) sf[k] += r[k] * ty + su[k] * tp;
+                  Normalize(sf);
+              }
+          }
       } else if (g_alignWant) { g_alignState = 0;
       } else if (g_c.steadyHands && g_relHave && !f.map) {
           M4 ir; if (Inv(g_relR, ir)) {

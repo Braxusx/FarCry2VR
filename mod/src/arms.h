@@ -195,8 +195,8 @@ void SetFreeHands(float angle, float yaw, float roll);
 void GetFreeHands(float& angle, float& yaw, float& roll);
 void SetPhoneHands(float angle, float yaw, float roll);
 void GetPhoneHands(float& angle, float& yaw, float& roll);
-void SetAlignMode(bool on);   // v234 test 83: the weapon alignment menu's tick box
-int AlignStatus(uint32_t* key, float adj[2]);   // 0 no gun, 1 measuring the eye, 2 the right stick turns the gun, 3 a gun held (box unticked)
+void SetAlignMode(int mode);   // v234 test 84: the weapon alignment menu - 0 off, 1 the right stick turns the gun, 2 it moves the dot
+int AlignStatus(uint32_t* key, float adj[4]);   // adj: gun right/up, dot right/up (deg);   // 0 no gun, 1 measuring the eye, 2 the right stick turns the gun, 3 a gun held (box unticked)
 int HeldMelee();        // v234 test 70: 1 the held weapon is the machete, 0 another weapon, -1 unknown
 void* CurrentWeapon();   // the player's current weapon object (identity only)                     // called (game thread) when a hand uses the interaction target
 // the weapon's sight line (ref frame: origin, unit direction); false if not updated recently
