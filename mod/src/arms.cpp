@@ -1134,9 +1134,20 @@ static void Apply(uint8_t* skel) {
         if (g_c.steadyHands && g_relHave && !f.map) { M4 inv; if (Inv(Bw[rh], inv)) Map = Mul(Mul(inv, relUse), Am); }
         g_wfActive = false;
         if (g_c.weaponFollow && w && !f.map && controls::NormalControls()) {
-            struct WF { void* w; int mirror, bar, up; float sb, su; int cb, cu; float csb, csu; ULONGLONG since; bool fixed; float cam[3]; };
+            struct WF { void* w; int mirror, bar, up; float sb, su; int cb, cu; float csb, csu; ULONGLONG since; bool fixed; float cam[3]; float bestB; int kb, ku; float ksb, ksu; float kcam[3]; uint32_t key; };
             static WF wf{};
-            if (wf.w != w) { wf = WF{}; wf.w = w; wf.mirror = WeaponMirrorAxis(g_wSkel); wf.cb = wf.cu = -1; wf.since = t; }
+            // v234 test 76: per weapon type the axes are remembered once found (a redraw uses them at once); a weapon
+            // type not seen yet uses barrel +X / top +Z (the Dunia weapon models) until its own are found
+            struct WfKnown { uint32_t key; int bar, up; float sb, su; float cam[3]; };
+            static WfKnown known[24]; static int nKnown = 0;
+            if (wf.w != w) {
+                wf = WF{}; wf.w = w; wf.mirror = WeaponMirrorAxis(g_wSkel); wf.cb = wf.cu = -1; wf.since = t; wf.kb = -1;
+                wf.bar = 0; wf.up = 2; wf.sb = 1; wf.su = 1; wf.cam[0] = -0.07f; wf.cam[1] = 0.0f; wf.cam[2] = 0.12f;
+            }
+            if (!wf.fixed && g_typeKey && wf.key != g_typeKey) {
+                wf.key = g_typeKey;
+                for (int i = 0; i < nKnown; ++i) if (known[i].key == g_typeKey) { wf.fixed = true; wf.bar = known[i].bar; wf.up = known[i].up; wf.sb = known[i].sb; wf.su = known[i].su; memcpy(wf.cam, known[i].cam, 12); break; }
+            }
             M4 Ooff = Translate(0, 0, 0);
             if (g_havePrevFinal) { M4 ww, ih; if (WeaponWorld(w, ww) && Inv(g_prevFinalRh, ih)) { M4 o = Mul(ww, ih); if (Dot3(o.m[3], o.m[3]) < 0.09f && fabsf(o.m[0][0] * o.m[0][0] + o.m[0][1] * o.m[0][1] + o.m[0][2] * o.m[0][2] - 1.0f) < 0.1f) Ooff = o; } }
             M4 wAnim = Mul(Ooff, Banim[rh]);
@@ -1147,15 +1158,27 @@ static void Apply(uint8_t* skel) {
                 for (int k = 0; k < 3; ++k) if (k != cb) { float d = Dot3(rows[k], cu); if (fabsf(d) > bu) { bu = fabsf(d); cu2 = k; sgu = d > 0 ? 1.0f : -1.0f; } }
                 if (cb >= 0 && cu2 >= 0 && bb > 0.3f) {
                     if (cb != wf.cb || cu2 != wf.cu || sgb != wf.csb || sgu != wf.csu) { wf.cb = cb; wf.cu = cu2; wf.csb = sgb; wf.csu = sgu; wf.since = t; }
-                    M4 iw; if (Inv(wAnim, iw)) XformPt(iw, co, wf.cam);
-                    if (t - wf.since > 400 && t - tChange > 500) {
+                    float camNow[3]; M4 iw; bool haveCam = Inv(wAnim, iw); if (haveCam) XformPt(iw, co, camNow);
+                    if (bb > wf.bestB && haveCam) { wf.bestB = bb; wf.kb = cb; wf.ku = cu2; wf.ksb = sgb; wf.ksu = sgu; memcpy(wf.kcam, camNow, 12); }
+                    // settled: the draw animation is over (1 s), the choice held for 0.4 s and the barrel within 32 deg of
+                    // the view; or after 3 s the best pose seen (the game holds some weapons well off the view)
+                    const bool good = bb > 0.85f && t - wf.since > 400 && t - tChange > 1000, late = t - tChange > 3000 && wf.kb >= 0;
+                    if (good || late) {
+                        if (!good) { cb = wf.kb; cu2 = wf.ku; sgb = wf.ksb; sgu = wf.ksu; memcpy(camNow, wf.kcam, 12); bb = wf.bestB; }
+                        // the sight line runs above the barrel: no sideways offset, 3-15 cm over it
+                        const int th = 3 - cb - cu2; camNow[th] = 0.0f;
+                        float v = camNow[cu2] * sgu; v = fminf(0.15f, fmaxf(0.03f, v)); camNow[cu2] = v * sgu;
+                        memcpy(wf.cam, camNow, 12);
                         wf.fixed = true; wf.bar = cb; wf.up = cu2; wf.sb = sgb; wf.su = sgu;
+                        if (g_typeKey) { int slot = -1; for (int i = 0; i < nKnown; ++i) if (known[i].key == g_typeKey) slot = i;
+                                         if (slot < 0) slot = nKnown < 24 ? nKnown++ : 23;
+                                         known[slot] = { g_typeKey, cb, cu2, sgb, sgu, { camNow[0], camNow[1], camNow[2] } }; }
                         LOG("arms: weapon %p follows the controller - barrel %c%c, top %c%c (mirror axis %c; game pose %.0f deg off the view), sight %.2f %.2f %.2f",
                             w, sgb > 0 ? '+' : '-', "XYZ"[cb], sgu > 0 ? '+' : '-', "XYZ"[cu2], wf.mirror >= 0 ? "XYZ"[wf.mirror] : '-', acosf(fminf(1.0f, bb)) * 57.2958f, wf.cam[0], wf.cam[1], wf.cam[2]);
                     }
                 }
             }
-            const int bar = wf.fixed ? wf.bar : wf.cb, up = wf.fixed ? wf.up : wf.cu; const float sb = wf.fixed ? wf.sb : wf.csb, su = wf.fixed ? wf.su : wf.csu;
+            const int bar = wf.bar, up = wf.up; const float sb = wf.sb, su = wf.su;   // until found: +X / +Z
             if (bar >= 0 && up >= 0 && bar != up) {
                 float fw[3] = { -ab[0], -ab[1], -ab[2] }, uc[3] = { au[0], au[1], au[2] }; Normalize(fw);
                 float d = Dot3(uc, fw); for (int k = 0; k < 3; ++k) uc[k] -= fw[k] * d; Normalize(uc);
@@ -1166,6 +1189,10 @@ static void Apply(uint8_t* skel) {
                 float o3[3]; const int b1 = (th + 1) % 3, b2 = (th + 2) % 3;   // keep the model's handedness
                 o3[0] = rows[b1][1] * rows[b2][2] - rows[b1][2] * rows[b2][1]; o3[1] = rows[b1][2] * rows[b2][0] - rows[b1][0] * rows[b2][2]; o3[2] = rows[b1][0] * rows[b2][1] - rows[b1][1] * rows[b2][0];
                 if (Dot3(o3, rows[th]) < 0) for (int k = 0; k < 3; ++k) R[th][k] = -R[th][k];
+                if (HeldMelee() == 1) {   // v234 test 76: the machete stands upright, leaning a little right (turned 120 deg clockwise seen from behind)
+                    M4 Rm = RotMat(fw, 120.0f * 0.0174533f);
+                    for (int i = 0; i < 3; ++i) { float o[3]; XformDir(Rm, R[i], o); R[i][0] = o[0]; R[i][1] = o[1]; R[i][2] = o[2]; }
+                }
                 M4 Wt = Translate(0, 0, 0); for (int i = 0; i < 3; ++i) for (int k = 0; k < 3; ++k) Wt.m[i][k] = R[i][k];
                 M4 Orot = Ooff; Orot.m[3][0] = Orot.m[3][1] = Orot.m[3][2] = 0; M4 Oi;
                 if (Inv(Orot, Oi)) {
