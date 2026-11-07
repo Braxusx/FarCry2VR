@@ -277,6 +277,7 @@ static void SubtreeXform(M4* Bw, Bone* bones, int n, int root, const M4& D) {
 }
 
 static M4 g_relR, g_relL; static volatile bool g_relHave = false; static bool g_relCached = false;
+static volatile ULONGLONG g_onHandSince = 0;   // v234 test 72: the held weapon has hung on the hand by itself since (0 = not now: elsewhere, pinned back by us, none)
 static volatile uint32_t g_weaponKey = 0;
 static volatile uint32_t g_typeKey = 0;   // v208: the hold key - reticle id + inventory slot + model bone count (the reticle alone is shared by most guns)
 static bool g_freeLDirty = false;   // the empty-hands hold was taken again: reload the free left hand pose
@@ -993,6 +994,12 @@ static void Apply(uint8_t* skel) {
         bool manual = recapUntil > t;
         g_relCached = false;   // no automatic renewals
         bool due = g_c.steadyHands && (!g_relHave || manual) && t - tChange > 300 && t - stableSince > (manual ? 200u : 400u) && !f.map && controls::NormalControls();
+        // v234 test 72: never while the weapon is not on the hand by itself or a reload runs - the crossbow reloads as
+        // soon as it is drawn (the game hangs it on the spine and we pin it back), and a hold taken then was saved turned
+        if (due && w && (ReloadActive() || !g_onHandSince || t - g_onHandSince < 1000)) {
+            static ULONGLONG lastLog = 0; if (t - lastLog > 3000) { lastLog = t; LOG("arms: hold for weapon %p waits: %s", w, ReloadActive() ? "reload running" : "weapon not settled on the hand yet"); }
+            due = false;
+        }
         // The weapon's own barrel: the weapon entity axis that points along the view in a normal hold differs per
         // weapon type (rifles +X, the pistol -Z), so it is learned per type and saved with the hold. A hold is taken
         // or renewed only while that axis points along the view (the relaxed gun of a cease-fire town points up);
@@ -3374,7 +3381,7 @@ static void AttachWatch() {
     uint8_t* ent = HeldEnt();
     static uint8_t* lastEnt = nullptr; static float handOff[16]; static bool haveOff = false; static int lastIdx = -3; static ULONGLONG onHandSince = 0;
     int hand = g_slot[12];
-    if (!ent || IsBadReadPtr(ent + 0x78, 4) || hand < 0) { lastEnt = nullptr; g_attachForced = false; g_wRestN = 0; return; }
+    if (!ent || IsBadReadPtr(ent + 0x78, 4) || hand < 0) { lastEnt = nullptr; g_attachForced = false; g_wRestN = 0; g_onHandSince = 0; return; }
     uint8_t* at = *(uint8_t**)(ent + 0x78);
     if (!at || IsBadReadPtr(at, 0xC0)) return;
     int idx = *(int*)(at + 0x1C); float* off = (float*)(at + 0x80);
@@ -3389,7 +3396,7 @@ static void AttachWatch() {
             if (k == nSaved) { if (nSaved < 8) ++nSaved; else k = 0; }
             saved[k].ent = lastEnt; memcpy(saved[k].off, handOff, 64); memcpy(saved[k].bones, g_wRestBones, sizeof g_wRestBones); saved[k].n = g_wRestN; saved[k].base = g_wRestBase;
         }
-        lastEnt = ent; haveOff = false; lastIdx = -3; onHandSince = t; g_wRestN = 0;
+        lastEnt = ent; haveOff = false; lastIdx = -3; onHandSince = t; g_wRestN = 0; g_onHandSince = 0;
         for (int k = 0; k < nSaved; ++k) if (saved[k].ent == ent) {
             memcpy(handOff, saved[k].off, 64); memcpy(g_wRestBones, saved[k].bones, sizeof g_wRestBones); g_wRestBase = saved[k].base; g_wRestN = saved[k].n; haveOff = true;
             LOG("arms: held weapon %p - its hand pose from before is used", ent); break;
@@ -3400,9 +3407,10 @@ static void AttachWatch() {
     if (idx != lastIdx) { static int nl = 0; if (nl++ < 40) LOG("arms: held weapon attachment %p: game puts it on bone %d (hand %d)", at, idx, hand); lastIdx = idx; if (idx == hand) onHandSince = t; }
     // the weapon's place on the hand and its model's pose there, taken once it has hung on the hand for a moment
     static ULONGLONG forcedUntil = 0;
-    if (idx == hand && t < forcedUntil) { if (g_diagUntil + 300 > forcedUntil) forcedUntil = g_diagUntil + 300; return; }   // still our pin: keep the model's pose held (through the reload after the shot)
+    if (idx == hand && t < forcedUntil) { g_onHandSince = 0; if (g_diagUntil + 300 > forcedUntil) forcedUntil = g_diagUntil + 300; return; }   // still our pin: keep the model's pose held (through the reload after the shot)
     if (idx == hand) {
         g_attachForced = false;
+        if (!g_onHandSince) g_onHandSince = t;
         // v207: each weapon type's place in the hand is recorded once (normal controls, settled, saved in [Holds] O<key>)
         // and restored whenever the game re-attaches the weapon turned or shifted (after a phone call, the map, climbing,
         // putting it away, a cut scene) - the weapon sat tilted in the steady hand until left grip + A.
@@ -3446,6 +3454,7 @@ static void AttachWatch() {
         }
         return;
     }
+    g_onHandSince = 0;
     // the game hung it elsewhere (the crossbow's bolt reload: the spine, or the camera while scoped): back on the hand,
     // with the model held in its pose there (Hook_PoseBones) - in VR the hand holds the weapon throughout
     g_attachForced = false;
