@@ -2,6 +2,7 @@
 // Explicit native-test DLL only. Synthetic HEAD poses do not authorize real
 // controller actions. This adapter is absent from the production DLL.
 #if defined(FC2VR_BODY_YAW_TESTING)
+#include "common/hand_roles.h"
 namespace body_yaw_fixture {
 struct State {
     bool configured=false,tracked=false,allowed=false;
@@ -9,6 +10,18 @@ struct State {
     float yaw=0,pitch=0,roll=0;
 };
 inline State current;
+// Visual-only controller targets for anatomical left-weapon readback. They do
+// not enter InputSnapshot, publish input stamps or authorize controller actions.
+inline bool VisualHand(int physical,xr::HandState& hand) {
+    if(!current.configured)return false;
+    hand={};hand.gripValid=hand.aimValid=true;
+    hand.grip.position={physical?0.25f:-0.25f,1.35f,-0.4f};
+    const auto phase=current.sequence/100000;
+    if(phase>=30 && phase<180 && ((phase-30)%5==2 || (phase-30)%5==3) && physical==fc2vr::hands::Support())
+        hand.grip.position={physical?.15f:-.15f,1.4f,-.65f};
+    hand.aim=hand.grip;
+    return true;
+}
 inline void Update(xr::FrameViews& views,bool begun) {
     static char path[MAX_PATH]{};static bool init=false;
     if(!init){init=true;const DWORD length=GetEnvironmentVariableA("FC2VR_BODY_YAW_TEST_FILE",path,MAX_PATH);current.configured=length>0 && length<MAX_PATH;}

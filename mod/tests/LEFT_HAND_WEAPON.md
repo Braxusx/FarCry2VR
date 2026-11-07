@@ -1,0 +1,222 @@
+# Left-handed weapon controls
+
+Set `LeftHandedWeapon=1` in `[VR]` in `fc2vr.ini` for a left-handed startup.
+Default 0 starts right-handed. Press **F1** while the game has keyboard focus
+to switch weapon hands at runtime (no modifiers, independent of `DevKeys`).
+The toast identifies the selected hand. This is a session-only comparison;
+it does not rewrite the startup setting. Release triggers, grips and buttons
+and centre sticks after switching, then press again normally. Pending actions,
+two-hand grip, shot/scope rays and role-specific histories are invalidated;
+the old native attachment is restored before changing layout. A switch defers
+during reload or while holding an object/NPC/climbing grip. Press F1 again to
+cancel a queued switch; losing game focus also cancels it. Unsupported images
+cannot enable the native left-hand adapter.
+
+Left-handed mode selects the physical left
+controller for weapon pose, aiming, firing and weapon haptics, and the physical
+right controller for support grip and reload. Face buttons keep their original
+physical mappings, including dialog confirmation. The left stick still moves/sprints and
+the right stick still turns/crouches/heals. Pause stays on the menu button.
+
+Raw XR poses and authority stamps stay indexed by physical hand. Per-hand
+freshness, rearming and generation checks select the configured physical hand
+at each use, including deferred interaction and throw checks. Dropping weapon
+tracking cannot borrow the support controller's tracking.
+Native pose/input consumers share a reentrant read guard; the render-thread
+transition uses a nonblocking exclusive attempt. Layout generations reject old
+arm frames, and XR invalidation requires neutral rearming before new actions.
+The muzzle observer is installed on the supported image even when starting
+right-handed, so F1 can enable left-handed play without restarting.
+
+The dominant wrist uses a mirrored right-hand calibration in the native left
+bone basis; it does not reuse the original weapon's support-hand orientation.
+The gun's placement is reflected about its native muzzle center plane and the
+controller grip, with a proper rotation that preserves mesh winding. The right
+wrist uses the mirrored original support orientation at the foregrip target,
+and IK retains each anatomical shoulder. When released, the right support hand
+uses a right-wrist calibration. Map/radio/phone and other non-weapon arm poses
+keep their native anatomical controller layout rather than crossing the arms.
+This conversion is local to the arm solve; it does not change action mappings,
+raw XR authority stamps or the items' native attachments. Item poses cannot
+publish a weapon firing ray or inherit a two-hand weapon grip latch.
+The weapon is attached to the left-hand bone with the corresponding offset.
+Character meshes and finger shapes are not mirrored; free-hand cosmetic cleanup
+is outside this step. The native
+attachment adapter is gated to the exact Steam image listed in BODY_YAW.md.
+
+The G3KA4 (`4d786da0`) has a 15 mm rightward support-palm contact adjustment
+while gripping with the right hand in left-weapon mode. This follows the carried
+grip frame and changes wrist position only; the grab hotspot, two-hand aim and
+support wrist orientation stay unchanged. The corrected contact position has
+been confirmed in a physical VR test.
+
+Shoulder and hip holster zones follow the current weapon-hand side, including
+live F1 switches. The weapon controller reaches over its own shoulder for
+primary/special weapons or down at its own hip (pointing down) for the secondary.
+The opposite shoulder/hip does not activate those zones. The centre chest
+machete slot stays centred. Shoulder primary/special cycling is preserved.
+
+Build and run CTest as in [BODY_YAW.md](BODY_YAW.md). `hand_switch` checks key
+edges/focus/cancellation, nested/concurrent layout readers, old-lease rejection
+and neutral rearming. `hand_roles` checks pose,
+button, haptic-index and authority selection in both modes. On Windows,
+`weapon_controls` executes the real gamepad mapper with stubbed XR/engine
+services, without a game or input injection. It checks both modes for fire vs.
+reload, missing weapon tracking, physical stick locations, pause, sights and
+weapon-side haptics. `hand_attachment` checks conversion across 3,367 grip poses.
+`weapon_controls` also checks shoulder/hip side selection through head yaw, actual holster slot
+pulses and weapon-side haptics, support-hand rejection, lost tracking/vehicle
+gates and clearing stale holster zones/pulses during the F1 input reset.
+`left_grip` checks mirrored palm/handle contact, muzzle-center and forward
+invariants, two-hand rotation order, close-range ray parallax and spread
+rotation through full and nearly antiparallel turns.
+These CPU checks do not prove rendered gun placement or comfort.
+
+Left-hand aiming uses the evaluated native muzzle origin and forward (+Y of
+the muzzle transform). The slot is observed from the native strategy in
+`0x10110EC0` (+0x40 context), qualified against the
+current weapon's graphic owner, skeleton and bone hash. **The inventory weapon
+component's +0x54 is not that slot.** No resource pointer at +0x40 is treated as
+a skeleton. Native shot spread is rotated from the camera basis onto the
+barrel; the reticle/scope reference ray is derived from the same world muzzle.
+Bullet strategies use their +0x54 effects slot. The exact supported Steam
+projectile strategy (vtable `0x10E25E08`) instead uses its native +0x180 launch
+slot, as `0x101998F0` does. On the RPG, the effects slot points backward from
+the rear of the tube; it must not drive projectile aim or spawn position.
+Left projectiles spawn from the evaluated launch locator, independently of a
+scope sight origin, and reject forced hit points behind the barrel. The aim
+query retains the native shooter-physics exclusion. Right-hand native origin
+behavior remains unchanged.
+
+The observed Steam LPO50 (`7b3ffc40`, eight bones) does not visit that effects
+updater at rest. Its unique authored muzzle (`af2676da`) can be resolved from
+the owned skeleton directly. That fallback rejects other model keys, counts
+and duplicate locators; it does not guess a muzzle for unknown item rigs.
+
+The close-range aim query starts 1 cm from the muzzle rather than skipping
+the first half metre. The observed Steam machete (`570988e9`, three bones)
+has an authored dummy_muzzle locator at slot 1 (`af2676da`) but no firearm
+effects updater. Its qualified blade locator supplies the reflection plane;
+the old unmirrored fallback is removed. It does not acquire firearm shot
+authority. Native machete placement matches the mirrored right-hand reference;
+physical comfort and melee acceptance still need testing.
+
+With `FreezeReload=1`, the left adapter retains the captured native mount for
+the owned entity, including when reload changes the parent bone or supplies an
+animated offset. It does not relearn that animation or its tail as the new rest.
+Non-reload nonzero holster offsets retain their native behavior. Blade motion
+history rebaselines after F1, weapon changes or tracking-context changes so a
+hand switch cannot synthesize a melee swing.
+
+The native runner's `-LeftWeapon` option enables a visual-only test fixture:
+physical left/right controller targets are generated for rendering, but never
+enter the XR input snapshot or receive controller action authority. Live VR
+buttons are excluded from that owned test, while native action-map gates and
+keyboard menu loading remain active. After a run
+with `-Enabled 1 -GrassFix -LeftWeapon`, run:
+
+```powershell
+python mod/tests/check_left_weapon_native.py <run directory>
+python mod/tests/test_left_weapon_native_rejections.py <run directory>
+```
+
+Add `-WeaponHandToggle` to the runner (with `-LeftWeapon`) for four real F1
+presses through the owned native probe. Then run
+`check_hand_switch_native.py` and `test_hand_switch_native_rejections.py` on
+the run directory. They check both physical wrists, both-eye attachment chains,
+restoration of the original right-hand offset, advancing layout/input
+generations and unchanged body-yaw heading/reference. Controller fixtures stay
+visual-only in both modes; no synthetic fire/reload is sent.
+
+`-MacheteComparison` selects the real blade with keyboard slot 1 and captures
+left/right/left presentation. Run `check_machete_native.py` afterward.
+`-ReloadAttachmentReplay` selects the observed RPG with slot 4 and replays
+displaced right-hand/camera-parent offsets on its owned attachment node. Run
+`check_reload_attachment_native.py` and `test_melee_reload_native_rejections.py`
+on a run containing both cases. This replay checks attachment drift/recovery;
+it does not exercise actual reload animation or model-internal root motion.
+These explicit fixtures and observations are absent from production.
+
+This checks actual Steam left/right bone readback against the weapon and
+reach-limited support targets and mirrored dominant-wrist orientation, plus
+attachment identity and gun world alignment after both eyes render. It also
+compares the published firing ray and reticle/scope reference ray with the
+actual rendered muzzle and barrel. Raw XR tracking/source stamps remain physical; the
+visual fixture and observation adapters are excluded from production.
+
+The initial controller-routing prototype loaded Continue, and physical testing
+confirmed left-controller weapon movement and right-controller support grip.
+That test also exposed swapped dialog buttons and crossed arms. A subsequent
+test confirmed the dialog fix but reported the gun outside the left palm and
+misses at close range. Reload was subsequently confirmed working, as was the
+physical X button. That run reported a rightward SMG angle, crossed map/radio
+arms and an offset right support hand. The current candidate corrects the item
+arm layout and support-wrist orientation; the SMG angle is still unconfirmed
+against original right-handed calibration. It requires a new physical test:
+
+1. Hold/move/rotate the left controller; verify the weapon follows it and aiming
+   remains aligned. Move the right controller independently.
+2. Left trigger fires; right trigger reloads without firing.
+3. For a two-handed weapon, bring the right hand to the foregrip and squeeze
+   its grip; check support, sights and release. Then try a pistol.
+4. Confirm left-stick movement, right-stick turning and physical body yaw.
+   Check that dialog confirmation still uses the original physical button,
+   the character's left hand holds the gun, and the arms do not cross.
+5. If available, compare SMG and RPG placement. Existing free-hand pose quirks
+   observed in right-handed play are not acceptance blockers for this step.
+6. Open the map and radio, move each controller independently, then return to
+   the gun. Check for crossed arms, correctly placed items and restored left
+   weapon holding. Check the SMG/machine-gun right support wrist while gripping
+   and after release. The user accepted the right support grip as good enough.
+7. Press F1 for left/right/left comparison. Confirm hand/weapon placement,
+   support grip, trigger fire/reload roles, unchanged sticks and face buttons.
+   Check that holding F1 does not repeat and changing hand with a trigger/grip
+   held requires release before firing, reload or a new foregrip grab.
+8. In each layout, use the weapon controller to grip over its matching shoulder
+   (primary/special), at its matching hip while pointing down (secondary), and
+   at centre chest (machete). Check the opposite shoulder/hip does not select
+   those weapons. Switch with F1, release controls to rearm, then repeat on the
+   other side. The user has accepted shoulder, hip and chest selection.
+9. Compare the corrected machete with F1 and perform intentional swings. Check
+   an actual left-handed RPG reload for drift; the owned replay cannot accept
+   the real reload animation. Left weapon fingers now reuse the matching native
+   right trigger-grip animation through paired digit hashes and parent chains.
+   Their mesh contact and comfort still need physical review.
+
+`-WeaponAudit` compares the four saved slots in left/right one- and two-handed
+presentation, then returns to left. `-AuditWeapons` optionally supplies up to
+29 explicitly named native developer weapon grants, for example:
+
+```powershell
+# Add to the usual owned native runner arguments:
+-LeftWeapon -WeaponAudit -AuditWeapons MAC10,M249_Saw,RPG7
+# Validate the resulting evidence:
+python mod/tests/check_weapon_audit_native.py <run> --count 3 --fingers --rpg-front
+python mod/tests/test_weapon_audit_rejections.py <run> --count 3 --fingers --rpg-front
+```
+
+The native helper accepts only the listed weapon commands and daylight setup,
+requires one focused game client, and captures command setup for inspection.
+It never sends fire, reload or save input. Inventory grants occur in a temporary
+loaded session; the runner restores the starting DLL, INI and profile.
+Command setup occupies a separate transition phase so console/item animation
+cannot be mistaken for an eligible weapon-grip readback.
+`-FreshHoldKeys <eight-digit model key>` clears only that hold/axis in the
+temporary test INI for a recapture comparison. The starting INI is restored.
+Duplicate selected model keys fail validation, so an unsuccessful weapon grant
+or wrong inventory slot cannot count as another covered asset. M1903 occupies
+the primary slot even though an old developer script labels it special.
+
+The finger observer compares evaluated engine bones against native right-digit
+poses in both eyes. The two thumb chains are ordered differently in the Steam
+skeleton; bone-index offsets are not valid pairing rules. Unknown/ambiguous
+hashes or changed parents reject retargeting. Projectile previews exercise
+native angle conversion, selected origins, forward/behind target decisions and
+shooter-filter lookup **without spawning projectiles**. They do not establish
+actual rocket flight, collisions or reload-animation acceptance. A successful
+mirror comparison also does not prove native calibration or controller comfort.
+
+Pending checks: IED/mortar handedness, DLC weapons, and broader weapon firing/reload coverage.
+
+Do not infer acceptance of vehicles, map/phone/monocular, throwing, climbing or
+holsters from the on-foot weapon test alone.

@@ -110,6 +110,7 @@ struct Config {
 // Per-frame data from the render thread. "ref" = the recentred tracking frame (x right, y up, -z forward),
 // scaled to game units; game is the exact effective frame also used by the eyes.
 struct Frame {
+    uint64_t handLayout=0;
     fc2vr::body_yaw::Sample bodyYaw{};
 #if defined(FC2VR_BODY_YAW_TESTING)
     bool bodyYawFixture=false;
@@ -122,12 +123,12 @@ struct Frame {
     uint64_t frameSequence = 0;   // diagnostic application-frame stamp, not a freshness lease
     float bonePub[3] = {}; bool bonePubValid = false; bool bonePubRoot = false;   // v232: bonePub is the seat (skeleton world position) of the drawn update   // v231: the Camera bone when this frame was published (body clock)
     float camRows[3][3];          // RAW native camera rows (incl. pitch): bone-axis calibration only
-    float aimO[3], aimR[3], aimU[3], aimB[3];   // right controller aim pose (ref)
-    float gripO[3];               // right controller grip position (ref)
+    float aimO[3], aimR[3], aimU[3], aimB[3];   // weapon-role controller aim pose (ref)
+    float gripO[3];               // weapon-role controller grip position (ref)
     bool leftValid = false, twoHand = false, headValid = false;
     float lSqueeze = 0, rSqueeze = 0;
     bool machete = false, map = false;   // machete in hand; map/GPS out
-    float laimO[3], laimR[3], laimU[3], laimB[3], lgripO[3];   // left controller (ref)
+    float laimO[3], laimR[3], laimU[3], laimB[3], lgripO[3];   // support-role controller (ref)
     float headO[3], headF[3];     // head position and forward (ref)
 };
 typedef bool (*PatchFn)(uintptr_t target, const uint8_t* expect, size_t n, void* hook, void** tramp);
@@ -135,6 +136,12 @@ void Install(uintptr_t base, const Config& c, PatchFn patch);
 void SetWeaponKey(uint32_t k);     // current weapon type id (HUD reticle element name), 0 = unknown
 void SetIniPath(const char* p);    // fc2vr.ini: saved weapon holds [Holds]
 void SubmitFrame(const Frame& f);
+// Render thread only. 1=changed, 0=retry (reader/interaction busy), -1=unsupported.
+int TryToggleWeaponHand();
+#if defined(FC2VR_BODY_YAW_TESTING)
+void ObserveLeftWeapon(int eye); // native readback after engine eye rendering
+bool FixtureBladeEquipped();
+#endif
 // Observation only: these stamps do not grant freshness or pose authority.
 struct FrameUsage {
     bool haveApplied = false, haveInteraction = false;

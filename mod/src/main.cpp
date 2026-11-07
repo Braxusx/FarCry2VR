@@ -26,6 +26,8 @@
 #include "hang.h"
 #include "dlss_fc2.h"
 #include "body_yaw_fixture.h"
+#include "common/hand_roles.h"
+#include "common/hand_switch.h"
 #include "grass_facing_dx10.h"
 namespace sounddiag { void Tick(); }
 #include "afw_fc2.h"
@@ -135,6 +137,7 @@ static float IniF(const char* k, float def) {
     return (float)atof(buf);
 }
 static void LoadConfig() {
+    fc2vr::hands::Configure(IniF("LeftHandedWeapon",0)!=0);
     grass_facing::Configure(IniF("GrassHeadYawFix",0)!=0);
     g_cfg.enable     = (int)IniF("Enable", 1);
     g_cfg.worldScale = IniF("WorldScale", 1.0f);
@@ -1360,6 +1363,9 @@ static char __fastcall Hook_ConsoleCmd(void* self, void* edx, uint8_t* str) {
     if (self && str) {
         const char* s = *(uint32_t*)(str + 0x18) < 0x10 ? (const char*)(str + 4) : *(const char**)(str + 4);
         if (s) {
+#if defined(FC2VR_BODY_YAW_TESTING)
+            if(body_yaw_fixture::current.configured)LOG("audit-console command=%s",s);
+#endif
             if (!_stricmp(s, "devmodeon")) { *((uint8_t*)self + 0x68) = 1; LOG("console: dev mode on"); }
             else if (!_stricmp(s, "devmodeoff")) { *((uint8_t*)self + 0x68) = 0; LOG("console: dev mode off"); }
             else if (g_cfg.devConsole >= 2) *((uint8_t*)self + 0x68) = 1;
@@ -2685,6 +2691,10 @@ static void EuroUpdate(EuroPose& e, XrPosef& pose, float dt, bool valid) {
     pose.position = { e.p.x, e.p.y, e.p.z }; pose.orientation = e.q;
 }
 static xr::HandState SmoothHand(int side, XrTime t) {
+#if defined(FC2VR_BODY_YAW_TESTING)
+    xr::HandState visual;
+    if(body_yaw_fixture::VisualHand(side,visual))return visual;
+#endif
     static EuroPose eg[2], ea[2]; static XrTime last[2] = { 0, 0 };
     xr::HandState h = xr::Hand(side);
     float dt = last[side] ? (float)((double)(t - last[side]) * 1e-9) : 0; last[side] = t;
@@ -2703,15 +2713,20 @@ static xr::HandState SmoothHand(int side, XrTime t) {
     return h;
 }
 static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFrame& frame) {
+    fc2vr::hands::ReadGuard handLayout;
     const float s = frame.worldScale;
     TurnMenu();
     MacheteMenu(fv);
     {   // controller pose for the arms/weapon and shots (game thread reads it)
-        arms::Frame af; const xr::HandState rh = SmoothHand(1, fv.displayTime);
+        arms::Frame af; af.handLayout=fc2vr::hands::Generation();
+        const xr::HandState rh = SmoothHand(fc2vr::hands::Weapon(), fv.displayTime);
         xr::HandState physical[2]; XrPosef inputHead; bool inputHeadValid = false;
         const bool inputCurrent = xr::InputSnapshot(physical,inputHead,inputHeadValid,&af.source);
-        af.handAuthority = inputCurrent && physical[1].gripValid && physical[1].aimValid;
-        af.leftAuthority = inputCurrent && physical[0].gripValid && physical[0].aimValid;
+        af.handAuthority = inputCurrent && physical[fc2vr::hands::Weapon()].gripValid && physical[fc2vr::hands::Weapon()].aimValid;
+        af.leftAuthority = inputCurrent && physical[fc2vr::hands::Support()].gripValid && physical[fc2vr::hands::Support()].aimValid;
+#if defined(FC2VR_BODY_YAW_TESTING)
+        if(body_yaw_fixture::current.configured){af.handAuthority=false;af.leftAuthority=false;}
+#endif
         af.headAuthority = inputCurrent && inputHeadValid;
         af.weapon = arms::CurrentWeapon();
         af.valid = true; af.handValid = rh.aimValid && rh.gripValid;
@@ -2773,10 +2788,15 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             put(af.aimB, frame.ReferenceDirection(QRot(rh.aim.orientation, { 0, 0, 1 })));
             put(af.gripO, frame.ReferencePosition(ToV3(rh.grip.position)));
         }
-        const xr::HandState lh = SmoothHand(0, fv.displayTime);
+        const xr::HandState lh = SmoothHand(fc2vr::hands::Support(), fv.displayTime);
         af.leftValid = lh.aimValid && lh.gripValid;
         af.lSqueeze = af.leftAuthority ? lh.squeeze : 0; af.rSqueeze = af.handAuthority ? rh.squeeze : 0;
         af.machete = controls::MacheteSelected(); af.map = controls::MapOpen();
+#if defined(FC2VR_BODY_YAW_TESTING)
+        // The owned runner selects the real blade with a keyboard slot. Its
+        // visual-only controller fixture does not run the gamepad slot tracker.
+        if(body_yaw_fixture::current.configured)af.machete=arms::FixtureBladeEquipped();
+#endif
         if (af.leftValid) {
             put(af.laimO, frame.ReferencePosition(ToV3(lh.aim.position)));
             put(af.laimR, frame.ReferenceDirection(QRot(lh.aim.orientation, { 1, 0, 0 })));
@@ -2806,7 +2826,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
         // faces) at this moment is added to MacheteAngle / MacheteYaw and saved, so the pose you hold becomes the default
         if (g_macheteCalAt > 0) {   // countdown: a tick on the right controller each second
             static int lastTick = -1; double left = g_macheteCalAt - NowMs(); int tick = (int)ceil(left / 1000.0);
-            if (left > 0 && tick != lastTick) { lastTick = tick; xr::Haptic(1, 0.3f, 0.05f); }
+            if (left > 0 && tick != lastTick) { lastTick = tick; xr::Haptic(fc2vr::hands::Weapon(), 0.3f, 0.05f); }
         }
         if (g_macheteCalAt > 0 && NowMs() >= g_macheteCalAt) {
             g_macheteCalAt = 0;
@@ -2821,7 +2841,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
                 snprintf(v, sizeof v, "%.0f", a1); WritePrivateProfileStringA("VR", "MacheteAngle", v, path);
                 snprintf(v, sizeof v, "%.0f", y1); WritePrivateProfileStringA("VR", "MacheteYaw", v, path);
                 LOG("machete pose set: controller tilt %.1f up, %.1f inward -> MacheteAngle %.0f (was %.0f), MacheteYaw %.0f (was %.0f), saved", pitch, yaw, a1, a0, y1, y0);
-                xr::Haptic(1, 0.7f, 0.15f);
+                xr::Haptic(fc2vr::hands::Weapon(), 0.7f, 0.15f);
             } else LOG("machete pose: ignored (machete not in the right hand)");
         }
         // two-handed grip: left grip pressed with the left hand near the weapon's foregrip (or the pistol grip)
@@ -2838,7 +2858,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             if (g && !gripDown && af.handAuthority && af.leftAuthority && arms::Foregrip(fg, oneH)) {
                 V3 d = V3{ af.lgripO[0] - fg[0], af.lgripO[1] - fg[1], af.lgripO[2] - fg[2] };
                 float dist = sqrtf(Dot(d, d));
-                if (dist < g_cfg.grabDistance * s) { grabbing = true; xr::Haptic(0, 0.5f, 0.05f); LOG("arms: two-handed grip (%s, %.2f m, hand span %.2f)", oneH ? "pistol" : "rifle", dist / s, arms::LastHandSpan()); }
+                if (dist < g_cfg.grabDistance * s) { grabbing = true; xr::Haptic(fc2vr::hands::Support(), 0.5f, 0.05f); LOG("arms: two-handed grip (%s, %.2f m, hand span %.2f)", oneH ? "pistol" : "rifle", dist / s, arms::LastHandSpan()); }
                 else LOG("arms: left grip %.2f m from the weapon (span %.2f, %s): not grabbing", dist / s, arms::LastHandSpan(), oneH ? "pistol" : "rifle");
             }
             if (!g) grabbing = false;
@@ -2846,9 +2866,27 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             af.twoHand = grabbing;
             controls::SetLeftGripClaimed(grabbing); g_twoHandGrip = grabbing;
         }
+#if defined(FC2VR_BODY_YAW_TESTING)
+        if(body_yaw_fixture::current.configured){const auto phase=body_yaw_fixture::current.sequence/100000;if(phase>=30 && phase<180){const auto stage=(phase-30)%5;af.twoHand=stage==2 || stage==3;}}
+#endif
         arms::SubmitFrame(af);
     }
 
+}
+
+static void WeaponHandHotkey() {
+    static fc2vr::hands::ToggleKey key;
+    static bool waitingToast=false;
+    DWORD foreground=0;GetWindowThreadProcessId(GetForegroundWindow(),&foreground);
+    const bool plain=!(GetAsyncKeyState(VK_CONTROL)&0x8000) && !(GetAsyncKeyState(VK_SHIFT)&0x8000) && !(GetAsyncKeyState(VK_MENU)&0x8000);
+    key.Poll((GetAsyncKeyState(VK_F1)&0x8000)!=0,foreground==GetCurrentProcessId() && plain);
+    if(!key.pending){waitingToast=false;return;}
+    const int result=arms::TryToggleWeaponHand();
+    if(result==0){if(!waitingToast){ShowToast("Hand switch queued: finish reload / release held objects");waitingToast=true;}return;}
+    key.Complete();waitingToast=false;
+    if(result<0){ShowToast("Weapon hand switch unavailable for this game build");return;}
+    g_scopeOn=false;g_twoHandGrip=false;g_macheteCalAt=0;
+    ShowToast(fc2vr::hands::leftHanded?"Weapon hand: LEFT (F1)":"Weapon hand: RIGHT (F1)");
 }
 
 static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4,
@@ -2926,6 +2964,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         head.position.z = 0.5f * (fv.views[0].pose.position.z + fv.views[1].pose.position.z);
         if (!g_ref.valid) { DoRecenter(head); g_refYTime = NowMs(); }
         Hotkeys(&head);
+        WeaponHandHotkey();
         {   // v222: recenter from the controllers - "Recentering 3, 2, 1" in front of the player, then the recenter
             static double rcAt = 0; static int rcShown = 0;
             if (controls::TakeRecenterRequest() && rcAt == 0) { rcAt = NowMs(); rcShown = 0; }
@@ -3284,6 +3323,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 g_inEye = false; g_uiEye = -1; g_renderEye = -1;
 #if defined(FC2VR_BODY_YAW_TESTING)
                 if(body_yaw_fixture::current.configured){
+                    arms::ObserveLeftWeapon(e);
                     const auto& test=body_yaw_fixture::current;float position[3]{},heading=0,base=0,transfer=0;uint64_t reference=0;
                     const bool have=arms::PlayerState(position,&heading);
                     arms::BodyYawBasis(0,false,base,transfer,reference);

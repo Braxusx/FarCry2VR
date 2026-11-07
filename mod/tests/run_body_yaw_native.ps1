@@ -7,11 +7,20 @@ param(
     [ValidateSet(0,1)][int]$Enabled=1,
     [switch]$GrassFix,
     [switch]$GrassMotion,
-    [switch]$BodyOnly
+    [switch]$BodyOnly,
+    [switch]$LeftWeapon,
+    [switch]$WeaponHandToggle,
+    [switch]$MacheteComparison,
+    [switch]$ReloadAttachmentReplay,
+    [switch]$WeaponAudit,
+    [ValidateSet('Machete','Flare_Gun','PKM','M249_Saw','Mortar','Dart_Rifle','M1903','Carl_Gustaf','RPG7','LPO50','FNFAL','AK47','G3KA4','MP5','AS50','SPAS12','MGL140','Ithaca','USAS12','M16','Dragunov','SilencedMakarov_6P9','DesertEagle','Makarov','MAC10','Star45','M79','Uzi','IED')][string[]]$AuditWeapons=@(),
+    [ValidatePattern('^[0-9A-Fa-f]{8}$')][string[]]$FreshHoldKeys=@()
 )
 # Owned, bounded native test. Supply the existing source-built trial manifest.
 # Does not patch original game binaries or send save commands. Restores DLL/settings.
 $ErrorActionPreference='Stop'
+if($AuditWeapons.Count -and (!$WeaponAudit -or $AuditWeapons.Count -gt 29)){throw 'AuditWeapons requires WeaponAudit with at most 29 weapon grants'}
+if($FreshHoldKeys.Count -gt 29){throw 'At most 29 explicit test hold resets are allowed'}
 if(Get-Process FarCry2,FarCry2VR -ErrorAction SilentlyContinue){throw 'Game already running'}
 $trial=Get-Content -LiteralPath $Manifest -Raw | ConvertFrom-Json
 foreach($binary in $trial.original_binaries){if((Get-FileHash -LiteralPath $binary.path).Hash -ne $binary.sha256){throw "Original binary changed: $($binary.path)"}}
@@ -39,6 +48,16 @@ try{
     $config=[IO.File]::ReadAllText($ini)
     $config=[regex]::Replace($config,'(?m)^HeadsetBodyYaw=.*\r?\n?','')
     $config=$config.Replace('[VR]',"[VR]`r`nHeadsetBodyYaw=$Enabled")
+    $config=[regex]::Replace($config,'(?m)^LeftHandedWeapon=.*\r?\n?','')
+    $config=$config.Replace('[VR]',("[VR]`r`nLeftHandedWeapon="+[int][bool]$LeftWeapon))
+    if($AuditWeapons.Count){
+        $config=[regex]::Replace($config,'(?m)^DevConsole=.*\r?\n?','')
+        $config=$config.Replace('[VR]',"[VR]`r`nDevConsole=2")
+    }
+    foreach($key in $FreshHoldKeys){
+        # Test-only recapture comparison. The starting INI is restored in finally.
+        $config=[regex]::Replace($config,('(?im)^[HA]'+$key+'=.*\r?\n?'),'')
+    }
     if($BodyOnly){
         foreach($key in @('WeaponInHand','AimFromController','DumpSkeleton')){
             $config=[regex]::Replace($config,('(?m)^'+$key+'=.*\r?\n?'),'')
@@ -114,6 +133,104 @@ try{
         Set-Phase 16 continuousHeadTurn 0 0 0 1 1 2;Start-Sleep -Seconds 8
     }
     if($writer.HasExited){throw 'Pose writer exited during test'}
+    if($LeftWeapon){Set-Phase 17 palmInspection 0 0 0 1 1 2;Start-Sleep -Seconds 3}
+    if($WeaponHandToggle){
+        if(!$LeftWeapon){throw 'WeaponHandToggle run requires LeftWeapon as its initial checkpoint'}
+        $expectedLeft=1
+        foreach($phase in @(18,19,20,21)){
+            $expectedLeft=1-$expectedLeft
+            Set-Phase $phase ('handToggle'+$expectedLeft) 0 0 0 1 1 2
+            $before=@(Get-Content -LiteralPath $log|Select-String 'weapon-hand changed left=').Count
+            $identity=& $Probe --inspect-game-focus|ConvertFrom-Json
+            if($identity.pid -ne $gamePid){throw 'Toggle probe selected another process'}
+            & $Probe --weapon-hand-toggle
+            if($LASTEXITCODE -ne 0){throw 'F1 probe failed'}
+            $until=[DateTime]::UtcNow.AddSeconds(15)
+            do{
+                $events=@(Get-Content -LiteralPath $log|Select-String 'weapon-hand changed left=')
+                if($events.Count -gt $before){break}
+                Start-Sleep -Milliseconds 100
+            }while([DateTime]::UtcNow -lt $until)
+            if($events.Count -ne $before+1 -or $events[-1] -notmatch "weapon-hand changed left=$expectedLeft "){throw 'F1 did not produce exactly one expected hand transition'}
+            Start-Sleep -Seconds 3
+            & $Probe --capture-window "$out/hand-$phase.png" *> "$out/capture-$phase.log"
+        }
+    }
+    if($MacheteComparison){
+        if(!$LeftWeapon){throw 'MacheteComparison requires left-handed startup'}
+        & $Probe --weapon-slot 1
+        if($LASTEXITCODE){throw 'Blade selection key failed'}
+        Set-Phase 22 macheteLeft 0 0 0 1 1 2;Start-Sleep -Seconds 6
+        & $Probe --capture-window "$out/machete-left.png" *> "$out/machete-left-capture.log"
+        Set-Phase 23 macheteRight 0 0 0 1 1 2
+        & $Probe --weapon-hand-toggle
+        if($LASTEXITCODE){throw 'Blade right comparison F1 failed'}
+        Start-Sleep -Seconds 4
+        & $Probe --capture-window "$out/machete-right.png" *> "$out/machete-right-capture.log"
+        Set-Phase 24 macheteLeftReturn 0 0 0 1 1 2
+        & $Probe --weapon-hand-toggle
+        if($LASTEXITCODE){throw 'Blade left return F1 failed'}
+        Start-Sleep -Seconds 4
+        & $Probe --capture-window "$out/machete-left-return.png" *> "$out/machete-left-return-capture.log"
+    }
+    if($ReloadAttachmentReplay){
+        if(!$LeftWeapon){throw 'ReloadAttachmentReplay requires left-handed startup'}
+        Set-Phase 25 rpgNativeRest 0 0 0 1 1 2
+        & $Probe --weapon-slot 4
+        if($LASTEXITCODE){throw 'Special weapon selection key failed'}
+        Start-Sleep -Seconds 6
+        Set-Phase 26 rpgRightParentReload 0 0 0 1 1 2;Start-Sleep -Seconds 4
+        & $Probe --capture-window "$out/rpg-reload-right-parent.png" *> "$out/rpg-capture-26.log"
+        Set-Phase 27 rpgCameraParentReload 0 0 0 1 1 2;Start-Sleep -Seconds 4
+        & $Probe --capture-window "$out/rpg-reload-camera-parent.png" *> "$out/rpg-capture-27.log"
+        Set-Phase 28 rpgAfterReload 0 0 0 1 1 2;Start-Sleep -Seconds 4
+    }
+    if($WeaponAudit){
+        if(!$LeftWeapon){throw 'WeaponAudit requires left-handed startup'}
+        $entries=@(1,2,3,4)
+        if($AuditWeapons.Count){
+            Set-Phase 29 weaponAuditDaylightSetup 0 0 0 1 1 2
+            $identity=& $Probe --inspect-game-focus|ConvertFrom-Json
+            if($identity.pid -ne $gamePid){throw 'Console probe selected another process'}
+            & $Probe --audit-console 'env_hour 12' "$out/console-daylight"
+            if($LASTEXITCODE){throw 'Audit daylight command failed'}
+            $entries=@($AuditWeapons)
+        }
+        $entryIndex=0
+        foreach($entry in $entries){
+            ++$entryIndex
+            $slot=$entry
+            if($AuditWeapons.Count){
+                $slot=3
+                if($entry -eq 'Machete'){$slot=1}
+                elseif($entry -in @('SilencedMakarov_6P9','DesertEagle','Makarov','MAC10','Star45','M79','Uzi','IED')){$slot=2}
+                elseif($entry -in @('Flare_Gun','PKM','M249_Saw','Mortar','Dart_Rifle','Carl_Gustaf','RPG7','LPO50')){$slot=4}
+            }
+            for($stage=0;$stage -lt 5;$stage++){
+                $phase=30+($entryIndex-1)*5+$stage
+                if($stage -eq 0){Set-Phase 29 ("weaponAuditChanging${entry}") 0 0 0 1 1 2}
+                else{Set-Phase $phase ("weaponAudit${entry}Stage${stage}") 0 0 0 1 1 2}
+                $identity=& $Probe --inspect-game-focus|ConvertFrom-Json
+                if($identity.pid -ne $gamePid){throw 'Audit probe selected another process'}
+                if($stage -eq 0){
+                    if($AuditWeapons.Count){
+                        & $Probe --audit-console ("domino_"+$entry) "$out/console-$entry"
+                        if($LASTEXITCODE){throw "Audit weapon grant key failed: $entry"}
+                    }
+                    & $Probe --weapon-slot $slot
+                    if($LASTEXITCODE){throw 'Audit weapon slot key failed'}
+                    Set-Phase $phase ("weaponAudit${entry}Stage${stage}") 0 0 0 1 1 2
+                    Start-Sleep -Seconds 6
+                }
+                else{
+                    & $Probe --weapon-hand-toggle
+                    if($LASTEXITCODE){throw 'Audit F1 failed'}
+                    Start-Sleep -Seconds 4
+                }
+                & $Probe --capture-window "$out/audit-$entryIndex-$stage.png" *> "$out/audit-$entryIndex-$stage-capture.log"
+            }
+        }
+    }
     & $Probe --capture-window "$out/final.png" *> "$out/capture.log"
     'Native run completed; trace assertions still required.' | Set-Content "$out/run-completed.txt"
 }finally{

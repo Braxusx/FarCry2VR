@@ -427,6 +427,7 @@ static void InvalidateInput(const char* reason, bool clearPoses = false) {
     if (wasCurrent) LOG("XR: input authority invalidated (%s)", reason);
 }
 void InvalidateForRecenter() { InvalidateInput("recenter"); }
+void InvalidateForHandChange() { InvalidateInput("weapon hand changed"); }
 InputStamp CurrentInputStamp() {
     EnterCriticalSection(&g_inCs); const InputStamp stamp = g_stamp; LeaveCriticalSection(&g_inCs); return stamp;
 }
