@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "dlss_fc2.h"
+#include "xr.h"
 #include "dlss_client.h"
 #include "log.h"
 
@@ -62,6 +63,7 @@ struct Eye10 {
     ID3D10Texture2D* out[3] = {}; ID3D10RenderTargetView* rtv[3] = {}; HANDLE shared[3] = {};
     ID3D11Texture2D* out11[3] = {};   // opened on the D3D11 device
     bool fresh = false, reset = true; float jx = 0, jy = 0;
+    bool handover = false;   // v234 test 66: guides are keyed-mutex hand-over textures (no CPU wait for the GPU)
 };
 Eye10 g_e[2];
 ID3D10VertexShader* g_vs = nullptr; ID3D10PixelShader* g_ps = nullptr; ID3D10Buffer* g_cb = nullptr;
@@ -135,8 +137,8 @@ bool DepthProbe(ID3D10Device* dev, ID3D10Texture2D* src, float* lo, float* hi, b
 }
 void Release10(Eye10& e) {
     Rel(e.depthSrv); Rel(e.depthCopy);
-    for (int i = 0; i < 3; ++i) { Rel(e.rtv[i]); Rel(e.out[i]); Rel(e.out11[i]); e.shared[i] = nullptr; }
-    e.w = e.h = 0;
+    for (int i = 0; i < 3; ++i) { Rel(e.rtv[i]); if (e.handover) xr::ReleaseHandoverTexture(e.out[i]); Rel(e.out[i]); Rel(e.out11[i]); e.shared[i] = nullptr; }
+    e.w = e.h = 0; e.handover = false;
 }
 bool Ensure10(ID3D10Device* dev, Eye10& e, ID3D10Texture2D* depth) {
     D3D10_TEXTURE2D_DESC dd; depth->GetDesc(&dd);
@@ -150,6 +152,13 @@ bool Ensure10(ID3D10Device* dev, Eye10& e, ID3D10Texture2D* depth) {
     D3D10_SHADER_RESOURCE_VIEW_DESC sv = {}; sv.Format = sf; sv.ViewDimension = D3D10_SRV_DIMENSION_TEXTURE2D; sv.Texture2D.MipLevels = 1;
     if (FAILED(dev->CreateShaderResourceView(e.depthCopy, &sv, &e.depthSrv))) { LOG("dlss: depth SRV failed"); return false; }
     static const DXGI_FORMAT fm[3] = { DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R8_UNORM };
+    {   // v234 test 66: keyed-mutex hand-over textures from the XR module, so DLSS frames need no CPU wait for the GPU
+        bool ok = true;
+        for (int i = 0; i < 3 && ok; ++i) ok = xr::CreateHandoverTexture(dd.Width, dd.Height, fm[i], &e.out[i], &e.out11[i]) && SUCCEEDED(dev->CreateRenderTargetView(e.out[i], nullptr, &e.rtv[i]));
+        if (ok) { e.handover = true; e.w = dd.Width; e.h = dd.Height; e.depthFmt = dd.Format; e.reset = true; LOG("dlss: guides are hand-over textures (no CPU wait)"); return true; }
+        for (int i = 0; i < 3; ++i) { Rel(e.rtv[i]); xr::ReleaseHandoverTexture(e.out[i]); Rel(e.out[i]); Rel(e.out11[i]); }
+        LOG("dlss: hand-over guide textures unavailable - plain shared guides, the render thread waits for the GPU");
+    }
     for (int i = 0; i < 3; ++i) {
         D3D10_TEXTURE2D_DESC o = {}; o.Width = dd.Width; o.Height = dd.Height; o.MipLevels = 1; o.ArraySize = 1; o.Format = fm[i];
         o.SampleDesc.Count = 1; o.Usage = D3D10_USAGE_DEFAULT; o.BindFlags = D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE; o.MiscFlags = D3D10_RESOURCE_MISC_SHARED;
@@ -266,6 +275,7 @@ void Configure(const Config& c, const char* binDir) {
 }
 bool Wanted() { return g_on && !g_failed; }
 bool Active() { return Wanted() && g_started && g_client.running(); }
+bool GuidesHandover() { for (auto& e : g_e) if (e.w && !e.handover) return false; return true; }
 void Toggle() {
     if (g_failed) { LOG("dlss: unavailable (see the earlier lines)"); return; }
     g_on = !g_on; g_e[0].reset = g_e[1].reset = true;

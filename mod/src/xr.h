@@ -44,7 +44,11 @@ void SetEyeRect(int e, int x, int y, int w, int h);
 // show instead of it (same size and format family), or null for the eye image itself.
 typedef ID3D11Texture2D* (*EyeFilter)(ID3D11Device* dev, ID3D11DeviceContext* ctx, int eye, ID3D11Texture2D* eyeImage);
 void SetEyeFilter(EyeFilter f);
-void SetPlainSharing(bool on);   // v234 test 64: DLSS / AFW pass plain shared textures this frame (the render thread waits for the GPU)
+void SetPlainSharing(bool on);
+// v234 test 66: a texture made with a keyed mutex that the game's device writes each frame and ours reads, handed over
+// with the eye images (the caller gets its own reference to both; ReleaseHandoverTexture drops ours)
+bool CreateHandoverTexture(UINT w, UINT h, DXGI_FORMAT fmt, ID3D10Texture2D** t10, ID3D11Texture2D** t11);
+void ReleaseHandoverTexture(ID3D10Texture2D* t10);   // v234 test 64: DLSS / AFW pass plain shared textures this frame (the render thread waits for the GPU)
 // AFW with DLSS: copy each filtered (DLSS) result back into the eye's shared texture, so the game device can rebuild
 // that eye from what it showed. EyeTexture10: that texture on the game's device; WaitEyeCopies before reading it.
 void SetCopyBack(bool on);

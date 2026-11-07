@@ -249,8 +249,7 @@ static bool CreateSharedPlain(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt) {
 // between the two devices (test 54-56 used one separate 1x1 keyed-mutex texture as a fence; drivers only order the
 // resource the mutex belongs to, and a slower GPU showed the right eye - written last - from an unfinished frame).
 // Made on our D3D11 device and opened on the game's D3D10 device (the order that works; needs the DXGI 1.1 factory).
-static bool CreateShared(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt) {
-    if (!g_evt10) { D3D10_QUERY_DESC qd{ D3D10_QUERY_EVENT, 0 }; g_dev10->CreateQuery(&qd, &g_evt10); }
+static bool CreateSharedKM(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt, const char** stepOut, HRESULT* hrOut) {
     const char* step = "D3D11 CreateTexture2D"; HANDLE sh = nullptr;
     D3D11_TEXTURE2D_DESC td{}; td.Width = w; td.Height = h; td.MipLevels = td.ArraySize = 1; td.Format = fmt;
     td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
@@ -262,10 +261,19 @@ static bool CreateShared(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt) {
     if (SUCCEEDED(hr) && s.km10) hr = s.tex11->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&s.km11);
     if (SUCCEEDED(hr) && s.km11) { step = "first AcquireSync"; hr = s.km10->AcquireSync(0, 100); }
     if (hr == S_OK) { s.held10 = true; return true; }
+    *stepOut = step; *hrOut = hr; ReleaseShared(s); return false;
+}
+static bool CreateShared(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt) {
+    if (!g_evt10) { D3D10_QUERY_DESC qd{ D3D10_QUERY_EVENT, 0 }; g_dev10->CreateQuery(&qd, &g_evt10); }
+    const char* step = ""; HRESULT hr = S_OK;
+    if (CreateSharedKM(s, w, h, fmt, &step, &hr)) return true;
     LOG("XR: keyed-mutex shared texture %ux%u fmt %d failed (%s hr=%08lx) - plain shared texture, the render thread waits for the GPU", w, h, (int)fmt, step, (unsigned long)hr);
-    ReleaseShared(s); g_kmOk = false;
+    g_kmOk = false;
     return CreateSharedPlain(s, w, h, fmt);
 }
+// v234 test 66: extra keyed-mutex textures other modules hand from the game's device to ours each frame (the DLSS
+// guides: depth, motion vectors, near-pass mask per eye); they join the same hand-over as g_shared
+static Shared g_extra[8];
 
 // Make the D3D10 copies visible to D3D11: flush the game device and wait for its GPU work to finish.
 static void Sync10Wait() {
@@ -286,12 +294,13 @@ static bool g_gpuHandover = false;   // ini EndFrameWait=0
 static double g_hoMs = 0, g_hoMax = 0; static int g_hoN = 0; static bool g_hoLastGpu = false;
 static EyeFilter g_eyeFilter = nullptr; static bool g_copyBack = false, g_plainSharing = false;
 // after our D3D11 work on the shared textures: give them back to D3D10
+template <class F> static void ForAllShared(F f) { for (Shared& s : g_shared) f(s); for (Shared& s : g_extra) f(s); }
 static void HandoverDone() {
-    for (Shared& s : g_shared) if (s.km11 && s.held11) { s.km11->ReleaseSync(0); s.held11 = false; }
-    for (Shared& s : g_shared) if (s.km10 && !s.held10) {
+    ForAllShared([](Shared& s) { if (s.km11 && s.held11) { s.km11->ReleaseSync(0); s.held11 = false; } });
+    ForAllShared([](Shared& s) { if (s.km10 && !s.held10) {
         if (s.km10->AcquireSync(0, 100) == S_OK) s.held10 = true;
         else LOG("XR: handover: D3D10 could not take a shared texture back");
-    }
+    } });
 }
 static void Sync10() {
     HandoverDone();
@@ -299,13 +308,13 @@ static void Sync10() {
     // DLSS / AFW move more textures between the devices (plain shared ones): those still need the GPU to be done
     const bool wait = !g_gpuHandover || !g_kmOk || g_plainSharing || g_copyBack;
     if (wait) Sync10Wait(); else g_dev10->Flush();
-    for (Shared& s : g_shared) if (s.km10 && s.held10) { s.km10->ReleaseSync(1); s.held10 = false; }
+    ForAllShared([](Shared& s) { if (s.km10 && s.held10) { s.km10->ReleaseSync(1); s.held10 = false; } });
     g_dev10->Flush();
-    for (Shared& s : g_shared) if (s.km11 && !s.held11) {
+    ForAllShared([](Shared& s) { if (s.km11 && !s.held11) {
         HRESULT hr = s.km11->AcquireSync(1, 100);
         if (hr == S_OK) s.held11 = true;
         else { static int n = 0; if (n++ < 5) LOG("XR: handover: D3D11 acquire hr=%08lx", (unsigned long)hr); }
-    }
+    } });
     double d = QpcMs() - t0; g_hoMs += d; if (d > g_hoMax) g_hoMax = d; ++g_hoN; g_hoLastGpu = !wait;
 }
 
@@ -618,6 +627,7 @@ void Haptic(int side, float amplitude, float seconds, float frequency) {
 static void Teardown() {
     InvalidateInput("teardown",true); g_referenceChanges.clear(); ++g_spaceGeneration;
     for (int i = 0; i < 5; ++i) ReleaseShared(g_shared[i]);
+    for (Shared& e : g_extra) ReleaseShared(e);
     g_hud = Chain{}; g_ret = Chain{}; g_dot = Chain{}; SafeRelease(g_dotTex); g_menu = Chain{}; SafeRelease(g_menuTex); g_ammo = Chain{}; SafeRelease(g_ammoTex); g_wammo = Chain{}; SafeRelease(g_wammoTex); g_gren = Chain{}; SafeRelease(g_grenTex); g_clk = Chain{}; SafeRelease(g_clkTex); g_hp = Chain{}; SafeRelease(g_hpTex); g_vig = Chain{}; SafeRelease(g_vigTex); SafeRelease(g_vigPlainTex); SafeRelease(g_vigMonoTex[0]); SafeRelease(g_vigMonoTex[1]);
     g_eye[0] = Chain{}; g_eye[1] = Chain{}; g_screen = Chain{};
     if (g_inst && p_xrDestroyInstance) p_xrDestroyInstance(g_inst);   // also destroys session/space/swapchains
@@ -1483,5 +1493,23 @@ bool HandoverStats(double& avgMs, double& maxMs, int& frames, bool& gpu) {
     if (!g_hoN) return false;
     avgMs = g_hoMs / g_hoN; maxMs = g_hoMax; frames = g_hoN; gpu = g_hoLastGpu;
     g_hoMs = g_hoMax = 0; g_hoN = 0; return true;
+}
+}
+
+namespace xr {
+bool CreateHandoverTexture(UINT w, UINT h, DXGI_FORMAT fmt, ID3D10Texture2D** t10, ID3D11Texture2D** t11) {
+    *t10 = nullptr; *t11 = nullptr;
+    if (!g_dev10 || !g_dev11) return false;
+    for (Shared& s : g_extra) if (!s.tex10 && !s.tex11) {
+        const char* step = ""; HRESULT hr = S_OK;
+        if (!CreateSharedKM(s, w, h, fmt, &step, &hr)) { LOG("XR: hand-over texture %ux%u fmt %d failed (%s hr=%08lx)", w, h, (int)fmt, step, (unsigned long)hr); return false; }
+        s.tex10->AddRef(); s.tex11->AddRef(); *t10 = s.tex10; *t11 = s.tex11;
+        return true;
+    }
+    LOG("XR: no free hand-over texture slot"); return false;
+}
+void ReleaseHandoverTexture(ID3D10Texture2D* t10) {
+    if (!t10) return;
+    for (Shared& s : g_extra) if (s.tex10 == t10) { ReleaseShared(s); return; }
 }
 }

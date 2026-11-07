@@ -36,6 +36,7 @@ struct Config {
 };
 void Configure(const Config& c, const char* binDir);
 bool Wanted();               // enabled and not failed (main jitters the projection only then)
+bool GuidesHandover();       // v234 test 66: every built eye's guides go through the keyed-mutex hand-over
 bool Active();               // the helper is up and both eyes are built
 void Toggle();               // hotkey: on/off live
 void CycleDebug();           // hotkey: jitter sign / no jitter / zero vectors (diagnostics)
