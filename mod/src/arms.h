@@ -37,6 +37,7 @@ struct Config {
     float leftHandYaw = 30.0f;    // LeftHandYaw: free left hand turned inward about the controller's up axis (deg)
     float leftForearmTwist = 1.0f;   // LeftForearmTwist: share of LeftHandRoll carried by the forearm
     float upperArmTwist = 0.5f;   // UpperArmTwist: share of the forearm's turn the upper arm follows
+    int   weaponFollow = 1;   // WeaponFollow (v234 test 75): a held weapon's barrel points where the controller points, sights up; the hand is placed from the weapon (no learned per-weapon grips)
     int   steadyHands = 1;    // SteadyHands: animations (sprint sway, gun pulled in near walls) don't turn the hands
     int   armsIndependent = 1;   // ArmsIndependent: upper arms keep the body orientation; the free left forearm follows the left controller
     float mapAngle = 0.0f, mapYaw = 0.0f, mapRoll = 0.0f;   // MapPitch/MapYaw/MapRoll: hands holding the map and GPS (deg)

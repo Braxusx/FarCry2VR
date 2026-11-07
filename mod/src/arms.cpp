@@ -281,7 +281,27 @@ static volatile ULONGLONG g_onHandSince = 0;   // v234 test 72: the held weapon 
 static volatile uint32_t g_weaponKey = 0;
 static volatile uint32_t g_typeKey = 0;   // v208: the hold key - reticle id + inventory slot + model bone count (the reticle alone is shared by most guns)
 static bool g_freeLDirty = false;   // the empty-hands hold was taken again: reload the free left hand pose
-static M4 g_prevFinalRh; static bool g_havePrevFinal = false;    // last frame's final right hand (world)
+static M4 g_prevFinalRh; static bool g_havePrevFinal = false;
+// v234 test 75: weapon follows the controller. Per held weapon: its barrel and top axes (weapon entity rows), found from
+// the game's own pose of it (the axis nearest the camera's forward / up, never the axis the model is mirrored across -
+// the crossbow's limbs), its offset in the hand, and where the game's camera sits relative to it (the sight line).
+static bool g_wfActive = false; static M4 g_wfOff; static float g_wfCam[3], g_wfFwd[3], g_wfUp[3];
+static int WeaponMirrorAxis(void* sk) {   // the weapon-model axis its bones are mirrored across (-1 = none)
+    int nb = (sk && !IsBadReadPtr((uint8_t*)sk + 0x2C, 4)) ? *(int*)((uint8_t*)sk + 0x2C) : 0;
+    Bone* bb = (nb > 1 && nb <= 64) ? *(Bone**)((uint8_t*)sk + 0x20) : nullptr;
+    if (!bb || IsBadReadPtr(bb, nb * sizeof(Bone))) return -1;
+    int votes[3] = { 0, 0, 0 };
+    for (int i = 0; i < nb; ++i) for (int j = i + 1; j < nb; ++j) {
+        const float* a = bb[i].model + 12; const float* b = bb[j].model + 12;
+        for (int ax = 0; ax < 3; ++ax) {
+            if (fabsf(a[ax]) < 0.03f || fabsf(a[ax] + b[ax]) > 0.015f) continue;
+            bool same = true; for (int k = 0; k < 3; ++k) if (k != ax && fabsf(a[k] - b[k]) > 0.015f) same = false;
+            if (same) ++votes[ax];
+        }
+    }
+    int best = 0; for (int ax = 1; ax < 3; ++ax) if (votes[ax] > votes[best]) best = ax;
+    return votes[best] >= 2 ? best : -1;
+}    // last frame's final right hand (world)
 static M4 g_off0; static bool g_haveOff0 = false;               // the weapon's place in the hand when the hold was taken
 static M4 g_foreRel[2]; static bool g_haveForeRel[2] = { false, false };   // forearm relative to the hand in a normal hold
 static bool g_offBroken = false;                                  // the weapon is not rigid in the hand: correction off
@@ -979,6 +999,7 @@ static void Apply(uint8_t* skel) {
         uint32_t key = w ? g_typeKey : 0xFFFFFFFFu;   // 0xFFFFFFFF = empty hands; 0 = weapon type unknown (not worked out yet)
         static uint32_t loadedKey = 0; static void* loadedW = nullptr;
         if (g_relHave && loadedW == w && loadedKey && key && key != loadedKey && t - tChange < 2000) { g_relHave = false; g_curAxis = -1; LOG("arms: weapon %p hold key settled on %08x - its own hold is used", w, key); }   // the key changed while settling
+        if (g_c.weaponFollow && w) { g_relHave = false; key = 0; }   // v234 test 75: no learned grips for weapons
         if (!g_relHave && t - tChange > 250 && key) {   // a saved hold for this weapon type
             M4 r, l; int ax; float sg;
             loadedKey = key; loadedW = w;
@@ -993,7 +1014,7 @@ static void Apply(uint8_t* skel) {
         if (controls::TakeRecapture()) { recapUntil = t + 3000; LOG("arms: hold for weapon %p will be taken again (left grip + A)", w); xr::Haptic(1, 0.4f, 0.05f); }
         bool manual = recapUntil > t;
         g_relCached = false;   // no automatic renewals
-        bool due = g_c.steadyHands && (!g_relHave || manual) && t - tChange > 300 && t - stableSince > (manual ? 200u : 400u) && !f.map && controls::NormalControls();
+        bool due = !(g_c.weaponFollow && w) && g_c.steadyHands && (!g_relHave || manual) && t - tChange > 300 && t - stableSince > (manual ? 200u : 400u) && !f.map && controls::NormalControls();
         // v234 test 72: never while the weapon is not on the hand by itself or a reload runs - the crossbow reloads as
         // soon as it is drawn (the game hangs it on the spine and we pin it back), and a hold taken then was saved turned
         if (due && w && (ReloadActive() || !g_onHandSince || t - g_onHandSince < 1000)) {
@@ -1111,6 +1132,51 @@ static void Apply(uint8_t* skel) {
             }
         }
         if (g_c.steadyHands && g_relHave && !f.map) { M4 inv; if (Inv(Bw[rh], inv)) Map = Mul(Mul(inv, relUse), Am); }
+        g_wfActive = false;
+        if (g_c.weaponFollow && w && !f.map && controls::NormalControls()) {
+            struct WF { void* w; int mirror, bar, up; float sb, su; int cb, cu; float csb, csu; ULONGLONG since; bool fixed; float cam[3]; };
+            static WF wf{};
+            if (wf.w != w) { wf = WF{}; wf.w = w; wf.mirror = WeaponMirrorAxis(g_wSkel); wf.cb = wf.cu = -1; wf.since = t; }
+            M4 Ooff = Translate(0, 0, 0);
+            if (g_havePrevFinal) { M4 ww, ih; if (WeaponWorld(w, ww) && Inv(g_prevFinalRh, ih)) { M4 o = Mul(ww, ih); if (Dot3(o.m[3], o.m[3]) < 0.09f && fabsf(o.m[0][0] * o.m[0][0] + o.m[0][1] * o.m[0][1] + o.m[0][2] * o.m[0][2] - 1.0f) < 0.1f) Ooff = o; } }
+            M4 wAnim = Mul(Ooff, Banim[rh]);
+            float rows[3][3]; for (int k = 0; k < 3; ++k) { rows[k][0] = wAnim.m[k][0]; rows[k][1] = wAnim.m[k][1]; rows[k][2] = wAnim.m[k][2]; Normalize(rows[k]); }
+            if (!wf.fixed) {
+                int cb = -1, cu2 = -1; float bb = 0, bu = 0, sgb = 1, sgu = 1;
+                for (int k = 0; k < 3; ++k) if (k != wf.mirror) { float d = Dot3(rows[k], cf); if (fabsf(d) > bb) { bb = fabsf(d); cb = k; sgb = d > 0 ? 1.0f : -1.0f; } }
+                for (int k = 0; k < 3; ++k) if (k != cb) { float d = Dot3(rows[k], cu); if (fabsf(d) > bu) { bu = fabsf(d); cu2 = k; sgu = d > 0 ? 1.0f : -1.0f; } }
+                if (cb >= 0 && cu2 >= 0 && bb > 0.3f) {
+                    if (cb != wf.cb || cu2 != wf.cu || sgb != wf.csb || sgu != wf.csu) { wf.cb = cb; wf.cu = cu2; wf.csb = sgb; wf.csu = sgu; wf.since = t; }
+                    M4 iw; if (Inv(wAnim, iw)) XformPt(iw, co, wf.cam);
+                    if (t - wf.since > 400 && t - tChange > 500) {
+                        wf.fixed = true; wf.bar = cb; wf.up = cu2; wf.sb = sgb; wf.su = sgu;
+                        LOG("arms: weapon %p follows the controller - barrel %c%c, top %c%c (mirror axis %c; game pose %.0f deg off the view), sight %.2f %.2f %.2f",
+                            w, sgb > 0 ? '+' : '-', "XYZ"[cb], sgu > 0 ? '+' : '-', "XYZ"[cu2], wf.mirror >= 0 ? "XYZ"[wf.mirror] : '-', acosf(fminf(1.0f, bb)) * 57.2958f, wf.cam[0], wf.cam[1], wf.cam[2]);
+                    }
+                }
+            }
+            const int bar = wf.fixed ? wf.bar : wf.cb, up = wf.fixed ? wf.up : wf.cu; const float sb = wf.fixed ? wf.sb : wf.csb, su = wf.fixed ? wf.su : wf.csu;
+            if (bar >= 0 && up >= 0 && bar != up) {
+                float fw[3] = { -ab[0], -ab[1], -ab[2] }, uc[3] = { au[0], au[1], au[2] }; Normalize(fw);
+                float d = Dot3(uc, fw); for (int k = 0; k < 3; ++k) uc[k] -= fw[k] * d; Normalize(uc);
+                float R[3][3]; const int th = 3 - bar - up;
+                for (int k = 0; k < 3; ++k) { R[bar][k] = fw[k] * sb; R[up][k] = uc[k] * su; }
+                const int a1 = (th + 1) % 3, a2 = (th + 2) % 3;
+                R[th][0] = R[a1][1] * R[a2][2] - R[a1][2] * R[a2][1]; R[th][1] = R[a1][2] * R[a2][0] - R[a1][0] * R[a2][2]; R[th][2] = R[a1][0] * R[a2][1] - R[a1][1] * R[a2][0];
+                float o3[3]; const int b1 = (th + 1) % 3, b2 = (th + 2) % 3;   // keep the model's handedness
+                o3[0] = rows[b1][1] * rows[b2][2] - rows[b1][2] * rows[b2][1]; o3[1] = rows[b1][2] * rows[b2][0] - rows[b1][0] * rows[b2][2]; o3[2] = rows[b1][0] * rows[b2][1] - rows[b1][1] * rows[b2][0];
+                if (Dot3(o3, rows[th]) < 0) for (int k = 0; k < 3; ++k) R[th][k] = -R[th][k];
+                M4 Wt = Translate(0, 0, 0); for (int i = 0; i < 3; ++i) for (int k = 0; k < 3; ++k) Wt.m[i][k] = R[i][k];
+                M4 Orot = Ooff; Orot.m[3][0] = Orot.m[3][1] = Orot.m[3][2] = 0; M4 Oi;
+                if (Inv(Orot, Oi)) {
+                    M4 H = Mul(Oi, Wt); for (int k = 0; k < 3; ++k) H.m[3][k] = Bw[rh].m[3][k];
+                    M4 inv; if (Inv(Bw[rh], inv)) {
+                        Map = Mul(inv, H);
+                        g_wfActive = true; g_wfOff = Ooff; memcpy(g_wfCam, wf.cam, 12); memcpy(g_wfFwd, fw, 12); memcpy(g_wfUp, uc, 12);
+                    }
+                }
+            }
+        }
     }
     // right hand lands on the controller grip (plus a tunable offset in the controller frame)
     float h0[3] = { Bw[rh].m[3][0], Bw[rh].m[3][1], Bw[rh].m[3][2] }, hm[3]; XformPt(Map, h0, hm);
@@ -1137,15 +1203,15 @@ static void Apply(uint8_t* skel) {
         if (fabsf(hPitch) > 0.1f) Map = Mul(Mul(Mul(Map, T1), RotMat(axr, hPitch * 0.0174533f)), T2);
         if (fabsf(hYaw) > 0.1f) Map = Mul(Mul(Mul(Map, T1), RotMat(axu, hYaw * 0.0174533f)), T2);
     }
-    if (f.machete && fabsf(g_c.macheteRoll) > 0.1f) {   // turned about the controller's pointing axis
+    if (f.machete && !g_wfActive && fabsf(g_c.macheteRoll) > 0.1f) {   // turned about the controller's pointing axis
         float axf[3] = { -ab[0], -ab[1], -ab[2] }; Normalize(axf);
         Map = Mul(Mul(Mul(Map, Translate(-tgt[0], -tgt[1], -tgt[2])), RotMat(axf, g_c.macheteRoll * 0.0174533f)), Translate(tgt[0], tgt[1], tgt[2]));
     }
-    if (f.machete && fabsf(g_c.macheteAngle) > 0.1f) {
+    if (f.machete && !g_wfActive && fabsf(g_c.macheteAngle) > 0.1f) {
         float axr[3] = { ar[0], ar[1], ar[2] }; Normalize(axr);
         Map = Mul(Mul(Mul(Map, Translate(-tgt[0], -tgt[1], -tgt[2])), RotMat(axr, g_c.macheteAngle * 0.0174533f)), Translate(tgt[0], tgt[1], tgt[2]));
     }
-    if (f.machete && fabsf(g_c.macheteYaw) > 0.1f) {   // blade angled inward (toward the body's centre line)
+    if (f.machete && !g_wfActive && fabsf(g_c.macheteYaw) > 0.1f) {   // blade angled inward (toward the body's centre line)
         float axu[3] = { au[0], au[1], au[2] }; Normalize(axu);
         Map = Mul(Mul(Mul(Map, Translate(-tgt[0], -tgt[1], -tgt[2])), RotMat(axu, g_c.macheteYaw * 0.0174533f)), Translate(tgt[0], tgt[1], tgt[2]));
     }
@@ -1200,7 +1266,9 @@ static void Apply(uint8_t* skel) {
     // (steady hands: from the camera as it sat on the hand when the hold was taken, carried by the re-pose - not
     // from the game's camera now, which sways while sprinting and would make the aiming dot and shots sway with it)
     { float so[3], sf[3], su[3]; XformPt(Map, co, so); XformDir(Map, cf, sf); XformDir(Map, cu, su);
-      if (g_c.steadyHands && g_relHave && !f.map) {
+      if (g_wfActive) {   // v234 test 75: along the controller, from where the game's camera sits relative to the weapon
+          M4 Wf = Mul(g_wfOff, Mul(Bw[rh], Map)); XformPt(Wf, g_wfCam, so); memcpy(sf, g_wfFwd, 12); memcpy(su, g_wfUp, 12);
+      } else if (g_c.steadyHands && g_relHave && !f.map) {
           M4 ir; if (Inv(g_relR, ir)) {
               M4 V = Mul(Mul(ir, Bw[rh]), Map);   // the capture-time camera, re-posed with the weapon
               for (int k = 0; k < 3; ++k) { so[k] = V.m[3][k]; sf[k] = -V.m[2][k]; su[k] = V.m[1][k]; }
@@ -1237,18 +1305,20 @@ static void Apply(uint8_t* skel) {
                 M4 MapL = Mul(Cinv, AL);
                 MapLs = MapL;
                 M4 handAnim; { M4 b; memcpy(b.m, bones[hand].model, 64); b.m[0][3] = b.m[1][3] = b.m[2][3] = 0; b.m[3][3] = 1; handAnim = Mul(b, W); }
-                bool steadyL = g_c.steadyHands && g_relHave && !f.map;
                 // the free left hand (not on the weapon) always takes the empty-hands pose: a weapon's hold carries the
                 // left hand of that weapon's animation (e.g. shaped for a rifle's foregrip), which looked twisted on a
                 // free controller
-                M4 relLUse = g_relL;
-                if (steadyL && !grabbing && g_curWeapon) {
-                    static M4 freeL; static bool haveFreeL = false; static ULONGLONG tryT = 0;
+                static M4 freeL; static bool haveFreeL = false; static ULONGLONG tryT = 0;
+                if (!grabbing && g_curWeapon) {
                     ULONGLONG tn = GetTickCount64();
                     if (g_freeLDirty) { haveFreeL = false; g_freeLDirty = false; }
                     if (!haveFreeL && tn - tryT > 2000) { tryT = tn; M4 r; if (LoadHold(0xFFFFFFFFu, r, freeL, nullptr, nullptr)) { haveFreeL = true; LOG("arms: free left hand uses the empty-hands pose"); } }
-                    if (haveFreeL) relLUse = freeL;
                 }
+                // v234 test 75: with a weapon following the controller there is no learned grip; the free left hand still
+                // takes the empty-hands pose when one is saved
+                bool steadyL = g_c.steadyHands && (g_relHave || (g_wfActive && !grabbing && haveFreeL)) && !f.map;
+                M4 relLUse = g_relL;
+                if (steadyL && !grabbing && g_curWeapon && haveFreeL) relLUse = freeL;
                 M4 newHand = steadyL ? Mul(relLUse, AL) : Mul(handAnim, MapL);
                 if (steadyL) { M4 ih; if (Inv(handAnim, ih)) MapLs = Mul(ih, newHand); }
                 for (int k = 0; k < 3; ++k) newHand.m[3][k] = grabbing ? fg[k] : lgrip[k] - lr[k] * g_c.handOfs[0] + lu[k] * g_c.handOfs[1] + lb[k] * g_c.handOfs[2];
