@@ -112,6 +112,7 @@ struct Config {
     int   mapClock = 1, mapClock24 = 0; float mapClockWidth = 0.07f, mapClockUp = 0.0f;
     int   noDesktopVsync = 1;   // v234: DesktopVsync=0
     int   gpuHandover = 1;      // v234 test 54: EndFrameWait=0
+    int   shadowSnap = 1;       // v234 test 74: ShadowSnap - sun shadow zones move in whole shadow-map pixels
     int   dxvk = 0;             // v234 test 57: Dxvk=1 - DXVK trial (bin\\dxvk\\dxgi.dll + d3d11.dll)
     int   mapHealth = 1; float mapHealthWidth = 0.06f, mapPanelGap = 0.004f;   // v234: health + syrettes beside the clock under the map   // v234: clock under the map   // v234: grenade counter by the left hand   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
     int   shadowMapSize = 2720;    // sun shadow cascade resolution (game: 2048 at Ultra High), max 2730, 0 = game's           // sun shadow cascades cover the whole VR view in cull mode 1   // hidden extra render area per side (fraction of the half-FOV) for screen-space reflections
@@ -167,7 +168,7 @@ static void LoadConfig() {
     g_cfg.worldScale = IniF("WorldScale", 1.0f);
     g_cfg.cullMargin = IniF("CullMargin", 1.25f);
     g_cfg.adaptiveDetail = 0;   /* v201: removed - it swung distant detail on and off around its target (pop-in at 150% + DLAA) and never saved frame time */ g_cfg.adaptiveTarget = IniF("AdaptiveDetailTargetMs", 10.0f); g_cfg.adaptiveMax = IniF("AdaptiveDetailMax", 1.0f);
-    g_cfg.renderScale = IniF("RenderScale", 1.0f);
+    g_cfg.renderScale = IniF("RenderScale", 1.0f); g_cfg.shadowSnap = (int)IniF("ShadowSnap", 1);
     g_cfg.steadyCam = (int)IniF("SteadyCamera", 1);
     g_cfg.monoForward = IniF("MonocularForward", 0.30f);
     g_cfg.flashForward = IniF("FlashlightForward", 0.10f);
@@ -2051,9 +2052,33 @@ static void __cdecl Hook_CascadeFit(float* a1, float* a2, int a3, int cam, float
                     static int la = 0; if (la < 2) { ++la; LOG("sun shadow cascades: cascade pick %.3f %.3f -> 0 0 (radial)", a1[0], a1[1]); }
                     a1[0] = 0.0f; a1[1] = 0.0f;
                 }
+                // v234 test 74: the centred zones move with the eye, so the shadow-map pixel grid slid across the world
+                // every frame you walked and thin or distant shadows shimmered. Each zone's centre is snapped to whole
+                // pixels of its map on the plane facing the sun (light direction from ShadowRenderer's frame, [esp+3C],
+                // read through the caller's stack; Dunia is Z-up). ShadowSnap=0: off.
+                float L[3] = { 0, 0, 0 }; bool snap = false;
+                if (g_cfg.shadowSnap && g_cfg.shadowMapSize > 0) {
+                    const uint8_t* fr = (const uint8_t*)&a1 + 32;   // the caller's esp before its 8 pushes
+                    if (!IsBadReadPtr(fr + 0x3C, 12)) { memcpy(L, fr + 0x3C, 12);
+                        const float ll = sqrtf(L[0] * L[0] + L[1] * L[1] + L[2] * L[2]);
+                        snap = std::isfinite(ll) && ll > 0.9f && ll < 1.1f && fabsf(L[2] / ll) < 0.999f;
+                        static int lg2 = 0; if (lg2 < 3) { ++lg2; LOG("sun shadow cascades: light direction %.3f %.3f %.3f (length %.3f) - pixel snapping %s", L[0], L[1], L[2], ll, snap ? "on" : "off (not a direction)"); }
+                        if (snap) for (int k = 0; k < 3; ++k) L[k] /= ll; }
+                }
+                float U[3] = { L[1], -L[0], 0.0f }, V[3];   // L x (0,0,1), then L x U
+                if (snap) { const float ul = sqrtf(U[0] * U[0] + U[1] * U[1]); U[0] /= ul; U[1] /= ul;
+                            V[0] = L[1] * U[2] - L[2] * U[1]; V[1] = L[2] * U[0] - L[0] * U[2]; V[2] = L[0] * U[1] - L[1] * U[0]; }
                 for (int i = 0; i < 3; ++i) {
-                    sp[i * 4 + 0] = P[0]; sp[i * 4 + 1] = P[1]; sp[i * 4 + 2] = P[2];
-                    sp[i * 4 + 3] = useR[i] * (i < 2 ? g_cfg.shadowRadial : (g_cfg.shadowRadial > 1.0f ? 1.0f : g_cfg.shadowRadial));
+                    const float rad = useR[i] * (i < 2 ? g_cfg.shadowRadial : (g_cfg.shadowRadial > 1.0f ? 1.0f : g_cfg.shadowRadial));
+                    float C[3] = { P[0], P[1], P[2] };
+                    if (snap && rad > 0) {
+                        const float tex = 2.0f * rad / (float)g_cfg.shadowMapSize;
+                        const float pu = C[0] * U[0] + C[1] * U[1] + C[2] * U[2], pv = C[0] * V[0] + C[1] * V[1] + C[2] * V[2];
+                        const float du = floorf(pu / tex + 0.5f) * tex - pu, dv = floorf(pv / tex + 0.5f) * tex - pv;
+                        for (int k = 0; k < 3; ++k) C[k] += du * U[k] + dv * V[k];
+                    }
+                    sp[i * 4 + 0] = C[0]; sp[i * 4 + 1] = C[1]; sp[i * 4 + 2] = C[2];
+                    sp[i * 4 + 3] = rad;
                 }
             }
         }
@@ -4978,7 +5003,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 73: weapon barrel brought onto the view in its hold (crossbow); v234 test 72: weapon holds only taken with the weapon settled on the hand, no reload; v234 test 71: CPU placement (CpuPlacement, CpuPriority); v234 test 70: machete taken from the held weapon, not the slot guess; v234 test 69: at most one frame ahead of the GPU (FrameAheadLimit=1); v234 test 68: DLSS hand-over guides made on the D3D10 device; v234 test 67: DlssGuideHandover A/B; v234 test 66: DLSS guides handed over with keyed mutexes (no CPU wait with DLSS); v234 test 65: merged main (PR #8 headset body yaw, grass fix, shoulder fix); v234 test 64: GPU handover with DLSS off even when the DLSS module is loaded; v234 test 63: keyed mutex on every shared texture (right-eye twitch fix); v234 test 62: fast map check (FastMapCheck=1); v234 test 61: counters on the runtime implementations, profiler names system functions; v234 test 60: Profile=1 work breakdown (shadows, draws, state calls); v234 test 59: flat CPU-busy measurement, dxvk.conf; v234 test 58: Dxvk ini read before the device patch; v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 74: sun shadow zones snapped to whole shadow-map pixels (ShadowSnap=1); v234 test 73: weapon barrel brought onto the view in its hold (crossbow); v234 test 72: weapon holds only taken with the weapon settled on the hand, no reload; v234 test 71: CPU placement (CpuPlacement, CpuPriority); v234 test 70: machete taken from the held weapon, not the slot guess; v234 test 69: at most one frame ahead of the GPU (FrameAheadLimit=1); v234 test 68: DLSS hand-over guides made on the D3D10 device; v234 test 67: DlssGuideHandover A/B; v234 test 66: DLSS guides handed over with keyed mutexes (no CPU wait with DLSS); v234 test 65: merged main (PR #8 headset body yaw, grass fix, shoulder fix); v234 test 64: GPU handover with DLSS off even when the DLSS module is loaded; v234 test 63: keyed mutex on every shared texture (right-eye twitch fix); v234 test 62: fast map check (FastMapCheck=1); v234 test 61: counters on the runtime implementations, profiler names system functions; v234 test 60: Profile=1 work breakdown (shadows, draws, state calls); v234 test 59: flat CPU-busy measurement, dxvk.conf; v234 test 58: Dxvk ini read before the device patch; v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
