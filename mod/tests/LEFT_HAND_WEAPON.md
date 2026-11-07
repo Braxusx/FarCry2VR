@@ -66,12 +66,26 @@ rotation through full and nearly antiparallel turns.
 These CPU checks do not prove rendered gun placement or comfort.
 
 Left-hand aiming uses the evaluated native muzzle origin and forward (+Y of
-the muzzle transform). The slot is observed from the native muzzle/effects
-strategy in `0x10110EC0` (+0x40 context, +0x54 slot), qualified against the
+the muzzle transform). The slot is observed from the native strategy in
+`0x10110EC0` (+0x40 context), qualified against the
 current weapon's graphic owner, skeleton and bone hash. **The inventory weapon
 component's +0x54 is not that slot.** No resource pointer at +0x40 is treated as
 a skeleton. Native shot spread is rotated from the camera basis onto the
 barrel; the reticle/scope reference ray is derived from the same world muzzle.
+Bullet strategies use their +0x54 effects slot. The exact supported Steam
+projectile strategy (vtable `0x10E25E08`) instead uses its native +0x180 launch
+slot, as `0x101998F0` does. On the RPG, the effects slot points backward from
+the rear of the tube; it must not drive projectile aim or spawn position.
+Left projectiles spawn from the evaluated launch locator, independently of a
+scope sight origin, and reject forced hit points behind the barrel. The aim
+query retains the native shooter-physics exclusion. Right-hand native origin
+behavior remains unchanged.
+
+The observed Steam LPO50 (`7b3ffc40`, eight bones) does not visit that effects
+updater at rest. Its unique authored muzzle (`af2676da`) can be resolved from
+the owned skeleton directly. That fallback rejects other model keys, counts
+and duplicate locators; it does not guess a muzzle for unknown item rigs.
+
 The close-range aim query starts 1 cm from the muzzle rather than skipping
 the first half metre. The observed Steam machete (`570988e9`, three bones)
 has an authored dummy_muzzle locator at slot 1 (`af2676da`) but no firearm
@@ -158,8 +172,42 @@ against original right-handed calibration. It requires a new physical test:
    other side. The user has accepted shoulder, hip and chest selection.
 9. Compare the corrected machete with F1 and perform intentional swings. Check
    an actual left-handed RPG reload for drift; the owned replay cannot accept
-   the real reload animation. Cosmetic finger poses are still native animation
-   poses and remain low priority.
+   the real reload animation. Left weapon fingers now reuse the matching native
+   right trigger-grip animation through paired digit hashes and parent chains.
+   Their mesh contact and comfort still need physical review.
+
+`-WeaponAudit` compares the four saved slots in left/right one- and two-handed
+presentation, then returns to left. `-AuditWeapons` optionally supplies up to
+29 explicitly named native developer weapon grants, for example:
+
+```powershell
+# Add to the usual owned native runner arguments:
+-LeftWeapon -WeaponAudit -AuditWeapons MAC10,M249_Saw,RPG7
+# Validate the resulting evidence:
+python mod/tests/check_weapon_audit_native.py <run> --count 3 --fingers --rpg-front
+python mod/tests/test_weapon_audit_rejections.py <run> --count 3 --fingers --rpg-front
+```
+
+The native helper accepts only the listed weapon commands and daylight setup,
+requires one focused game client, and captures command setup for inspection.
+It never sends fire, reload or save input. Inventory grants occur in a temporary
+loaded session; the runner restores the starting DLL, INI and profile.
+Command setup occupies a separate transition phase so console/item animation
+cannot be mistaken for an eligible weapon-grip readback.
+`-FreshHoldKeys <eight-digit model key>` clears only that hold/axis in the
+temporary test INI for a recapture comparison. The starting INI is restored.
+Duplicate selected model keys fail validation, so an unsuccessful weapon grant
+or wrong inventory slot cannot count as another covered asset. M1903 occupies
+the primary slot even though an old developer script labels it special.
+
+The finger observer compares evaluated engine bones against native right-digit
+poses in both eyes. The two thumb chains are ordered differently in the Steam
+skeleton; bone-index offsets are not valid pairing rules. Unknown/ambiguous
+hashes or changed parents reject retargeting. Projectile previews exercise
+native angle conversion, selected origins, forward/behind target decisions and
+shooter-filter lookup **without spawning projectiles**. They do not establish
+actual rocket flight, collisions or reload-animation acceptance. A successful
+mirror comparison also does not prove native calibration or controller comfort.
 
 Body yaw stopping with map/radio out is a separately reported eligibility issue;
 this runtime comparison does not change the body-yaw feature's mode policy.

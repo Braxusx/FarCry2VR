@@ -140,6 +140,7 @@ void SubmitFrame(const Frame& f);
 int TryToggleWeaponHand();
 #if defined(FC2VR_BODY_YAW_TESTING)
 void ObserveLeftWeapon(int eye); // native readback after engine eye rendering
+bool FixtureBladeEquipped();
 #endif
 // Observation only: these stamps do not grant freshness or pose authority.
 struct FrameUsage {

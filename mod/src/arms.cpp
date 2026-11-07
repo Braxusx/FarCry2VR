@@ -16,6 +16,8 @@
 #include "common/left_grip.h"
 #include "common/left_attachment_policy.h"
 #include "common/melee_motion.h"
+#include "common/projectile_aim.h"
+#include "common/finger_grip.h"
 #include "controls.h"
 #include "common/shoulder_frame.h"
 #include <cstdio>
@@ -302,6 +304,10 @@ static bool g_leftRigFixture=false;
 static fc2vr::tracking::GameBasis g_leftRayBasis;
 static M4 g_restoredNativeOffset;static uint8_t* g_restoredNativeOwner=nullptr;
 static M4 g_fixtureGripFrame;
+static M4 g_auditGripFrame;
+static M4 g_auditNativeDigits[15];
+static uint64_t g_auditDigitSample=0;
+static void* g_auditDigitWeapon=nullptr;
 #endif
 static void LeftWeaponAttachment(bool restoreOnly=false);
 static M4 g_off0; static bool g_haveOff0 = false;               // the weapon's place in the hand when the hold was taken
@@ -324,14 +330,24 @@ static uint8_t* ComponentEntity(const uint8_t* component) {
     return handle && !IsBadReadPtr(handle,16)?*(uint8_t*const*)(handle+12):nullptr;
 }
 static bool MuzzlePose(void* weapon,M4& local,int* muzzleIndex=nullptr) {
-    // Steam 6353936a...862765: +54 belongs to the firing strategy, NOT the
-    // inventory weapon component. Its owned index is observed in MuzzleUpdate.
+    // Native strategy owns the index. Projectile strategies use their +180
+    // launch locator; +54 can be a rear-facing backblast effect (Steam RPG).
     uint8_t* gfx=g_wGfx;uint8_t* sk=g_wSkel;int index;uint32_t hash;bool owned;
     Lock();index=g_muzzleIndex;hash=g_muzzleHash;owned=weapon==g_muzzleWeapon && gfx==g_muzzleGraphic && sk==g_muzzleSkeleton;Unlock();
-    if(!weapon || weapon!=g_curWeapon || !owned || !gfx || !sk || IsBadReadPtr(sk,0x30))return false;
+    if(!weapon || weapon!=g_curWeapon || !gfx || !sk || IsBadReadPtr(sk,0x30))return false;
     if(!ComponentEntity((uint8_t*)weapon) || ComponentEntity((uint8_t*)weapon)!=ComponentEntity(gfx))return false;
     const int count=*(const int*)(sk+0x2C);const Bone* bones=*(Bone*const*)(sk+0x20);
-    if(!bones || count<=0 || count>64 || index<0 || index>=count || IsBadReadPtr(bones,count*sizeof(Bone)) || bones[index].hash!=hash)return false;
+    if(!bones || count<=0 || count>64 || IsBadReadPtr(bones,count*sizeof(Bone)))return false;
+    if(!owned || index<0 || index>=count || bones[index].hash!=hash){
+        // The observed Steam LPO50 does not visit the effects updater at rest.
+        // Its unique authored muzzle is safe to resolve directly; this is not
+        // a generic fallback for projectile/backblast or unknown item rigs.
+        if(g_typeKey!=0x7b3ffc40u || count!=8)return false;
+        index=-1;hash=0xaf2676dau;
+        for(int i=0;i<count;++i)if(bones[i].hash==hash){if(index>=0)return false;index=i;}
+        static void* logged=nullptr;if(index>=0 && logged!=weapon){logged=weapon;LOG("left-weapon: qualified flame muzzle index=%d hash=%08x count=%d",index,hash,count);}
+    }
+    if(index<0 || index>=count || bones[index].hash!=hash)return false;
     memcpy(local.m,bones[index].model,64);local.m[0][3]=local.m[1][3]=local.m[2][3]=0;local.m[3][3]=1;
     for(const auto& row:local.m)for(float value:row)if(!std::isfinite(value))return false;
     if(muzzleIndex)*muzzleIndex=index;
@@ -357,6 +373,9 @@ static bool BladePlane(void* weapon,M4& plane) {
     for(const auto& row:plane.m)for(float value:row)if(!std::isfinite(value))return false;
     return true;
 }
+#if defined(FC2VR_BODY_YAW_TESTING)
+bool FixtureBladeEquipped(){fc2vr::hands::ReadGuard guard;M4 plane;return BladePlane(g_curWeapon,plane);}
+#endif
 static char g_ini[MAX_PATH] = "";
 static bool LoadHold(uint32_t key, M4& r, M4& l, int* axis, float* sign) {
     if (!g_ini[0]) return false;
@@ -382,12 +401,13 @@ static bool ShotCurrent(const fc2vr::authority::Stamp& source, void* weapon) {
     fc2vr::hands::ReadGuard handLayout;
     return fc2vr::authority::SameOwner(weapon,g_curWeapon) && xr::InputCurrent(source,fc2vr::hands::Physical(1));
 }
-static bool ReadAim(float o[3], float d[3], float* cameraForward = nullptr) {
+static bool ReadAim(float o[3], float d[3], float* cameraForward = nullptr,float* barrelOrigin=nullptr) {
     fc2vr::hands::ReadGuard handLayout;
     fc2vr::authority::Stamp shotSource,scopeSource; void* shotWeapon; void* scopeWeapon;
     float scopeO[3],scopeD[3]; bool valid,scope;
     Lock(); valid = g_shotValid; shotSource = g_shotSource; shotWeapon = g_shotWeapon;
     memcpy(o,g_shotO,12); memcpy(d,g_shotF,12); if (cameraForward) memcpy(cameraForward,g_camFwdNow,12);
+    if(barrelOrigin)memcpy(barrelOrigin,g_shotO,12); // scope may replace o below, never the actual muzzle
     scope = g_scopeTick && GetTickCount()-g_scopeTick < 200;
     scopeSource = g_scopeSource; scopeWeapon = g_scopeWeapon; memcpy(scopeO,g_scopeO,12); memcpy(scopeD,g_scopeD,12); Unlock();
     if (!valid || !ShotCurrent(shotSource,shotWeapon)) return false;
@@ -1179,6 +1199,24 @@ static void Apply(uint8_t* skel) {
         else for (int k = 0; k < 3; ++k) fg[k] = tgt[k] - ar[k] * 0.02f - au[k] * 0.07f - ab[k] * 0.02f;   // support hand under the grip
     }
     M4 mirrorFrame=Am;for(int k=0;k<3;++k)mirrorFrame.m[3][k]=tgt[k];
+#if defined(FC2VR_BODY_YAW_TESTING)
+    const M4 auditGrip=mirrorFrame;
+    if(f.bodyYawFixture && f.bodyYaw.sequence/100000>=30 && f.bodyYaw.sequence/100000<180){
+        static uint64_t phaseSeen=0,phaseDumped=0;static DWORD phaseBorn=0;const auto phase=f.bodyYaw.sequence/100000;
+        if(phaseSeen!=phase){phaseSeen=phase;phaseBorn=GetTickCount();}
+        if(phaseDumped!=phase && GetTickCount()-phaseBorn>1500){
+            phaseDumped=phase;
+            for(int side=0;side<2;++side){const int hand=side?rh:nativeLeft;M4 inverse;
+                if(hand<0 || hand>=n || !Inv(Banim[hand],inverse))continue;
+                for(int i=0;i<n;++i){bool child=false;for(int p=bones[i].parent,guard=0;p>=0 && p<n && guard<64;p=bones[p].parent,++guard)if(p==hand){child=true;break;}
+                    if(!child)continue;const M4 relative=Mul(Banim[i],inverse);char matrix[512]{};int used=0;
+                    for(int j=0;j<16;++j){const int space=int(sizeof(matrix))-used;const int count=snprintf(matrix+used,space,"%s%.6f",j?",":"",(&relative.m[0][0])[j]);if(count<0 || count>=space){matrix[0]=0;break;}used+=count;}
+                    LOG("finger-native sample=%llu key=%08x side=%d hand=%d bone=%d parent=%d hash=%08x relative=%s",(unsigned long long)f.bodyYaw.sequence,g_typeKey,side,hand,i,bones[i].parent,bones[i].hash,matrix);
+                }
+            }
+        }
+    }
+#endif
     if(leftRig){
         M4 inverse;if(Inv(mirrorFrame,inverse)){
             float local[3];XformPt(inverse,fg,local);local[0]=-local[0];XformPt(mirrorFrame,local,fg);
@@ -1496,6 +1534,35 @@ static void Apply(uint8_t* skel) {
             for (int k = 0; k < 3; ++k) Bw[clav].m[3][k] += S[k] - P0[k];       // clavicle follows the shoulder
         }
     }
+    // The weapon hand needs the weapon's trigger grip, not the native support
+    // hand's finger animation. Match digit hashes and parent chains; preserve
+    // all left bone identities and leave the right support hand untouched.
+    if(leftRig){
+        fc2vr::finger_grip::Mapping digits;M4 inverse;
+        if(fc2vr::finger_grip::Resolve(bones,n,nativeLeft,rh,digits) && Inv(Banim[rh],inverse)){
+            M4 poses[15];bool valid=true;
+            for(int i=0;i<15;++i){
+                const M4 relative=Mul(Banim[digits.bone[i][1]],inverse);M4 mirrored;
+                if(!fc2vr::finger_grip::MirrorRelative(&relative.m[0][0],&mirrored.m[0][0])){valid=false;break;}
+                poses[i]=Mul(mirrored,Bw[nativeLeft]);
+            }
+            if(valid)for(int i=0;i<15;++i)Bw[digits.bone[i][0]]=poses[i];
+#if defined(FC2VR_BODY_YAW_TESTING)
+            if(valid){Lock();for(int i=0;i<15;++i)g_auditNativeDigits[i]=Mul(Banim[digits.bone[i][1]],inverse);g_auditDigitSample=f.bodyYaw.sequence;g_auditDigitWeapon=f.weapon;Unlock();}
+            const auto phase=f.bodyYaw.sequence/100000;
+            static DWORD lastDigit=0;
+            if(valid && f.bodyYawFixture && phase>=30 && phase<180 && GetTickCount()-lastDigit>500){
+                lastDigit=GetTickCount();M4 inverseLeft;
+                if(Inv(Bw[nativeLeft],inverseLeft))for(int i=0;i<15;++i){
+                    const M4 actual=Mul(Bw[digits.bone[i][0]],inverseLeft),right=Mul(Banim[digits.bone[i][1]],inverse);M4 expected;
+                    fc2vr::finger_grip::MirrorRelative(&right.m[0][0],&expected.m[0][0]);float error=0;
+                    for(int k=0;k<16;++k)error=fmaxf(error,fabsf((&actual.m[0][0])[k]-(&expected.m[0][0])[k]));
+                    LOG("finger-grip sample=%llu key=%08x digit=%d left=%d right=%d error=%.6f authority=%d,%d",(unsigned long long)f.bodyYaw.sequence,g_typeKey,i,digits.bone[i][0],digits.bone[i][1],error,f.handAuthority,f.leftAuthority);
+                }
+            }
+#endif
+        }
+    }
     // helper bones follow their arm bone: new = old * inv(leaderAnim) * leaderNew
     // The right arm's helper (bone 105, on the forearm; parented to the root) carries the weapon. Its animated place
     // relative to the hand changes in reloads (the crossbow turned on its side to load a bolt), weapon jams etc. -
@@ -1542,6 +1609,7 @@ static void Apply(uint8_t* skel) {
     }
 #if defined(FC2VR_BODY_YAW_TESTING)
     g_fixtureGripFrame=mirrorFrame;for(int k=0;k<3;++k)g_fixtureGripFrame.m[3][k]+=O[k];
+    g_auditGripFrame=auditGrip;for(int k=0;k<3;++k)g_auditGripFrame.m[3][k]+=O[k];
 #endif
     Unlock();
     {   // diagnostic: which player bone the weapon model is attached to - during a reload (or 3 s after a projectile
@@ -1818,7 +1886,7 @@ static void RigidSetVel(const Rigid& r, const float* v, const float* w) {
 }
 // ground (or anything solid) along a ray: the physics world's ray query (world+0x90 -> 0x1049BFC0 via 0x1048DD30,
 // filter 0x5BF as the game's own world ray at 0x10831C30). Results: 0x30-byte hits {pos, normal, ..., +0x1C distance}.
-static bool GroundRayEx(const float* from, const float* dir, float len, float* hit, float* normal, uint32_t* key, uint32_t mask = 0x5BF) {
+static bool GroundRayEx(const float* from, const float* dir, float len, float* hit, float* normal, uint32_t* key, uint32_t mask = 0x5BF,void* ignore=nullptr) {
     void* world = *(void**)A(0x11613D60);
     if (!world) return false;
     struct Vec { uint8_t* data; uint32_t size, cap; } v{ nullptr, 0, 0 };
@@ -1829,7 +1897,7 @@ static bool GroundRayEx(const float* from, const float* dir, float len, float* h
     typedef void (__fastcall *Free_t)(Vec* v);
     float delta[3] = { dir[0] * len, dir[1] * len, dir[2] * len };
     void* fp = ((FilterCtor_t)A(0x1048EC40))(filter, nullptr, mask, 0);
-    ((Ray_t)A(0x1048DD30))(world, nullptr, from, delta, &v, fp ? fp : filter, nullptr, 5);
+    ((Ray_t)A(0x1048DD30))(world, nullptr, from, delta, &v, fp ? fp : filter, ignore, 5);
     ((FilterDtor_t)A(0x1021B110))(filter);
     bool ok = false; float best = 1e30f;
     for (uint32_t i = 0; i < v.size && i < 64 && v.data; ++i) {
@@ -1844,13 +1912,13 @@ static bool GroundRay(const float* from, const float* dir, float len, float* hit
 // Where the weapon's sight line (or the scope's, while scoped) meets the world: the bullet ray's own filter (0x5BB,
 // as the game's bullets in 0x10113230), from 0.5 m out (clear of the player's own body). No hit: 300 m out.
 static float g_aimDist = 0; static DWORD g_aimTick = 0;   // distance along the sight ray to what it points at (game thread)
-static bool AimPoint(float o[3], float d[3], float p[3], float* dist) {
+static bool AimPoint(float o[3], float d[3], float p[3], float* dist,float* barrelOrigin=nullptr,void* ignore=nullptr) {
     fc2vr::hands::ReadGuard handLayout;
-    if (!ReadAim(o,d)) return false;
+    if (!ReadAim(o,d,nullptr,barrelOrigin)) return false;
     const float start = fc2vr::hands::leftHanded?0.01f:0.5f, len = 300.0f;
     float from[3] = { o[0] + d[0] * start, o[1] + d[1] * start, o[2] + d[2] * start }, hit[3];
     float t = len;
-    if (GroundRayEx(from, d, len, hit, nullptr, nullptr, 0x5BB)) t = start + Dist(from, hit);
+    if (GroundRayEx(from, d, len, hit, nullptr, nullptr, 0x5BB,ignore)) t = start + Dist(from, hit);
     for (int k = 0; k < 3; ++k) p[k] = o[k] + d[k] * t;
     if (dist) *dist = t;
     return true;
@@ -3376,12 +3444,18 @@ static void __fastcall Hook_MuzzleUpdate(void* self,void* edx) {
     const auto* entity=ComponentEntity(context);uint8_t* gfx=g_wGfx;uint8_t* sk=g_wSkel;
     if(!entity || entity!=ComponentEntity((uint8_t*)g_curWeapon) || entity!=ComponentEntity(gfx)
         || !sk || IsBadReadPtr(sk,0x30))return;
-    const int index=*(const int*)((uint8_t*)self+0x54),count=*(const int*)(sk+0x2C);
+    // Exact Steam projectile vtable: first entry 1019B0A0, type getter
+    // 10198880 at +4. Its native player firing routine 101998F0 uses +180.
+    // Do not reinterpret the smaller bullet/flame strategy as that layout.
+    const bool projectile=*(uintptr_t*)self==A(0x10E25E08);
+    if(projectile && IsBadReadPtr(self,0x184))return;
+    const int effects=*(const int*)((uint8_t*)self+0x54);
+    const int index=projectile?*(const int*)((uint8_t*)self+0x180):effects,count=*(const int*)(sk+0x2C);
     const Bone* bones=*(Bone*const*)(sk+0x20);
     if(!bones || count<=0 || count>64 || index<0 || index>=count || IsBadReadPtr(bones,count*sizeof(Bone)))return;
     Lock();const bool changed=g_muzzleWeapon!=g_curWeapon || g_muzzleGraphic!=gfx || g_muzzleSkeleton!=sk || g_muzzleIndex!=index;
     g_muzzleWeapon=g_curWeapon;g_muzzleGraphic=gfx;g_muzzleSkeleton=sk;g_muzzleIndex=index;g_muzzleHash=bones[index].hash;Unlock();
-    if(changed)LOG("left-weapon: native muzzle binding index=%d hash=%08x count=%d",index,bones[index].hash,count);
+    if(changed)LOG("left-weapon: native muzzle binding index=%d hash=%08x count=%d projectile=%d effectsIndex=%d",index,bones[index].hash,count,projectile,effects);
 }
 typedef void (__fastcall *PlayerShot_t)(void* self, void* edx, void* pawn, float* origin, float* dir, int p4);
 static PlayerShot_t o_PlayerShot = nullptr;
@@ -3411,23 +3485,34 @@ static void __fastcall Hook_PlayerShot(void* self, void* edx, void* pawn, float*
 // Angles from a direction: 0x100506F0 (thiscall angles, dir).
 typedef void (__fastcall *ProjAim_t)(void* self, void* edx, void* pawn, float* origin, float* angles, uint8_t* hitFlag, float* hitPos, int p6);
 static ProjAim_t o_ProjAim = nullptr;
+static void* ProjectileShooterIgnore(void* pawn){
+    // Steam 6353936a...862765: reproduce the native 101998F0 shooter filter:
+    // entity physics component type 10FDE940, virtual getter +D8 (no arguments).
+    if(pawn!=g_pawn || !g_playerEntR || !*(uint32_t*)A(0x10FDE930))return nullptr;
+    auto* physics=(uint8_t*)GetComp((uint8_t*)g_playerEntR,0x10FDE940);
+    if(!physics || IsBadReadPtr(physics,4))return nullptr;
+    auto** table=*(void***)physics;if(!table || IsBadReadPtr(table,0xDC))return nullptr;
+    typedef void* (__fastcall *Ignore_t)(void*,void*);
+    return ((Ignore_t)table[0xD8/4])(physics,nullptr);
+}
 static void __fastcall Hook_ProjAim(void* self, void* edx, void* pawn, float* origin, float* angles, uint8_t* hitFlag, float* hitPos, int p6) {
     fc2vr::hands::ReadGuard handLayout;
     o_ProjAim(self, edx, pawn, origin, angles, hitFlag, hitPos, p6);
     static int calls = 0; bool logIt = calls++ < 5;
     if (!g_c.aimFromController || !origin || !angles || controls::MountedWeapon()) return;   // v221: mounted guns as the game aims them
-    float o[3], d[3], p[3], t = 0;
-    if (!AimPoint(o, d, p, &t)) { if (logIt) LOG("arms: projectile - no sight line"); return; }
-    float nd[3] = { p[0] - origin[0], p[1] - origin[1], p[2] - origin[2] };
-    if (Dot3(nd, nd) < 1e-6f) return;
-    Normalize(nd);
-    if (Dot3(nd, d) < 0.9f) memcpy(nd, d, 12);   // the muzzle far off the sight line (target right at the muzzle): the sight direction
+    if(fc2vr::hands::leftHanded && pawn!=g_pawn)return;
+    float o[3], d[3], p[3], barrel[3], t = 0;
+    void* ignore=fc2vr::hands::leftHanded?ProjectileShooterIgnore(pawn):nullptr;
+    if (!AimPoint(o, d, p, &t,barrel,ignore)) { if (logIt) LOG("arms: projectile - no sight line"); return; }
+    fc2vr::projectile::Aim aim;
+    if(!fc2vr::projectile::Resolve(fc2vr::hands::leftHanded,origin,barrel,d,p,aim))return;
+    const float nativeOrigin[3]={origin[0],origin[1],origin[2]};memcpy(origin,aim.origin,12);
     typedef void (__fastcall *Ang_t)(float* angles, void* edx, const float* dir);
-    ((Ang_t)A(0x100506F0))(angles, nullptr, nd);
-    if (hitFlag && hitPos && t < 299.0f) { *hitFlag = 1; memcpy(hitPos, p, 12); }
+    ((Ang_t)A(0x100506F0))(angles, nullptr, aim.direction);
+    if (hitFlag && hitPos && t < 299.0f && aim.hitAllowed) { *hitFlag = 1; memcpy(hitPos, p, 12); }
     else if (hitFlag) *hitFlag = 0;
     g_diagUntil = GetTickCount64() + 3500;
-    if (logIt) LOG("arms: projectile from muzzle %.2f %.2f %.2f dir %.3f %.3f %.3f -> sight point %.1f m away", origin[0], origin[1], origin[2], nd[0], nd[1], nd[2], Dist(origin, p));
+    if (logIt) LOG("arms: projectile left=%d native=%.3f,%.3f,%.3f muzzle=%.3f,%.3f,%.3f direction=%.3f,%.3f,%.3f targetDistance=%.3f forcedHit=%d",int(bool(fc2vr::hands::leftHanded)),nativeOrigin[0],nativeOrigin[1],nativeOrigin[2],origin[0],origin[1],origin[2],aim.direction[0],aim.direction[1],aim.direction[2],Dist(origin,p),aim.hitAllowed && t<299.0f);
 }
 
 // ---------------------------------------------------------------- who moves the crossbow (diagnostic)
@@ -3559,6 +3644,59 @@ static void LeftWeaponAttachment(bool restoreOnly) {
 void ObserveLeftWeapon(int eye) {
     fc2vr::hands::ReadGuard handLayout;
     if(eye<0 || eye>1)return;
+    {
+        static DWORD lastAudit[2]{};Frame frame;M4 grip,nativeDigits[15];uint64_t digitSample;void* digitWeapon;
+        Lock();frame=g_frame;grip=g_auditGripFrame;memcpy(nativeDigits,g_auditNativeDigits,sizeof nativeDigits);digitSample=g_auditDigitSample;digitWeapon=g_auditDigitWeapon;Unlock();const auto phase=frame.bodyYaw.sequence/100000;
+        if(frame.bodyYawFixture && phase>=30 && phase<180 && GetTickCount()-lastAudit[eye]>250){
+            lastAudit[eye]=GetTickCount();auto* graphic=(uint8_t*)g_wGfx;auto* ent=HeldEnt();M4 inverse,world,plane;
+            int muzzle=-1;const bool planeReady=MuzzlePose(frame.weapon,plane,&muzzle) || BladePlane(frame.weapon,plane);
+            if(graphic && ent && frame.weapon==g_curWeapon && !IsBadReadPtr(graphic+0x170,64) && Inv(grip,inverse)){
+                memcpy(world.m,graphic+0x170,64);world.m[0][3]=world.m[1][3]=world.m[2][3]=0;world.m[3][3]=1;
+                const M4 relative=Mul(world,inverse);char relText[512]{},planeText[512]{};
+                auto format=[](const M4& matrix,char* text,int capacity){int used=0;for(int i=0;i<16;++i){int n=snprintf(text+used,capacity-used,"%s%.6f",i?",":"",(&matrix.m[0][0])[i]);if(n<0 || n>=capacity-used){text[0]=0;return;}used+=n;}};
+                format(relative,relText,sizeof relText);if(planeReady)format(plane,planeText,sizeof planeText);
+                auto* at=!IsBadReadPtr(ent+0x78,4)?*(uint8_t**)(ent+0x78):nullptr;
+                const int attachment=at && !IsBadReadPtr(at,0x20)?*(int*)(at+0x1C):-1;
+                LOG("weapon-audit sample=%llu eye=%d key=%08x left=%d two=%d attachment=%d authority=%d,%d planeReady=%d muzzle=%d relative=%s plane=%s",(unsigned long long)frame.bodyYaw.sequence,eye,g_typeKey,int(bool(fc2vr::hands::leftHanded)),frame.twoHand,attachment,frame.handAuthority,frame.leftAuthority,planeReady,muzzle,relText,planeText);
+                static uint64_t fingerPhase[2]{},fingerLogged[2]{};static DWORD fingerBorn[2]{};static void* fingerWeapon[2]{};
+                if(fingerPhase[eye]!=phase || fingerWeapon[eye]!=frame.weapon || !controls::NormalControls()){
+                    fingerPhase[eye]=phase;fingerWeapon[eye]=frame.weapon;fingerBorn[eye]=GetTickCount();fingerLogged[eye]=0;
+                }
+                if(controls::NormalControls() && fc2vr::hands::leftHanded && digitWeapon==frame.weapon && digitSample/100000==phase && fingerLogged[eye]!=phase && GetTickCount()-fingerBorn[eye]>2000){
+                    auto* skeleton=(uint8_t*)g_playerSkel;
+                    if(skeleton && !IsBadReadPtr(skeleton+0x20,16)){
+                        auto* bones=*(Bone**)(skeleton+0x20);const int n=*(int*)(skeleton+0x2C);fc2vr::finger_grip::Mapping digits;
+                        if(n>0 && n<=512 && bones && !IsBadReadPtr(bones,n*sizeof(Bone)) && fc2vr::finger_grip::Resolve(bones,n,g_slot[20],g_slot[12],digits)){
+                            M4 hand,inverseHand;memcpy(hand.m,bones[g_slot[20]].model,64);hand.m[0][3]=hand.m[1][3]=hand.m[2][3]=0;hand.m[3][3]=1;
+                            if(Inv(hand,inverseHand)){
+                                fingerLogged[eye]=phase;
+                                for(int i=0;i<15;++i){M4 bone;memcpy(bone.m,bones[digits.bone[i][0]].model,64);bone.m[0][3]=bone.m[1][3]=bone.m[2][3]=0;bone.m[3][3]=1;
+                                    const M4 actual=Mul(bone,inverseHand);char actualText[512]{},nativeText[512]{};format(actual,actualText,sizeof actualText);format(nativeDigits[i],nativeText,sizeof nativeText);
+                                    LOG("finger-observed sample=%llu eye=%d key=%08x digit=%d leftBone=%d rightBone=%d relative=%s native=%s authority=%d,%d",(unsigned long long)frame.bodyYaw.sequence,eye,g_typeKey,i,digits.bone[i][0],digits.bone[i][1],actualText,nativeText,frame.handAuthority,frame.leftAuthority);
+                                }
+                            }
+                        }
+                    }
+                }
+                float muzzleOrigin[3],direction[3];
+                if(BarrelRay(world,frame.weapon,muzzleOrigin,direction)){
+                    float localForward[3];XformDir(inverse,direction,localForward);Normalize(localForward);
+                    LOG("weapon-forward sample=%llu eye=%d key=%08x left=%d two=%d muzzle=%d direction=%.6f,%.6f,%.6f authority=%d,%d",(unsigned long long)frame.bodyYaw.sequence,eye,g_typeKey,int(bool(fc2vr::hands::leftHanded)),frame.twoHand,muzzle,localForward[0],localForward[1],localForward[2],frame.handAuthority,frame.leftAuthority);
+                    for(int behind=0;behind<2;++behind){float native[3],target[3];for(int i=0;i<3;++i){native[i]=muzzleOrigin[i]-direction[i]*.75f;target[i]=muzzleOrigin[i]+direction[i]*(behind?-.15f:10.0f);}
+                        fc2vr::projectile::Aim preview;const bool ok=fc2vr::projectile::Resolve(fc2vr::hands::leftHanded,native,muzzleOrigin,direction,target,preview);
+                        float error=1,originError=1;
+                        if(ok){float angles[3]{};typedef void (__fastcall *Ang_t)(float*,void*,const float*);((Ang_t)A(0x100506F0))(angles,nullptr,preview.direction);
+                            // Dunia 1.0.1.10 stores azimuth with a 3*pi/2 offset.
+                            const float yaw=angles[2]-4.71238898038f;float reconstructed[3]={cosf(angles[0])*cosf(yaw),cosf(angles[0])*sinf(yaw),sinf(angles[0])};
+                            error=Dist(reconstructed,preview.direction);originError=Dist(preview.origin,fc2vr::hands::leftHanded?muzzleOrigin:native);
+                        }
+                        void* ignore=ProjectileShooterIgnore(g_pawn);
+                        LOG("projectile-preview sample=%llu eye=%d key=%08x left=%d behind=%d ok=%d originError=%.6f nativeAngleError=%.6f hitAllowed=%d shooterIgnore=%d authority=%d,%d scenario=back-offset-no-spawn",(unsigned long long)frame.bodyYaw.sequence,eye,g_typeKey,int(bool(fc2vr::hands::leftHanded)),behind,ok,originError,error,preview.hitAllowed,ignore!=nullptr,frame.handAuthority,frame.leftAuthority);
+                    }
+                }
+            }
+        }
+    }
     {
         static DWORD lastBlade[2]{};Frame frame;M4 grip;
         Lock();frame=g_frame;grip=g_fixtureGripFrame;Unlock();

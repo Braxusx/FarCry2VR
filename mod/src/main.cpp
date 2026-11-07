@@ -1363,6 +1363,9 @@ static char __fastcall Hook_ConsoleCmd(void* self, void* edx, uint8_t* str) {
     if (self && str) {
         const char* s = *(uint32_t*)(str + 0x18) < 0x10 ? (const char*)(str + 4) : *(const char**)(str + 4);
         if (s) {
+#if defined(FC2VR_BODY_YAW_TESTING)
+            if(body_yaw_fixture::current.configured)LOG("audit-console command=%s",s);
+#endif
             if (!_stricmp(s, "devmodeon")) { *((uint8_t*)self + 0x68) = 1; LOG("console: dev mode on"); }
             else if (!_stricmp(s, "devmodeoff")) { *((uint8_t*)self + 0x68) = 0; LOG("console: dev mode off"); }
             else if (g_cfg.devConsole >= 2) *((uint8_t*)self + 0x68) = 1;
@@ -2792,7 +2795,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
 #if defined(FC2VR_BODY_YAW_TESTING)
         // The owned runner selects the real blade with a keyboard slot. Its
         // visual-only controller fixture does not run the gamepad slot tracker.
-        if(body_yaw_fixture::current.configured){const auto phase=body_yaw_fixture::current.sequence/100000;if(phase>=22 && phase<=24)af.machete=true;}
+        if(body_yaw_fixture::current.configured)af.machete=arms::FixtureBladeEquipped();
 #endif
         if (af.leftValid) {
             put(af.laimO, frame.ReferencePosition(ToV3(lh.aim.position)));
@@ -2863,6 +2866,9 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             af.twoHand = grabbing;
             controls::SetLeftGripClaimed(grabbing); g_twoHandGrip = grabbing;
         }
+#if defined(FC2VR_BODY_YAW_TESTING)
+        if(body_yaw_fixture::current.configured){const auto phase=body_yaw_fixture::current.sequence/100000;if(phase>=30 && phase<180){const auto stage=(phase-30)%5;af.twoHand=stage==2 || stage==3;}}
+#endif
         arms::SubmitFrame(af);
     }
 
