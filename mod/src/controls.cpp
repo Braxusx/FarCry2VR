@@ -3,6 +3,7 @@
 // (ordinal 3). Both imports are redirected here: while VR controllers are active, pad 0 is synthesised from them,
 // so the game's gamepad bindings, hints and menus all work unchanged.
 #include "controls.h"
+#include "arms.h"
 #include "xr.h"
 #include "log.h"
 #include "gameaddr.h"
@@ -492,7 +493,15 @@ void Install(HMODULE dunia, const Config& c) {
     LOG("controls: XInputGetState hook %d, XInputSetState hook %d", a, b);
 }
 bool Active() { return g_active != 0; }
-bool MacheteSelected() { return g_cycle == 3; }
+bool MacheteSelected() {   // v234 test 70: the held weapon decides when it is known; the slot guess only before that
+    const int m = arms::HeldMelee();
+    if (m >= 0) {
+        if (m == 1 && g_cycle != 3) g_cycle = 3;
+        if (m == 0 && g_cycle == 3) { LOG("controls: slot guess said machete, the held weapon is not - guess corrected"); g_cycle = 0; }
+        return m == 1;
+    }
+    return g_cycle == 3;
+}
 bool SecondarySelected() { return g_cycle == 1; }   // the hip slot (pistols, SMGs, sawed-off, M-79, flare gun, IED)
 bool MapOpen() { return g_mapOpen; }
 void SetSightsAllowed(bool a) { g_sightsAllowed = a; }

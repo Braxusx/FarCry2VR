@@ -3842,6 +3842,25 @@ bool MonoTarget() { return g_monoTarget && GetTickCount() - g_monoTargetTick < 3
 void SetScopeRay(const float o[3], const float d[3], const RayContext& context) { if (!g_csInit) return;
     Lock(); memcpy(g_scopeO,o,12); memcpy(g_scopeD,d,12); g_scopeSource = context.source; g_scopeWeapon = context.weapon; g_scopeTick = GetTickCount(); Unlock(); }
 void* CurrentWeapon() { return g_curWeapon; }
+// v234 test 70: whether the held weapon is a melee weapon (its strategy is the melee one, vtable 0x10E21DE0): 1 yes,
+// 0 no, -1 nothing held / not readable. The machete used to be taken from the weapon-slot guess, which a game-side
+// switch can leave on the machete while the crossbow is held - then the machete hand angles tilted the crossbow and a
+// hold taken then (left grip + A) was saved tilted.
+int HeldMelee() {
+    uint8_t* w = (uint8_t*)g_curWeapon;
+    static uint8_t* lastW = nullptr; static int last = -1;
+    if (!w) return -1;
+    if (w == lastW && last >= 0) return last;
+    int r = -1;
+    if (!IsBadReadPtr(w + 0x24, 4)) {
+        uint8_t* a = *(uint8_t**)(w + 0x24);
+        uint8_t* strat = a && !IsBadReadPtr(a + 0x54, 4) ? *(uint8_t**)(a + 0x54) : nullptr;
+        if (strat && !IsBadReadPtr(strat, 4)) r = *(uintptr_t*)strat == A(0x10E21DE0) ? 1 : 0;
+        else if (a) r = 0;
+    }
+    if (r >= 0) { if (w != lastW) LOG("arms: held weapon %p is %s", w, r ? "a melee weapon (machete)" : "not a melee weapon"); lastW = w; last = r; }
+    return r;
+}
 void SetMachete(float angle, float yaw, float roll) { g_c.macheteAngle = angle; g_c.macheteYaw = yaw; g_c.macheteRoll = roll; }
 void GetMachete(float& angle, float& yaw, float& roll) { angle = g_c.macheteAngle; yaw = g_c.macheteYaw; roll = g_c.macheteRoll; }
 void SetMapHands(float angle, float yaw, float roll) { g_c.mapAngle = angle; g_c.mapYaw = yaw; g_c.mapRoll = roll; }
