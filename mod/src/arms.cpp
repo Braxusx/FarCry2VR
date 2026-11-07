@@ -286,6 +286,30 @@ static M4 g_prevFinalRh; static bool g_havePrevFinal = false;
 // the game's own pose of it (the axis nearest the camera's forward / up, never the axis the model is mirrored across -
 // the crossbow's limbs), its offset in the hand, and where the game's camera sits relative to it (the sight line).
 static bool g_wfActive = false; static M4 g_wfOff; static float g_wfCam[3], g_wfFwd[3], g_wfUp[3];
+// v234 test 80: sight calibration (Ctrl+F1) - with the sights lined up on something far away, the eye behind them is on
+// the gun's sight line; its place relative to the gun is saved per gun type ([Sights] in fc2vr.ini) and the dot and shots
+// start from it
+static volatile bool g_calReq = false; static float g_wfDe[3] = { 1, 0, 0 };
+struct SightCal { uint32_t key; float p[3]; bool have; };
+static SightCal g_sightCal[32]; static int g_nSightCal = 0;
+static char g_ini[MAX_PATH];
+static bool SightCalGet(uint32_t key, float out[3]) {
+    if (!key) return false;
+    for (int i = 0; i < g_nSightCal; ++i) if (g_sightCal[i].key == key) { if (g_sightCal[i].have) memcpy(out, g_sightCal[i].p, 12); return g_sightCal[i].have; }
+    SightCal c{ key, {}, false };
+    if (g_ini[0]) { char k[16], v[96]; snprintf(k, sizeof k, "S%08X", key); GetPrivateProfileStringA("Sights", k, "", v, sizeof v, g_ini);
+                    if (sscanf(v, "%f %f %f", &c.p[0], &c.p[1], &c.p[2]) == 3 && std::isfinite(c.p[0]) && fabsf(c.p[0]) < 1 && fabsf(c.p[1]) < 1 && fabsf(c.p[2]) < 1) c.have = true; }
+    if (g_nSightCal < 32) g_sightCal[g_nSightCal++] = c;
+    if (c.have) { memcpy(out, c.p, 12); LOG("arms: gun %08x sight line from its calibration %.3f %.3f %.3f", key, c.p[0], c.p[1], c.p[2]); }
+    return c.have;
+}
+static void SightCalPut(uint32_t key, const float p[3]) {
+    int s = -1; for (int i = 0; i < g_nSightCal; ++i) if (g_sightCal[i].key == key) s = i;
+    if (s < 0) s = g_nSightCal < 32 ? g_nSightCal++ : 31;
+    g_sightCal[s] = { key, { p[0], p[1], p[2] }, true };
+    if (g_ini[0]) { char k[16], v[96]; snprintf(k, sizeof k, "S%08X", key); snprintf(v, sizeof v, "%.4f %.4f %.4f", p[0], p[1], p[2]); WritePrivateProfileStringA("Sights", k, v, g_ini); }
+}
+void RequestSightCalibration() { g_calReq = true; }
 static bool g_wfAds = false; static float g_wfAdsDir[3], g_wfAdsUp[3];   // v234 test 78: the sight line measured in the game's aim pose
 static int WeaponMirrorAxis(void* sk) {   // the weapon-model axis its bones are mirrored across (-1 = none)
     int nb = (sk && !IsBadReadPtr((uint8_t*)sk + 0x2C, 4)) ? *(int*)((uint8_t*)sk + 0x2C) : 0;
@@ -314,7 +338,7 @@ static bool WeaponWorld(void* w, M4& out) {
     return std::isfinite(out.m[0][0]) && std::isfinite(out.m[3][0]);
 }          // current weapon type (HUD reticle name id), from main
 static int g_curAxis = -1; static float g_curSign = 1;   // the current weapon type's barrel axis (weapon entity row), -1 = unknown
-static char g_ini[MAX_PATH] = "";
+// g_ini: declared with the sight calibration above
 static bool LoadHold(uint32_t key, M4& r, M4& l, int* axis, float* sign) {
     if (!g_ini[0]) return false;
     char k[16], v[1024]; snprintf(k, sizeof k, "H%08X", key);
@@ -1259,6 +1283,12 @@ static void Apply(uint8_t* skel) {
                         g_wfActive = true; g_wfOff = Ooff; memcpy(g_wfCam, wf.cam, 12); memcpy(g_wfFwd, fw, 12); memcpy(g_wfUp, uc, 12);
                         g_wfAds = wf.ads && wf.adsCam[0] < 1e8f && HeldMelee() == 0;
                         if (g_wfAds) { memcpy(g_wfCam, wf.adsCam, 12); memcpy(g_wfAdsDir, wf.adsDir, 12); memcpy(g_wfAdsUp, wf.adsUp, 12); }
+                        if (HeldMelee() == 0) {
+                            float de[3] = { 0.931f, -0.138f, 0.338f };
+                            if (wf.ads && wf.adsCam[0] < 1e8f) memcpy(de, wf.adsDir, 12); else if (wf.haveDir) memcpy(de, wf.dir, 12);
+                            Normalize(de); memcpy(g_wfDe, de, 12);
+                            float cal[3]; if (SightCalGet(g_typeKey, cal)) memcpy(g_wfCam, cal, 12);   // v234 test 80: calibrated
+                        }
                     }
                 }
             }
@@ -1354,6 +1384,33 @@ static void Apply(uint8_t* skel) {
     { float so[3], sf[3], su[3]; XformPt(Map, co, so); XformDir(Map, cf, sf); XformDir(Map, cu, su);
       if (g_wfActive) {   // v234 test 75: along the controller, from where the game's camera sits relative to the weapon
           M4 Wf = Mul(g_wfOff, Mul(Bw[rh], Map)); XformPt(Wf, g_wfCam, so); memcpy(sf, g_wfFwd, 12); memcpy(su, g_wfUp, 12);
+          {   // v234 test 80: sight calibration - average both eyes relative to the gun over 1 s; the one on the sight line wins
+              static bool on = false; static ULONGLONG t0 = 0; static double acc[2][3]; static int n = 0; static uint32_t key = 0;
+              const ULONGLONG tn = GetTickCount64();
+              if (g_calReq) { g_calReq = false;
+                  if (HeldMelee() != 0 || !g_typeKey || !f.headValid) { LOG("arms: sight calibration - hold a gun first"); xr::Haptic(1, 0.6f, 0.4f); }
+                  else { on = true; t0 = tn; n = 0; key = g_typeKey; memset(acc, 0, sizeof acc); xr::Haptic(1, 0.3f, 0.05f); } }
+              M4 iwf;
+              if (on && (key != g_typeKey || HeldMelee() != 0)) { on = false; LOG("arms: sight calibration cancelled - weapon changed"); }
+              else if (on && f.headValid && Inv(Wf, iwf)) {
+                  for (int e = 0; e < 2; ++e) { float ew[3], el[3]; toWorld(e ? f.eyeR : f.eyeL, ew, true); XformPt(iwf, ew, el); for (int k = 0; k < 3; ++k) acc[e][k] += el[k]; }
+                  ++n;
+                  if (tn - t0 > 1000 && n > 10) {
+                      on = false; float best = 1e9f; int be = -1; float pe[2][3];
+                      for (int e = 0; e < 2; ++e) {
+                          for (int k = 0; k < 3; ++k) pe[e][k] = (float)(acc[e][k] / n);
+                          float v[3] = { pe[e][0] - g_wfCam[0], pe[e][1] - g_wfCam[1], pe[e][2] - g_wfCam[2] }; float a = Dot3(v, g_wfDe);
+                          for (int k = 0; k < 3; ++k) v[k] -= g_wfDe[k] * a;
+                          float dl = sqrtf(Dot3(v, v)); if (dl < best) { best = dl; be = e; }
+                      }
+                      LOG("arms: sight calibration for gun %08x - left eye %.3f %.3f %.3f, right eye %.3f %.3f %.3f (gun frame); %s eye %.1f cm from the old sight line",
+                          key, pe[0][0], pe[0][1], pe[0][2], pe[1][0], pe[1][1], pe[1][2], be ? "right" : "left", best * 100.0f);
+                      if (be >= 0 && best < 0.12f && Dot3(pe[be], pe[be]) < 0.8f * 0.8f) { SightCalPut(key, pe[be]); memcpy(g_wfCam, pe[be], 12); XformPt(Wf, g_wfCam, so);
+                          xr::Haptic(1, 0.5f, 0.06f); LOG("arms: gun %08x sight line saved: %.3f %.3f %.3f", key, pe[be][0], pe[be][1], pe[be][2]); }
+                      else { LOG("arms: sight calibration rejected - neither eye was behind the sights"); xr::Haptic(1, 0.8f, 0.5f); }
+                  }
+              }
+          }
           // v234 test 79: the gun is turned so its own sight line runs along the controller, so the dot follows the controller
       } else if (g_c.steadyHands && g_relHave && !f.map) {
           M4 ir; if (Inv(g_relR, ir)) {

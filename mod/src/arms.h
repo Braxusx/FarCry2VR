@@ -137,6 +137,7 @@ struct Frame {
     bool machete = false, map = false;   // machete in hand; map/GPS out
     float laimO[3], laimR[3], laimU[3], laimB[3], lgripO[3];   // left controller (ref)
     float headO[3], headF[3];     // head position and forward (ref)
+    float eyeL[3], eyeR[3];       // v234 test 80: the two eye positions (ref)
 };
 typedef bool (*PatchFn)(uintptr_t target, const uint8_t* expect, size_t n, void* hook, void** tramp);
 void Install(uintptr_t base, const Config& c, PatchFn patch);
@@ -194,6 +195,7 @@ void SetFreeHands(float angle, float yaw, float roll);
 void GetFreeHands(float& angle, float& yaw, float& roll);
 void SetPhoneHands(float angle, float yaw, float roll);
 void GetPhoneHands(float& angle, float& yaw, float& roll);
+void RequestSightCalibration();   // v234 test 80: Ctrl+F1 - the eye looking down the sights becomes the held gun's sight line
 int HeldMelee();        // v234 test 70: 1 the held weapon is the machete, 0 another weapon, -1 unknown
 void* CurrentWeapon();   // the player's current weapon object (identity only)                     // called (game thread) when a hand uses the interaction target
 // the weapon's sight line (ref frame: origin, unit direction); false if not updated recently
