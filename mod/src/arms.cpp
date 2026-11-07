@@ -1216,7 +1216,7 @@ static void Apply(uint8_t* skel) {
                             if (g_typeKey) { int slot = -1; for (int i = 0; i < nKnown; ++i) if (known[i].key == g_typeKey) slot = i;
                                 if (slot < 0) { slot = nKnown < 24 ? nKnown++ : 23; known[slot] = { g_typeKey, wf.bar, wf.up, wf.sb, wf.su, { wf.cam[0], wf.cam[1], wf.cam[2] }, false, {}, {}, {} }; }
                                 known[slot].ads = true; memcpy(known[slot].adsCam, pc, 12); memcpy(known[slot].adsDir, pd, 12); memcpy(known[slot].adsUp, pu, 12); }
-                        } else wf.adsSince = t + 2000;   // try again a little later
+                        } else wf.ads = true, wf.adsCam[0] = 1e9f;   // implausible: logged once, not used (wf.adsCam[0] marks it)
                     }
                 }
             } else if (!controls::SightsUp()) wf.adsSince = 0;
@@ -1242,7 +1242,7 @@ static void Apply(uint8_t* skel) {
                     M4 inv; if (Inv(Bw[rh], inv)) {
                         Map = Mul(inv, H);
                         g_wfActive = true; g_wfOff = Ooff; memcpy(g_wfCam, wf.cam, 12); memcpy(g_wfFwd, fw, 12); memcpy(g_wfUp, uc, 12);
-                        g_wfAds = wf.ads && HeldMelee() == 0;
+                        g_wfAds = wf.ads && wf.adsCam[0] < 1e8f && HeldMelee() == 0;
                         if (g_wfAds) { memcpy(g_wfCam, wf.adsCam, 12); memcpy(g_wfAdsDir, wf.adsDir, 12); memcpy(g_wfAdsUp, wf.adsUp, 12); }
                     }
                 }
