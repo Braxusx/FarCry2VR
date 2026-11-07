@@ -1278,9 +1278,10 @@ static void Apply(uint8_t* skel) {
             M4 supportRelative=Mul(Bw[nativeLeft],inverseFrame),mirroredSupport;
             fc2vr::left_grip::Mirror(&supportRelative.m[0][0],2,&mirroredSupport.m[0][0]);
             M4 rightSupport=Mul(mirroredSupport,mirrorFrame);
-            for(int k=0;k<3;++k)rightSupport.m[3][k]=fg[k];
+            fc2vr::left_grip::SupportContact(g_typeKey,leftRig,twoHand,
+                &mirrorFrame.m[0][0],fg,rightSupport.m[3]);
             supportPalmPose=rightSupport;
-            memcpy(supportTarget,fg,12);supportTargetValid=true;
+            memcpy(supportTarget,rightSupport.m[3],12);supportTargetValid=true;
             const M4 relative=Mul(calibratedGrip,inverseFrame);M4 mirrored;
             fc2vr::left_grip::Mirror(&relative.m[0][0],2,&mirrored.m[0][0]);
             leftPalmPose=Mul(mirrored,mirrorFrame);

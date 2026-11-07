@@ -49,6 +49,16 @@ int main(){
         Check(Error(Mul(leftGun,turn),Mul(WeaponMirror(gun,muzzleFrame),carried))<.00001f,"two-hand turn follows mirroring in the carried grip frame");
         const Matrix supportPose=Pose(.9f,-.7f,.1f,.02f,-.3f);
         const Matrix rightSupport=Mul(Mirror(supportPose,2),carried);
+        float contactCorrection[3],referenceCorrection[3];
+        fc2vr::left_grip::SupportContact(0x4d786da0u,true,true,carried.m,rightSupport.m+12,contactCorrection);
+        const float localRight[3]={.015f,0,0};float displaced[3];Point(carried,localRight,displaced);
+        for(int k=0;k<3;++k)referenceCorrection[k]=rightSupport.m[12+k]+displaced[k]-carried.m[12+k];
+        Check(Distance(contactCorrection,referenceCorrection)<.00001f,"G3 support correction follows carried weapon through full turns and pitch");
+        Check(std::fabs(Distance(contactCorrection,rightSupport.m+12)-.015f)<.00001f,"support contact moves exactly 15 mm");
+        for(int mode=0;mode<3;++mode){
+            fc2vr::left_grip::SupportContact(mode==0?0x12345678u:0x4d786da0u,mode!=1,mode!=2,carried.m,rightSupport.m+12,contactCorrection);
+            Check(Distance(contactCorrection,rightSupport.m+12)==0,"other weapons, right weapon mode and free support hand remain unchanged");
+        }
         Check(std::fabs(Det(rightSupport)-1)<.00001f,"support wrist conversion preserves a proper rotation");
         Check(Error(Mirror(Mirror(supportPose,2),2),supportPose)<.00001f,"support pose conversion is reversible");
         Check(Error(rightSupport,Mul(hand,carried))>.2f,"support orientation is distinguishable from translated trigger wrist regression");

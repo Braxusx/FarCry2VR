@@ -1,5 +1,6 @@
 #pragma once
 #include <cmath>
+#include <cstdint>
 
 namespace fc2vr::left_grip {
 // Native left/right neutral wrists differ by bone-Z and grip-X reflections.
@@ -14,6 +15,17 @@ inline bool Unit(float* v) {
     if(!std::isfinite(length) || length<0.00001f)return false;
     for(int i=0;i<3;++i)v[i]/=length;
     return true;
+}
+// G3KA4's mirrored right support palm sits slightly left of its foregrip.
+// Apply a 15 mm contact correction in the carried grip's right direction.
+// This is a wrist-only adjustment: never feed it back into two-hand aiming.
+inline void SupportContact(std::uint32_t model,bool leftWeapon,bool twoHanded,
+                           const float* carriedGrip,const float* point,float* result) {
+    for(int k=0;k<3;++k)result[k]=point[k];
+    if(model!=0x4d786da0u || !leftWeapon || !twoHanded)return;
+    float right[3]={carriedGrip[0],carriedGrip[1],carriedGrip[2]};
+    if(!Unit(right))return;
+    for(int k=0;k<3;++k)result[k]+=.015f*right[k];
 }
 inline void Cross(const float* a,const float* b,float* out) {
     out[0]=a[1]*b[2]-a[2]*b[1];out[1]=a[2]*b[0]-a[0]*b[2];out[2]=a[0]*b[1]-a[1]*b[0];

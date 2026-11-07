@@ -43,6 +43,11 @@ The weapon is attached to the left-hand bone with the corresponding offset.
 Character meshes and finger shapes are not mirrored; free-hand cosmetic cleanup
 is outside this step. The native
 attachment adapter is gated to the exact Steam image listed in BODY_YAW.md.
+
+The G3KA4 (`4d786da0`) has a 15 mm rightward support-palm contact adjustment
+while gripping with the right hand in left-weapon mode. This follows the carried
+grip frame and changes wrist position only; the grab hotspot, two-hand aim and
+support wrist orientation stay unchanged. The amount awaits physical VR confirmation.
 Shoulder and hip holster zones follow the current weapon-hand side, including
 live F1 switches. The weapon controller reaches over its own shoulder for
 primary/special weapons or down at its own hip (pointing down) for the secondary.
