@@ -546,6 +546,7 @@ static bool InstallReloadDetour() {
 // away from the hand); during 3.5 s after a projectile shot its motion is logged.
 static void CallerReport();
 static void AttachWatch();
+static uint8_t* HeldEnt();
 // ---- v213 monocular: the map strategy (CGadgetMapStrategy) equips it in 0x106EFB40 (thiscall, no args): hides the map
 // and GPS, attaches the monocular entity (handle at +0x10C, entity at handle+0xC) to the player; +0x2D9 = equipped.
 // The game hangs it on a bone the mod doesn't move (it floated in front of the camera); it is re-hung on the right
@@ -1144,18 +1145,33 @@ static void Apply(uint8_t* skel) {
                 wf = WF{}; wf.w = w; wf.mirror = WeaponMirrorAxis(g_wSkel); wf.cb = wf.cu = -1; wf.since = t; wf.kb = -1;
                 wf.bar = 0; wf.up = 2; wf.sb = 1; wf.su = 1; wf.cam[0] = -0.07f; wf.cam[1] = 0.0f; wf.cam[2] = 0.12f;
             }
+            if (HeldMelee() == 1) { wf.bar = 0; wf.up = 1; wf.sb = 1; wf.su = -1; }   // the machete: blade +X, back -Y
+            else { wf.bar = 0; wf.up = 2; wf.sb = 1; wf.su = 1; }                      // guns: barrel +X, top +Z
             if (!wf.fixed && g_typeKey && wf.key != g_typeKey) {
                 wf.key = g_typeKey;
                 for (int i = 0; i < nKnown; ++i) if (known[i].key == g_typeKey) { wf.fixed = true; wf.bar = known[i].bar; wf.up = known[i].up; wf.sb = known[i].sb; wf.su = known[i].su; memcpy(wf.cam, known[i].cam, 12); break; }
             }
-            M4 Ooff = Translate(0, 0, 0);
-            if (g_havePrevFinal) { M4 ww, ih; if (WeaponWorld(w, ww) && Inv(g_prevFinalRh, ih)) { M4 o = Mul(ww, ih); if (Dot3(o.m[3], o.m[3]) < 0.09f && fabsf(o.m[0][0] * o.m[0][0] + o.m[0][1] * o.m[0][1] + o.m[0][2] * o.m[0][2] - 1.0f) < 0.1f) Ooff = o; } }
+            // v234 test 77: the weapon's offset on the hand straight from its attachment node (child world = offset *
+            // hand bone * pawn world); test 75/76 derived it from last frame's weapon and our re-posed hand, which mixed
+            // our own turn back in and made the axes come out differently on every draw
+            M4 Ooff = Translate(0, 0, 0); bool onHand = false;
+            {   uint8_t* ent = HeldEnt();
+                uint8_t* at = (ent && !IsBadReadPtr(ent + 0x78, 4)) ? *(uint8_t**)(ent + 0x78) : nullptr;
+                if (at && !IsBadReadPtr(at, 0xC0) && *(int*)(at + 0x1C) == g_slot[12]) {
+                    M4 o; memcpy(o.m, at + 0x80, 64); o.m[0][3] = o.m[1][3] = o.m[2][3] = 0; o.m[3][3] = 1;
+                    if (std::isfinite(o.m[0][0]) && Dot3(o.m[3], o.m[3]) < 0.09f && fabsf(Dot3(o.m[0], o.m[0]) - 1.0f) < 0.1f) { Ooff = o; onHand = true; }
+                }
+            }
             M4 wAnim = Mul(Ooff, Banim[rh]);
             float rows[3][3]; for (int k = 0; k < 3; ++k) { rows[k][0] = wAnim.m[k][0]; rows[k][1] = wAnim.m[k][1]; rows[k][2] = wAnim.m[k][2]; Normalize(rows[k]); }
-            if (!wf.fixed) {
-                int cb = -1, cu2 = -1; float bb = 0, bu = 0, sgb = 1, sgu = 1;
-                for (int k = 0; k < 3; ++k) if (k != wf.mirror) { float d = Dot3(rows[k], cf); if (fabsf(d) > bb) { bb = fabsf(d); cb = k; sgb = d > 0 ? 1.0f : -1.0f; } }
-                for (int k = 0; k < 3; ++k) if (k != cb) { float d = Dot3(rows[k], cu); if (fabsf(d) > bu) { bu = fabsf(d); cu2 = k; sgu = d > 0 ? 1.0f : -1.0f; } }
+            if (!wf.fixed && onHand) {
+                // v234 test 77: fixed axes, one rule per kind - every Far Cry 2 gun model has its barrel along +X and its
+                // top along +Z (all of them settled there in test 75); the machete's blade is +X with its back along -Y.
+                // Detecting them from the game's pose picked a sideways axis during draw animations (test 76). The game's
+                // pose is only used for where the sights sit (once the barrel is within 32 deg of the view).
+                const bool melee = HeldMelee() == 1;
+                int cb = 0, cu2 = melee ? 1 : 2; float sgb = 1.0f, sgu = melee ? -1.0f : 1.0f;
+                float bb = Dot3(rows[0], cf);
                 if (cb >= 0 && cu2 >= 0 && bb > 0.3f) {
                     if (cb != wf.cb || cu2 != wf.cu || sgb != wf.csb || sgu != wf.csu) { wf.cb = cb; wf.cu = cu2; wf.csb = sgb; wf.csu = sgu; wf.since = t; }
                     float camNow[3]; M4 iw; bool haveCam = Inv(wAnim, iw); if (haveCam) XformPt(iw, co, camNow);
