@@ -3,6 +3,7 @@
 // (ordinal 3). Both imports are redirected here: while VR controllers are active, pad 0 is synthesised from them,
 // so the game's gamepad bindings, hints and menus all work unchanged.
 #include "controls.h"
+#include "arms.h"
 #include "xr.h"
 #include "log.h"
 #include "gameaddr.h"
@@ -162,6 +163,7 @@ static volatile bool g_mapReal = false;   // v219: the map controls are up for t
 static volatile bool g_phoneOut = false; static ULONGLONG g_phoneT = 0;
 bool PhoneOut() { return g_phoneOut; }
 bool ItemControls() { return g_itemMap || g_phoneOut; }
+unsigned long long PhoneAgeMs() { return g_phoneOut ? GetTickCount64() - g_phoneT : 0; }
 void ClearPhone() { if (g_phoneOut) { g_phoneOut = false; LOG("controls: phone away (weapon back)"); } }
 static volatile LONG g_recapReq = 0;
 int TakeRecapture() { return (int)InterlockedExchange(&g_recapReq, 0); }
@@ -351,7 +353,10 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     g.bRightTrigger = poseFire ? (BYTE)lroundf(fminf(1.0f, R.trigger) * 255.0f) : 0;   // pose-guided fire needs tracked input; native vehicle/turret controls do not
     if (!g_c.macheteTrigger && MacheteSelected()) g.bRightTrigger = 0;   // machete: hits come from swinging it; the game's attack animation sways the camera
     // right grip: holster grab (weapon select) in a body zone, iron sight / reverse elsewhere
-    Zone z = headValid && g_vehMode == 0 ? RightHandZone(R, head) : Z_NONE;   // no holster grabs in a vehicle seat
+    // no holster grabs in a vehicle seat, nor in menus / loading screens (v234 test 36: a chest grab in the pause menu left
+    // the mod thinking the machete was out - the gun in the hand then got the machete's hand angles, twisted)
+    const bool inMenu = g_menuMap || g_loadingMap;
+    Zone z = headValid && g_vehMode == 0 && !inMenu ? RightHandZone(R, head) : Z_NONE;
     g_zoneNow = z != Z_NONE;
     bool grip = R.squeeze > (g_rGripDown ? 0.35f : 0.6f);
     // v212 monocular: with the map / GPS up (or the monocular out), a right-grip press away from the holster spots takes the
@@ -439,9 +444,9 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     if (R.btn2 && !g_bDown && L.squeeze > 0.6f) { g_bCombo = true; InterlockedExchange(&g_holsterReq, 1); xr::Haptic(1, 0.5f, 0.05f); LOG("controls: left grip + B - weapon away / back"); }
     if (g_bCombo) { if (!R.btn2) g_bCombo = false; g_bDown = R.btn2; g_bHoldFired = true; }
     if (R.btn2 && !g_bDown) { g_bTime = now; g_bHoldFired = false; }
-    if (R.btn2 && !g_bHoldFired && now - g_bTime >= (ULONGLONG)g_c.holdMs) { PulseBtn(XINPUT_GAMEPAD_RIGHT_THUMB, now); g_bHoldFired = true; }
+    if (R.btn2 && !g_bHoldFired && now - g_bTime >= (ULONGLONG)g_c.holdMs && !inMenu) { PulseBtn(XINPUT_GAMEPAD_RIGHT_THUMB, now); g_bHoldFired = true; }
     if (!R.btn2 && g_bDown && !g_bHoldFired && g_mono) { g_mono = false; LOG("controls: monocular away (weapon change)"); }
-    if (!R.btn2 && g_bDown && !g_bHoldFired) { g_mapOpen = false; g_cycle = (g_cycle + 1) & 3; PulseBtn(kSlots[g_cycle], now); InterlockedExchange(&g_selectReq, 1); }
+    if (!R.btn2 && g_bDown && !g_bHoldFired && !inMenu) { g_mapOpen = false; g_cycle = (g_cycle + 1) & 3; PulseBtn(kSlots[g_cycle], now); InterlockedExchange(&g_selectReq, 1); }   // B in a menu = back, not a weapon change
     g_bDown = R.btn2;
     for (auto& p : g_pulse) if (p.until > now) b |= p.btn;
     if (g_usePulse > now) b |= XINPUT_GAMEPAD_Y;           // a hand touched the interaction target
@@ -488,7 +493,16 @@ void Install(HMODULE dunia, const Config& c) {
     LOG("controls: XInputGetState hook %d, XInputSetState hook %d", a, b);
 }
 bool Active() { return g_active != 0; }
-bool MacheteSelected() { return g_cycle == 3; }
+bool MacheteSelected() {   // v234 test 70: the held weapon decides when it is known; the slot guess only before that
+    const int m = arms::HeldMelee();
+    if (m >= 0) {
+        if (m == 1 && g_cycle != 3) g_cycle = 3;
+        if (m == 0 && g_cycle == 3) { LOG("controls: slot guess said machete, the held weapon is not - guess corrected"); g_cycle = 0; }
+        return m == 1;
+    }
+    return g_cycle == 3;
+}
+bool SecondarySelected() { return g_cycle == 1; }   // the hip slot (pistols, SMGs, sawed-off, M-79, flare gun, IED)
 bool MapOpen() { return g_mapOpen; }
 void SetSightsAllowed(bool a) { g_sightsAllowed = a; }
 bool RightHandInHolsterZone() { return g_zoneNow; }

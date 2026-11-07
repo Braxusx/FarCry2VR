@@ -6,6 +6,8 @@
 // with a per-eye render camera (viewport+0x3F0). After each pass the backbuffer holds that eye's
 // finished, post-processed 3D image (the HUD is drawn later by Render2DView), which is copied
 // into a shared texture and submitted to OpenXR.
+#include <smmintrin.h>
+#include <x86intrin.h>
 #include <vector>
 #include <windows.h>
 #include <d3d10_1.h>
@@ -83,7 +85,10 @@ struct Config {
     int   uiMode = 1;             // 1 = per-eye UI viewport: centred on the gun's aim point, scaled (fixes doubled reticle/menus)
     float uiDepth = 6.0f;         // metres: distance at which the UI converges (aim point)
     float uiScale = 0.7f;         // UI size relative to the eye image
-    char  uiSkipTex[512] = "256x512x71v18";   // UI textures (WxHxFormat, comma-separated) not drawn into the layer
+    char  uiSkipTex[512] = "256x512x71v18";
+    int   uiBoxProbe = 0, uiBoxProbe2 = 0, uiVertDump = 0;         // v234 test: log where small HUD draws land
+    int   uiPromptCenter = 1;     // v234: the interaction hand icon is drawn at the centre of the view (over the object)
+    char  uiPromptTex[160] = "64x64x77v6#4b9ead2e";   // the hand print first (measured), then any draws that always move with it   // UI textures (WxHxFormat, comma-separated) not drawn into the layer
     int   reticleTexMax = 256;      // UI draws whose texture has at most this many texels go to the aim-locked reticle layer
     int   fixBouncingNpcs = 1, npcFixThreads = 1, npcFixJobThreads = 1;
     int   scopeMode = 1;              // flat screen for binoculars / scopes
@@ -101,7 +106,14 @@ struct Config {
     int   scopeInstant = 1; int scopeNeedsGrip = 1;   // scope view only with the left hand on the weapon   // scoped weapons: scope view opens/closes with the face distance, no raise animation
     int   scopeRound = 1; float scopeRoundSize = 0.8f, scopeHudX = 0.83f, scopeHudY = 0.925f;   // round scope window, ammo crop
     int   scopeFromWeapon = 1; float scopeSmoothing = 0.06f;   // scope view follows the weapon (s of smoothing)
-    int   testCheats = 0; int   reticleDot = 1; float reticleDistance = 10.0f, reticleSize = 0.06f;   // aiming dot    // m: left hand this close to the foregrip + left grip = two-handed
+    int   testCheats = 0; int   reticleDot = 1; float reticleDistance = 10.0f, reticleSize = 0.06f;   // aiming dot
+    int   ammoPanel = 1; float ammoPanelWidth = 0.055f, ammoPanelRight = 0.05f, ammoPanelRight2 = 0.06f, ammoPanelUp = 0.04f, ammoPanelFwd = 0.06f, ammoPanelYaw = 20.0f, ammoPanelTilt = 15.0f;
+    int   grenPanel = 1; float grenPanelWidth = 0.045f, grenPanelLeft = 0.06f, grenPanelUp = 0.02f, grenPanelFwd = 0.0f, grenPanelSecs = 3.0f, grenPanelTilt = 30.0f;
+    int   mapClock = 1, mapClock24 = 0; float mapClockWidth = 0.07f, mapClockUp = 0.0f;
+    int   noDesktopVsync = 1;   // v234: DesktopVsync=0
+    int   gpuHandover = 1;      // v234 test 54: EndFrameWait=0
+    int   dxvk = 0;             // v234 test 57: Dxvk=1 - DXVK trial (bin\\dxvk\\dxgi.dll + d3d11.dll)
+    int   mapHealth = 1; float mapHealthWidth = 0.06f, mapPanelGap = 0.004f;   // v234: health + syrettes beside the clock under the map   // v234: clock under the map   // v234: grenade counter by the left hand   // v234: ammo panel beside the weapon    // m: left hand this close to the foregrip + left grip = two-handed
     int   shadowMapSize = 2720;    // sun shadow cascade resolution (game: 2048 at Ultra High), max 2730, 0 = game's           // sun shadow cascades cover the whole VR view in cull mode 1   // hidden extra render area per side (fraction of the half-FOV) for screen-space reflections
     int   hangWatch = 1;            // freeze/crash reports (fc2vr_hang_N.txt/.dmp)
     float pauseMenuScale = 0.75f;  // in-game pause menu panel size factor (on top of HudScale)
@@ -123,7 +135,7 @@ struct Config {
 static bool g_treeCache = false;
 static volatile LONG g_treeCacheHits = 0;
 static volatile LONG g_treeParked = 0, g_treeFreed = 0;
-static double g_treeMakeMs = 0, g_rfMs = 0;
+static double g_treeMakeMs = 0, g_rfMs = 0; static uint64_t g_rfCycles = 0;   // v234 test 59: render thread CPU cycles inside RenderFrame
 static volatile LONG g_resetSkips = 0, g_resetCalls = 0;
 static void TreeParkAge();
 
@@ -134,7 +146,22 @@ static float IniF(const char* k, float def) {
     GetPrivateProfileStringA("VR", k, d, buf, 64, path);
     return (float)atof(buf);
 }
+// v234: an ini from 1.0.3 keeps its old values when the launcher adds new keys - update the two whose old default is now
+// wrong (only when they still hold that old default), once, then mark the ini as IniVersion=234
+static void MigrateIni() {
+    char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir);
+    if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES || (int)IniF("IniVersion", 0) >= 234) return;
+    char v[512];
+    GetPrivateProfileStringA("VR", "CameraOnBodyClock", "", v, sizeof v, path);
+    if (!strcmp(v, "1")) { WritePrivateProfileStringA("VR", "CameraOnBodyClock", "2", path); LOG("ini: CameraOnBodyClock 1 -> 2 (v234 view on the drawn body update)"); }
+    GetPrivateProfileStringA("VR", "UiSkipTex", "", v, sizeof v, path);
+    if (!strcmp(v, "256x512x71v18,128x32x77v6,512x256x71v24,8x16x77v24,8x16x77v12,64x64x77v6#d8a4a289,64x64x77v6#f10a347f,64x64x77v6#72fa7106")) {
+        WritePrivateProfileStringA("VR", "UiSkipTex", "256x512x71v18,512x256x71v24,8x16x77v24,8x16x77v12,64x64x77v6#d8a4a289,64x64x77v6#72fa7106", path);
+        LOG("ini: UiSkipTex updated (weapon swap icons and prompt arrow shown again)"); }
+    WritePrivateProfileStringA("VR", "IniVersion", "234", path);
+}
 static void LoadConfig() {
+    MigrateIni();
     grass_facing::Configure(IniF("GrassHeadYawFix",0)!=0);
     g_cfg.enable     = (int)IniF("Enable", 1);
     g_cfg.worldScale = IniF("WorldScale", 1.0f);
@@ -195,12 +222,14 @@ static void LoadConfig() {
     g_cfg.minSizeMul = IniF("MinSizeMul", 0.5f);
     g_cfg.reticleTexMax = (int)IniF("ReticleTexMax", 256);
     { char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "UiSkipTex", "256x512x71v18", g_cfg.uiSkipTex, sizeof g_cfg.uiSkipTex, path); }
+    { char path[MAX_PATH]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "UiPromptTex", "64x64x77v6#4b9ead2e", g_cfg.uiPromptTex, sizeof g_cfg.uiPromptTex, path);
+      g_cfg.uiPromptCenter = (int)IniF("UiPromptCenter", 1); g_cfg.uiBoxProbe = (int)IniF("UiBoxProbe", 0); g_cfg.uiBoxProbe2 = (int)IniF("UiElementDump", 0); g_cfg.uiVertDump = (int)IniF("UiVertDump", 0); }
     g_cfg.shareShadows = (int)IniF("ShareShadows", 1);
     g_cfg.cullMode = (int)IniF("CullMode", 1); if (g_cfg.cullMode < 0 || g_cfg.cullMode > 3) g_cfg.cullMode = 1;
     if (g_cfg.uiMode) g_cfg.hudLayer = 0;
     LOG("config: enable=%d worldScale=%g cullMargin=%g renderScale=%g", g_cfg.enable, g_cfg.worldScale, g_cfg.cullMargin, g_cfg.renderScale);
     { dlssfc2::Config dc; dc.enable = (int)IniF("Dlss", 0); dc.preset = (int)IniF("DlssPreset", 11); dc.jitter = (int)IniF("DlssJitter", 1);
-      dc.phases = (int)IniF("DlssJitterPhases", 16); dc.mask = (int)IniF("DlssMask", 1); dc.sharpness = IniF("DlssSharpness", 0.0f); dc.autoExposure = (int)IniF("DlssAutoExposure", 0);
+      dc.phases = (int)IniF("DlssJitterPhases", 16); dc.mask = (int)IniF("DlssMask", 1); dc.guideHandover = (int)IniF("DlssGuideHandover", 1); dc.sharpness = IniF("DlssSharpness", 0.0f); dc.autoExposure = (int)IniF("DlssAutoExposure", 0);
       dc.quality = (int)IniF("DlssQuality", 0); if (dc.quality < 0 || dc.quality > 5) dc.quality = 0;
       dlssfc2::Configure(dc, g_dir); }
     { afw::Config ac; ac.enable = (int)IniF("Afw", 0); ac.gridStep = (int)IniF("AfwGridStep", 2); ac.handDepth = IniF("AfwHandDepth", 0.3f);
@@ -458,8 +487,35 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
         // body's previous step), so the body, arms and weapon jitter by the frame-to-frame step difference. The body's
         // Camera bone from the latest skeleton update is where the camera will be next frame: use it.
         static long lastSeq = 0; long seq = arms::CamBoneSeq();
-        float bp[3];
-        if (g_camBodyClock && seq != lastSeq && arms::CamBonePos(bp)) {
+        float bp[3], bw[16];
+        // v234 CameraOnBodyClock=2: the Camera bone of the skeleton update this frame DRAWS (the one before the latest).
+        // With the latest update (1) the view led the drawn body by one game step - while strafing at 5 m/s ~5 cm, so
+        // the body, arms, hands and weapon trailed sideways behind the view (the same fix as VehicleViewPrevious).
+        if (g_camBodyClock == 2 && arms::CamBoneRoot(bp, bw, true)) {
+            float dx = bp[0] - gb.P.x, dy = bp[1] - gb.P.y, dz = bp[2] - gb.P.z;
+            if (dx * dx + dy * dy + dz * dz < 0.6f * 0.6f) {
+                gb.P = { bp[0], bp[1], bp[2] }; ++g_camBodyUsed;
+                // test 3: SteadyCamera works on the camera's offset from the player. Take the player's position from the SAME
+                // update (its skeleton world matrix), not the entity's newest position: mixing the two put a whole game step
+                // (or none, depending on thread timing) into the offset - the forward part passes straight through, so the
+                // view jumped ~5 cm back and forth while walking.
+                input.playerPosition = { bw[12], bw[13], bw[14] };
+                {   // test 3 diagnostic: the camera-to-player offset along the view, from the entity's newest position vs the
+                    // drawn update's skeleton; and how many skeleton updates arrive per render frame
+                    static double se = 0, se2 = 0, sw = 0, sw2 = 0; static int n = 0, upd[3] = {}; static long ls = 0; static double lt = 0;
+                    float fx = gb.F.x, fy = gb.F.y;
+                    double oe = (bp[0] - pos[0]) * fx + (bp[1] - pos[1]) * fy, ow = (bp[0] - bw[12]) * fx + (bp[1] - bw[13]) * fy;
+                    se += oe; se2 += oe * oe; sw += ow; sw2 += ow * ow; ++n;
+                    long d = seq - ls; ls = seq; ++upd[d <= 0 ? 0 : d == 1 ? 1 : 2];
+                    if (input.nowMs - lt > 10000 && n > 100) {
+                        double me = se / n, mw = sw / n;
+                        LOG("view clock 2: camera-player offset along the view - entity %.1f mm (std %.1f), drawn skeleton %.1f mm (std %.1f); skeleton updates per frame 0:%d 1:%d 2+:%d",
+                            me * 1000, sqrt(fmax(0, se2 / n - me * me)) * 1000, mw * 1000, sqrt(fmax(0, sw2 / n - mw * mw)) * 1000, upd[0], upd[1], upd[2]);
+                        lt = input.nowMs; se = se2 = sw = sw2 = 0; n = 0; upd[0] = upd[1] = upd[2] = 0;
+                    }
+                }
+            }
+        } else if (g_camBodyClock == 1 && seq != lastSeq && arms::CamBonePos(bp)) {
             float dx = bp[0] - gb.P.x, dy = bp[1] - gb.P.y, dz = bp[2] - gb.P.z;
             if (dx * dx + dy * dy + dz * dz < 0.6f * 0.6f) { gb.P = { bp[0], bp[1], bp[2] }; ++g_camBodyUsed; }
         }
@@ -552,6 +608,71 @@ static void* g_capRTV0 = nullptr; static int g_capEye = 0;
 #include <vector>
 static void ShowToast(const char* t);
 namespace cbcap { void NoteBuffer(ID3D10Buffer* b); void HookCreateVS(void** vt); void Install(void** vt); void Arm(); void Present(const char* dir); void NoteBones(const float* W, const float* models, int n); }
+// v234: a CPU copy of the HUD's dynamic vertex buffer (every HUD piece's corners as screen fractions, 24-byte vertices),
+// filled from the game's own writes (ID3D10Buffer::Map / Unmap), so each HUD draw can be placed before it is drawn
+struct VbShadow { ID3D10Buffer* b; uint8_t* data; UINT size; uint8_t cover[1024]; uint32_t stamp[1024]; void* mapped; UINT lastEnd; bool synced; int maps, mapsLast; uint32_t lastUse; };
+static const int kVbMax = 32; static VbShadow g_vbs[kVbMax]; static int g_vbN = 0; static ID3D10Buffer* g_uiVB = nullptr;   // g_uiVB: any followed buffer (the HUD is on)
+static uint32_t g_vbFrameNo = 1; static uint64_t g_vbBytesFrame = 0;
+static int g_vbStatDraws = 0, g_vbStatMoved = 0, g_vbStatStale = 0, g_vbStatOther = 0, g_vbStatFrames = 0; static uint64_t g_vbStatBytes = 0; static int g_vbStatMaps = 0;
+static VbShadow* VbFind(ID3D10Buffer* b) { for (int i = 0; i < g_vbN; ++i) if (g_vbs[i].b == b) return &g_vbs[i]; return nullptr; }
+// v234 test 29: the game writes the followed HUD buffers into our own (cached, write-watched) copy instead of the GPU
+// memory; at Unmap only the 4 KB pages it touched are forwarded to the real buffer. No slow reads of GPU upload memory,
+// and the copy always holds exactly what the GPU draws.
+static bool g_vbRedirect = true;
+// read write-combined (GPU upload) memory with streaming loads: a plain memcpy reads it uncached, many times slower
+__attribute__((target("sse4.1"))) static void VbReadWC(uint8_t* dst, const uint8_t* src, UINT n) {
+    UINT i = 0;
+    if (((uintptr_t)src & 15) == 0) for (; i + 64 <= n; i += 64) {
+        __m128i a = _mm_stream_load_si128((__m128i*)(src + i)), b = _mm_stream_load_si128((__m128i*)(src + i + 16));
+        __m128i c = _mm_stream_load_si128((__m128i*)(src + i + 32)), d = _mm_stream_load_si128((__m128i*)(src + i + 48));
+        _mm_storeu_si128((__m128i*)(dst + i), a); _mm_storeu_si128((__m128i*)(dst + i + 16), b); _mm_storeu_si128((__m128i*)(dst + i + 32), c); _mm_storeu_si128((__m128i*)(dst + i + 48), d);
+    }
+    if (i < n) memcpy(dst + i, src + i, n - i);
+}
+static bool VbSseOk() { static int k = -1; if (k < 0) k = __builtin_cpu_supports("sse4.1") ? 1 : 0; return k == 1; }
+static void* VbOnMap(ID3D10Buffer* b, int mapType, void* p) {
+    VbShadow* v = VbFind(b); if (!v || !p) return p;
+    if (!g_vbRedirect) return p;
+    {   D3D10_BUFFER_DESC bd; b->GetDesc(&bd);   // the game freed it and a different buffer got the same address
+        if (bd.ByteWidth != v->size) {
+            uint8_t* d = (uint8_t*)VirtualAlloc(nullptr, (bd.ByteWidth + 4095) & ~4095u, MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH, PAGE_READWRITE);
+            if (!d) { v->b = nullptr; return p; }
+            VirtualFree(v->data, 0, MEM_RELEASE); v->data = d; v->size = bd.ByteWidth; v->synced = false; memset(v->cover, 0, sizeof v->cover);
+        } }
+    v->lastUse = g_vbFrameNo;
+    if (mapType == D3D10_MAP_WRITE_DISCARD) { memset(v->cover, 0, sizeof v->cover); v->synced = true; }
+    ++v->maps;
+    if (!v->synced) {   // first write since we started following: take the buffer's current contents once (the GPU may still draw them)
+        if (VbSseOk()) VbReadWC(v->data, (const uint8_t*)p, v->size); else memcpy(v->data, p, v->size);
+        g_vbBytesFrame += v->size; v->synced = true; memset(v->cover, 1, sizeof v->cover);
+    }
+    ResetWriteWatch(v->data, v->size);   // start clean
+    v->mapped = p;
+    return v->data;
+}
+static void VbOnUnmap(ID3D10Buffer* b) {
+    VbShadow* v = VbFind(b); if (!v || !v->mapped) return;
+    void* pages[64]; ULONG_PTR n = 64; DWORD g = 4096;
+    if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, v->data, v->size, pages, &n, &g) != 0 || n == 64) {   // failed / too many: forward everything
+        memcpy(v->mapped, v->data, v->size); g_vbBytesFrame += v->size;
+        for (UINT k = 0; k < v->size / 256 && k < 1024; ++k) { v->cover[k] = 1; v->stamp[k] = g_vbFrameNo; }
+    } else for (ULONG_PTR i = 0; i < n; ++i) {
+        UINT off = (UINT)((uint8_t*)pages[i] - v->data), len = g; if (off >= v->size) continue; if (off + len > v->size) len = v->size - off;
+        memcpy((uint8_t*)v->mapped + off, v->data + off, len); g_vbBytesFrame += len;
+        for (UINT k = off / 256; k < (off + len) / 256 && k < 1024; ++k) { v->cover[k] = 1; v->stamp[k] = g_vbFrameNo; }
+    }
+    v->mapped = nullptr;
+}
+static void VbFrame() {
+    for (int i = 0; i < g_vbN; ++i) { g_vbs[i].mapsLast = g_vbs[i].maps; g_vbStatMaps += g_vbs[i].maps; g_vbs[i].maps = 0; }
+    ++g_vbFrameNo;
+    g_vbStatBytes += g_vbBytesFrame; g_vbBytesFrame = 0;
+    if (++g_vbStatFrames >= 720 && g_uiVB) {   // every ~10 s
+        LOG("UI: HUD vertex copy - %d buffers, %d frames, %.1f maps and %.1f KB copied per frame; HUD draws checked %d, moved %d, unreadable this frame %d, other buffers %d",
+            g_vbN, g_vbStatFrames, g_vbStatMaps / (float)g_vbStatFrames, g_vbStatBytes / 1024.0 / g_vbStatFrames, g_vbStatDraws, g_vbStatMoved, g_vbStatStale, g_vbStatOther);
+        g_vbStatFrames = 0; g_vbStatMaps = 0; g_vbStatBytes = 0; g_vbStatDraws = g_vbStatMoved = g_vbStatStale = g_vbStatOther = 0;
+    }
+}
 static HRESULT STDMETHODCALLTYPE Hook_CreateBuffer(ID3D10Device* d, const D3D10_BUFFER_DESC* bd, const D3D10_SUBRESOURCE_DATA* init, ID3D10Buffer** out) {
     InterlockedIncrement(&g_bufCreates);
     if (bd) g_bufBytes += bd->ByteWidth;
@@ -602,6 +723,7 @@ static void FlushRun() {
 }
 static ID3D10Device* g_vtDev = nullptr;
 static void* g_seenSrv[256]; static int g_nSeenSrv = 0;
+static inline void PwDraw();
 static void NoteDraw(void* frame, ID3D10Device* dev) {
     if (!g_traceDraws) return;
     uint32_t c[3] = { 0, 0, 0 }; int found = 0;
@@ -639,10 +761,10 @@ static void STDMETHODCALLTYPE Hook_DrawInst(ID3D10Device* d, UINT a, UINT b, UIN
 // Inline hooks on the runtime implementations (catch every caller, cached pointers included).
 static DrawIndexed_t t_DrawIndexed = nullptr; static Draw_t t_Draw = nullptr; static DrawIdxInst_t t_DrawIdxInst = nullptr; static DrawInst_t t_DrawInst = nullptr; static OMSetRT_t t_OMSetRT = nullptr;
 namespace cbcap { void OnDraw(uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t e, uint32_t f, void* rtv, int eye); }
-static void STDMETHODCALLTYPE I_DrawIndexed(ID3D10Device* d, UINT n, UINT s0, INT b) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(1, n, s0, (uint32_t)b, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawIndexed(d, n, s0, b); }
-static void STDMETHODCALLTYPE I_Draw(ID3D10Device* d, UINT n, UINT s0) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(2, n, s0, 0, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_Draw(d, n, s0); }
-static void STDMETHODCALLTYPE I_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, UINT c, INT e, UINT f) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(3, a, b, c, (uint32_t)e, f, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawIdxInst(d, a, b, c, e, f); }
-static void STDMETHODCALLTYPE I_DrawInst(ID3D10Device* d, UINT a, UINT b, UINT c, UINT e) { NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(4, a, b, c, e, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawInst(d, a, b, c, e); }
+static void STDMETHODCALLTYPE I_DrawIndexed(ID3D10Device* d, UINT n, UINT s0, INT b) { PwDraw(); NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(1, n, s0, (uint32_t)b, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawIndexed(d, n, s0, b); }
+static void STDMETHODCALLTYPE I_Draw(ID3D10Device* d, UINT n, UINT s0) { PwDraw(); NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(2, n, s0, 0, 0, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_Draw(d, n, s0); }
+static void STDMETHODCALLTYPE I_DrawIdxInst(ID3D10Device* d, UINT a, UINT b, UINT c, INT e, UINT f) { PwDraw(); NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(3, a, b, c, (uint32_t)e, f, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawIdxInst(d, a, b, c, e, f); }
+static void STDMETHODCALLTYPE I_DrawInst(ID3D10Device* d, UINT a, UINT b, UINT c, UINT e) { PwDraw(); NoteDraw(__builtin_frame_address(0), d); cbcap::OnDraw(4, a, b, c, e, 0, g_capRTV0, g_inEye ? g_capEye : 3); t_DrawInst(d, a, b, c, e); }
 // ---- per-eye UI viewport (UiMode 1)
 typedef void (STDMETHODCALLTYPE *RSSetVP_t)(ID3D10Device*, UINT, const D3D10_VIEWPORT*);
 static RSSetVP_t o_RSSetVP = nullptr, t_RSSetVP = nullptr;
@@ -935,8 +1057,148 @@ static uint32_t UiTexHash(ID3D10Texture2D* t, const D3D10_TEXTURE2D_DESC& td) {
     C& c = n < 512 ? cache[n++] : cache[next++ % 512]; c.p = t; c.h = h;
     return h;
 }
+// v234: the interaction hand icon, drawn by the game at a fixed HUD spot below the centre, is moved to the centre of the
+// view - over the object the view centre is on. Its spot is measured once (layer pixels before / after its first draw),
+// then each of its draws gets the viewport shifted by the difference and restored at the next draw.
+static bool g_pIconRestore = false, g_pIconHave = false; static int g_pIconMeasure = 0; static D3D10_VIEWPORT g_pIconVp;
+static int g_pIconDx = 0, g_pIconDy = 0; static ID3D10Texture2D* g_pSt[2] = { nullptr, nullptr };
+static ID3D10Texture2D* PromptLayerTex() {
+    if (!g_uiLayerRTV) return nullptr; ID3D10Resource* r = nullptr; g_uiLayerRTV->GetResource(&r); if (!r) return nullptr;
+    ID3D10Texture2D* t = nullptr; r->QueryInterface(__uuidof(ID3D10Texture2D), (void**)&t); r->Release(); return t;   // caller releases
+}
+static void PromptIconAfter() {
+    if (g_pIconRestore) { if (t_RSSetVP) t_RSSetVP(g_vtDev, 1, &g_pIconVp); g_pIconRestore = false; }
+    if (g_pIconMeasure != 1) return;
+    g_pIconMeasure = 2;
+    ID3D10Texture2D* lt = PromptLayerTex(); if (!lt || !g_pSt[0]) { if (lt) lt->Release(); return; }
+    if (!g_pSt[1]) { D3D10_TEXTURE2D_DESC d; g_pSt[0]->GetDesc(&d); if (FAILED(g_vtDev->CreateTexture2D(&d, nullptr, &g_pSt[1]))) g_pSt[1] = nullptr; }
+    if (g_pSt[1]) g_vtDev->CopyResource(g_pSt[1], lt);
+    lt->Release();
+    if (!g_pSt[1]) return;
+    D3D10_TEXTURE2D_DESC d; g_pSt[0]->GetDesc(&d);
+    D3D10_MAPPED_TEXTURE2D m0{}, m1{};
+    if (SUCCEEDED(g_pSt[0]->Map(0, D3D10_MAP_READ, 0, &m0)) && SUCCEEDED(g_pSt[1]->Map(0, D3D10_MAP_READ, 0, &m1))) {
+        int x0 = 1 << 30, y0 = 1 << 30, x1 = -1, y1 = -1;
+        for (UINT y = 0; y < d.Height; y += 2) {
+            const uint32_t* a = (const uint32_t*)((const uint8_t*)m0.pData + (size_t)y * m0.RowPitch), *b = (const uint32_t*)((const uint8_t*)m1.pData + (size_t)y * m1.RowPitch);
+            for (UINT x = 0; x < d.Width; x += 2) if (a[x] != b[x]) { if ((int)x < x0) x0 = x; if ((int)x > x1) x1 = x; if ((int)y < y0) y0 = y; if ((int)y > y1) y1 = y; }
+        }
+        g_pSt[1]->Unmap(0); g_pSt[0]->Unmap(0);
+        if (x1 >= 0 && x1 - x0 < (int)d.Width / 4 && y1 - y0 < (int)d.Height / 4) {
+            float cx = 0.5f * (x0 + x1), cy = 0.5f * (y0 + y1);
+            g_pIconDx = (int)lroundf(d.Width * 0.5f - cx); g_pIconDy = (int)lroundf(d.Height * 0.5f - cy); g_pIconHave = true;
+            LOG("UI: interaction icon drawn at %d-%d, %d-%d of the %ux%u layer (centre %.3f, %.3f) - moved to the centre (%+d, %+d px)",
+                x0, x1, y0, y1, d.Width, d.Height, cx / d.Width, cy / d.Height, g_pIconDx, g_pIconDy);
+        } else { LOG("UI: interaction icon not measured (changed %d-%d, %d-%d) - trying again", x0, x1, y0, y1); g_pIconMeasure = 0; }
+    } else { g_pIconMeasure = 0; }
+    if (g_pIconHave) for (auto& t : g_pSt) if (t) { t->Release(); t = nullptr; }
+}
+static void PromptIconDraw(bool first) {
+    if (g_pIconHave) {
+        UINT n = 1; D3D10_VIEWPORT vp; g_vtDev->RSGetViewports(&n, &vp);
+        if (n && t_RSSetVP) { g_pIconVp = vp; vp.TopLeftX += g_pIconDx; vp.TopLeftY += g_pIconDy; t_RSSetVP(g_vtDev, 1, &vp); g_pIconRestore = true; }
+        return;
+    }
+    if (g_pIconMeasure != 0 || !first) return;   // only the hand print itself is measured
+    ID3D10Texture2D* lt = PromptLayerTex(); if (!lt) return;
+    if (!g_pSt[0]) { D3D10_TEXTURE2D_DESC sd; lt->GetDesc(&sd); sd.Usage = D3D10_USAGE_STAGING; sd.BindFlags = 0; sd.CPUAccessFlags = D3D10_CPU_ACCESS_READ; sd.MiscFlags = 0; sd.MipLevels = 1; sd.ArraySize = 1;
+        if (FAILED(g_vtDev->CreateTexture2D(&sd, nullptr, &g_pSt[0]))) g_pSt[0] = nullptr; }
+    if (g_pSt[0]) { g_vtDev->CopyResource(g_pSt[0], lt); g_pIconMeasure = 1; }
+    lt->Release();
+}
+// v234 test 18 diagnostic (UiBoxProbe=1): where small HUD draws land in the UI layer - layer pixels before / after a draw,
+// for the first few draws of each texture (up to 60 in all), logged as fractions of the layer
+static ID3D10Texture2D* g_bbSt[2] = { nullptr, nullptr }; static char g_bbKey[72] = ""; static bool g_bbPend = false; static int g_bbN = 0;
+struct BbSeen { char key[72]; int n; }; static BbSeen g_bbSeen[64]; static int g_bbSeenN = 0;
+static void BoxProbeAfter() {
+    if (!g_bbPend) return; g_bbPend = false;
+    ID3D10Texture2D* lt = PromptLayerTex(); if (!lt) return;
+    if (!g_bbSt[1]) { D3D10_TEXTURE2D_DESC d; g_bbSt[0]->GetDesc(&d); if (FAILED(g_vtDev->CreateTexture2D(&d, nullptr, &g_bbSt[1]))) g_bbSt[1] = nullptr; }
+    if (g_bbSt[1]) g_vtDev->CopyResource(g_bbSt[1], lt);
+    lt->Release(); if (!g_bbSt[1]) return;
+    D3D10_TEXTURE2D_DESC d; g_bbSt[0]->GetDesc(&d); D3D10_MAPPED_TEXTURE2D m0{}, m1{};
+    if (SUCCEEDED(g_bbSt[0]->Map(0, D3D10_MAP_READ, 0, &m0))) {
+        if (SUCCEEDED(g_bbSt[1]->Map(0, D3D10_MAP_READ, 0, &m1))) {
+            int x0 = 1 << 30, y0 = 1 << 30, x1 = -1, y1 = -1;
+            for (UINT y = 0; y < d.Height; y += 4) {
+                const uint32_t* a = (const uint32_t*)((const uint8_t*)m0.pData + (size_t)y * m0.RowPitch), *b = (const uint32_t*)((const uint8_t*)m1.pData + (size_t)y * m1.RowPitch);
+                for (UINT x = 0; x < d.Width; x += 4) if (a[x] != b[x]) { if ((int)x < x0) x0 = x; if ((int)x > x1) x1 = x; if ((int)y < y0) y0 = y; if ((int)y > y1) y1 = y; }
+            }
+            if (x1 >= 0) LOG("UI bbox %s: x %.3f-%.3f y %.3f-%.3f", g_bbKey, x0 / (float)d.Width, (x1 + 4) / (float)d.Width, y0 / (float)d.Height, (y1 + 4) / (float)d.Height);
+            else LOG("UI bbox %s: changed nothing", g_bbKey);
+            g_bbSt[1]->Unmap(0);
+        }
+        g_bbSt[0]->Unmap(0);
+    }
+}
+static void BoxProbeBefore(const char* key) {
+    if (g_bbN >= 60 || g_pIconMeasure == 1) return;
+    int i = 0; for (; i < g_bbSeenN; ++i) if (!strcmp(g_bbSeen[i].key, key)) break;
+    if (i == g_bbSeenN) { if (g_bbSeenN >= 64) return; snprintf(g_bbSeen[i].key, sizeof g_bbSeen[i].key, "%s", key); g_bbSeen[i].n = 0; ++g_bbSeenN; }
+    if (g_bbSeen[i].n >= 4) return;
+    ID3D10Texture2D* lt = PromptLayerTex(); if (!lt) return;
+    if (!g_bbSt[0]) { D3D10_TEXTURE2D_DESC sd; lt->GetDesc(&sd); sd.Usage = D3D10_USAGE_STAGING; sd.BindFlags = 0; sd.CPUAccessFlags = D3D10_CPU_ACCESS_READ; sd.MiscFlags = 0; sd.MipLevels = 1; sd.ArraySize = 1;
+        if (FAILED(g_vtDev->CreateTexture2D(&sd, nullptr, &g_bbSt[0]))) g_bbSt[0] = nullptr; }
+    if (g_bbSt[0]) { g_vtDev->CopyResource(g_bbSt[0], lt); ++g_bbSeen[i].n; ++g_bbN; g_bbPend = true; snprintf(g_bbKey, sizeof g_bbKey, "%s", key); }
+    lt->Release();
+}
+// v234: everything else the game draws in the interaction prompt row (the hand's glow, the weapon-swap icons, the arrow and
+// their glows, prompt text) moves with the hand: a draw whose corners (from the vertex buffer copy) all lie in the prompt
+// row gets the hand's viewport shift. Pieces elsewhere - the ammo / grenade counters and their glows - stay.
+static void RowShift() {
+    UINT n = 1; D3D10_VIEWPORT vp; g_vtDev->RSGetViewports(&n, &vp);
+    if (n && t_RSSetVP) { g_pIconVp = vp; vp.TopLeftX += g_pIconDx; vp.TopLeftY += g_pIconDy; t_RSSetVP(g_vtDev, 1, &vp); g_pIconRestore = true; }
+}
+static int g_rowLogged = 0;
+static bool DrawInPromptRow(uintptr_t* sp, const char* key) {
+    ID3D10Buffer* vb = nullptr; UINT stride = 0, off = 0; g_vtDev->IAGetVertexBuffers(0, 1, &vb, &stride, &off);
+    if (!vb) return false;
+    VbShadow* v = VbFind(vb);
+    if (!v) {   // a HUD vertex buffer not followed yet (the game rotates several)
+        D3D10_BUFFER_DESC bd; vb->GetDesc(&bd);
+        if (bd.Usage == D3D10_USAGE_DYNAMIC && (bd.BindFlags & D3D10_BIND_VERTEX_BUFFER) && bd.ByteWidth <= 256 * 1024 && stride == 24) {
+            int slot = -1;
+            if (g_vbN < kVbMax) slot = g_vbN;
+            else {   // all slots used: reuse the one the game has not written for the longest (not mapped right now)
+                uint32_t best = 0xFFFFFFFFu;
+                for (int i = 0; i < g_vbN; ++i) if (!g_vbs[i].mapped && g_vbs[i].lastUse < best) { best = g_vbs[i].lastUse; slot = i; }
+            }
+            uint8_t* d = slot >= 0 ? (uint8_t*)VirtualAlloc(nullptr, (bd.ByteWidth + 4095) & ~4095u, MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH, PAGE_READWRITE) : nullptr;
+            if (d) {
+                if (slot < g_vbN && g_vbs[slot].data) VirtualFree(g_vbs[slot].data, 0, MEM_RELEASE);
+                if (slot == g_vbN) ++g_vbN;
+                v = &g_vbs[slot]; memset(v, 0, sizeof *v); v->b = vb; v->data = d; v->size = bd.ByteWidth; v->lastUse = g_vbFrameNo; g_uiVB = vb;
+                static int nl = 0; if (nl++ < 40) LOG("UI: HUD vertex buffer %d: %p (%u bytes) followed", slot + 1, (void*)vb, bd.ByteWidth);
+            }
+        }
+    }
+    vb->Release();
+    static uint8_t lastDecision[512]; int ord = g_uiDrawOrd - 1;
+    // first sight of a buffer (its data comes from its next write): repeat what this draw did last frame
+    if (!v || stride != 24) { ++g_vbStatOther; bool r = stride == 24 && ord >= 0 && ord < 512 && lastDecision[ord]; if (r) ++g_vbStatMoved; return r; }
+    UINT cnt = (UINT)sp[2], start = (UINT)sp[3];
+    if (cnt == 0 || cnt > 600) return false;
+    UINT a = off + start * 24, e = a + cnt * 24; if (e > v->size) return false;
+    v->lastEnd = e;
+    ++g_vbStatDraws;
+    // unreadable this frame (not copied since the game wrote it): repeat what this draw (same place in the draw order) did last frame
+    bool fresh = true; for (UINT k = a / 256; k <= (e - 1) / 256; ++k) if (!v->cover[k]) { fresh = false; break; }
+    if (!fresh) { ++g_vbStatStale; bool r = ord >= 0 && ord < 512 && lastDecision[ord]; if (r) ++g_vbStatMoved; return r; }
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    for (UINT q = 0; q < cnt; ++q) { const float* f = (const float*)(v->data + a + q * 24); if (!std::isfinite(f[0]) || !std::isfinite(f[1])) return false;
+        if (f[0] < x0) x0 = f[0]; if (f[0] > x1) x1 = f[0]; if (f[1] < y0) y0 = f[1]; if (f[1] > y1) y1 = f[1]; }
+    bool row = x0 >= 0.28f && x1 <= 0.72f && y0 >= 0.64f && y1 <= 0.82f && x1 > x0 && y1 > y0;
+    if (ord >= 0 && ord < 512) lastDecision[ord] = row ? 1 : 0;
+    if (row) ++g_vbStatMoved;
+    if (g_rowLogged < 40) { static char last[64][80]; static int nl = 0; char k2[80]; snprintf(k2, sizeof k2, "%s%d", key, row ? 1 : 0); bool seen = false;
+        for (int i = 0; i < nl; ++i) if (!strcmp(last[i], k2)) seen = true;
+        if (!seen && nl < 64) { snprintf(last[nl++], 80, "%s", k2); ++g_rowLogged; LOG("UI: %s drawn at x %.3f-%.3f y %.3f-%.3f - %s", key, x0, x1, y0, y1, row ? "prompt row, moves with the hand" : "stays"); } }
+    return row;
+}
 static int g_drawPolicy(uintptr_t* sp, int slot) {
     if (g_cfg.uiMode == 2) {
+        if (g_pIconRestore || g_pIconMeasure == 1) PromptIconAfter();
+        if (g_bbPend) BoxProbeAfter();
         if (!g_uiShift || !g_uiOnEye || !g_uiLayerRTV) return 0;
         uint32_t c[2] = { 0, 0 }; int found = 0;
         for (int i = 0; i < 300 && found < 2; ++i) { uintptr_t v = sp[i]; if (v > g_base + 0x1000 && v < g_base + 0xE00000) c[found++] = (uint32_t)(v - g_base + 0x10000000); }
@@ -955,7 +1217,7 @@ static int g_drawPolicy(uintptr_t* sp, int slot) {
         if (g_uiCurEye != g_uiPrimary) return 1;           // the other eye skips the UI
         if (g_capState == 2) UiProbe(ord - 1);
         // Reticle: drawn with a tiny texture (8x16 in the default crosshair).
-        bool ret = false, skip = false;
+        bool ret = false, skip = false, promptIcon = false, promptFirst = false; char probeKey[72] = "";
         {
             ID3D10ShaderResourceView* srv = nullptr; g_vtDev->PSGetShaderResources(0, 1, &srv);
             if (srv) { ID3D10Resource* r = nullptr; srv->GetResource(&r); ID3D10Texture2D* t = nullptr;
@@ -970,6 +1232,11 @@ static int g_drawPolicy(uintptr_t* sp, int slot) {
                     char k3[64]; snprintf(k3, sizeof k3, ",%ux%ux%dv%u#%08x,", td.Width, td.Height, (int)td.Format, (unsigned)sp[2], th);
                     char k4[64]; snprintf(k4, sizeof k4, ",%ux%ux%dv%u@r,", td.Width, td.Height, (int)td.Format, (unsigned)sp[2]);   // only while a weapon reticle is up
                     if (g_cfg.uiSkipTex[0] && (strstr(list, k2) || strstr(list, k3) || (g_reticleOnUi && strstr(list, k4)))) skip = true;
+                    if (td.Width * td.Height <= 256 * 256 && td.Width <= 256) snprintf(probeKey, sizeof probeKey, "%ux%ux%dv%u#%08x", td.Width, td.Height, (int)td.Format, (unsigned)sp[2], th);
+                    if (g_cfg.uiPromptCenter && g_cfg.uiPromptTex[0]) {   // the first entry is the hand print (measured), the rest move with it
+                        char pl[170]; snprintf(pl, sizeof pl, ",%s,", g_cfg.uiPromptTex);
+                        if (strstr(pl, k3)) { const char* c = strchr(g_cfg.uiPromptTex, ','); size_t n0 = c ? (size_t)(c - g_cfg.uiPromptTex) : strlen(g_cfg.uiPromptTex);
+                            promptIcon = true; promptFirst = strlen(k3) == n0 + 2 && !strncmp(k3 + 1, g_cfg.uiPromptTex, n0); } }
                     t->Release(); }
                 if (r) r->Release(); srv->Release(); }
         }
@@ -984,6 +1251,9 @@ static int g_drawPolicy(uintptr_t* sp, int slot) {
         }
         if (g_uiBoundLayer != want) { t_OMSetRT(g_vtDev, 1, &want, g_uiSavedEyeDSV); g_uiBoundLayer = want; }
         if (ret) g_uiRetFresh = true;
+        if (promptIcon) PromptIconDraw(promptFirst);
+        if (g_cfg.uiPromptCenter && g_pIconHave && !promptIcon && !ret && DrawInPromptRow(sp, probeKey[0] ? probeKey : "draw")) RowShift();
+        else if (!promptIcon && g_cfg.uiBoxProbe && probeKey[0]) BoxProbeBefore(probeKey);
         // alpha fix for additive draws
         {
             ID3D10BlendState* bs = nullptr; FLOAT bf[4]; UINT sm = 0; g_vtDev->OMGetBlendState(&bs, bf, &sm);
@@ -1084,21 +1354,23 @@ static void STDMETHODCALLTYPE I_UpdSub(ID3D10Device* d, ID3D10Resource* r, UINT 
 }
 static HRESULT STDMETHODCALLTYPE I_Map(ID3D10Buffer* b, D3D10_MAP t, UINT f, void** pp) {
     HRESULT hr = t_Map(b, t, f, pp);
+    if (SUCCEEDED(hr) && pp && t != D3D10_MAP_READ) *pp = VbOnMap(b, (int)t, *pp);   // v234: followed HUD buffers -> write-watched copy
     if ((On() || grass_facing::Enabled()) && csInit && SUCCEEDED(hr) && pp && *pp && t != D3D10_MAP_READ) { EnterCriticalSection(&cs); for (auto& m : maps) if (!m.b || m.b == b) { m = { b, *pp, t }; break; } LeaveCriticalSection(&cs); }
     return hr;
 }
 static void STDMETHODCALLTYPE I_Unmap(ID3D10Buffer* b) {
+    void* p=nullptr;D3D10_MAP type=D3D10_MAP_READ;
     if ((On() || grass_facing::Enabled()) && csInit) {
-        void* p=nullptr;D3D10_MAP type=D3D10_MAP_READ;
         EnterCriticalSection(&cs);for(auto& m:maps)if(m.b==b){p=m.p;type=m.type;m.b=nullptr;break;}LeaveCriticalSection(&cs);
         if(p){
 #if defined(FC2VR_BODY_YAW_TESTING)
             if(On() && grass_facing::Enabled())BufData(b,p,'N');
 #endif
-            if(type==D3D10_MAP_WRITE_DISCARD)grass_facing::Patch(b,p);
-            if(On())BufData(b,p);
+            if(type==D3D10_MAP_WRITE_DISCARD)grass_facing::Patch(b,p);   // before VbOnUnmap forwards a redirected copy
         }
     }
+    VbOnUnmap(b);
+    if(p && On())BufData(b,p);
     t_Unmap(b);
 }
 static HRESULT STDMETHODCALLTYPE H_CreateVS(ID3D10Device* d, const void* code, SIZE_T n, ID3D10VertexShader** out_) {
@@ -1232,6 +1504,7 @@ static void InstallFramePacing() {
     bool ok = PatchJmpN(A(0x1029B290), pro, 6, (void*)&Hook_TimerUpdate, (void**)&o_TimerUpdate);
     LOG("frame pacing hook (game timer update): %s, FramePacing=%d", ok ? "ok" : "FAILED", g_framePacing);
 }
+static void HookStateCounters(void** vt);
 static void InstallInlineDrawHooks() {
     static bool done = false; if (done) return; done = true;
     InlineHookImpl((void*)o_DrawIndexed, (void*)&I_DrawIndexed, (void**)&t_DrawIndexed, "DrawIndexed");
@@ -1241,6 +1514,7 @@ static void InstallInlineDrawHooks() {
     InlineHookImpl((void*)o_OMSetRT, (void*)&I_OMSetRT, (void**)&t_OMSetRT, "OMSetRenderTargets");
     if (o_RSSetVP) InlineHookImpl((void*)o_RSSetVP, (void*)&I_RSSetVP, (void**)&t_RSSetVP, "RSSetViewports");
     if (g_vtDev) cbcap::Install(*(void***)g_vtDev);
+    if (g_vtDev && g_cfg.profile) HookStateCounters(*(void***)g_vtDev);
     arms::SetBoneSink(&cbcap::NoteBones);
 }
 // DLSS upscaling: the eyes render smaller than shown, so texture detail is picked one or more mip levels too blurry.
@@ -1275,6 +1549,82 @@ static void STDMETHODCALLTYPE Hook_PSSetSamplers(ID3D10Device* d, UINT start, UI
         o_PSSetSamplers(d, start, n, rep); return;
     }
     o_PSSetSamplers(d, start, n, ss);
+}
+// ---- v234 test 60: CPU work measurement (Profile=1 only). Per eye: time in the shadow renderer's caster culling,
+// gathering and pass execution, and draws inside / outside the shadow passes. Per frame: device state calls by kind and
+// how many of them repeat what is already bound (what a redundant-state filter could drop).
+static double g_pwShT[2][3]; static long g_pwDraws[2][2]; static bool g_pwInShDraw = false;
+enum { SC_VSCB, SC_PSSRV, SC_PSSH, SC_VSSH, SC_PSCB, SC_IL, SC_VB, SC_IB, SC_TOPO, SC_VSSRV, SC_BLEND, SC_DS, SC_RS, SC_N };
+static const char* kScName[SC_N] = { "VSConstBuf", "PSTextures", "PSShader", "VSShader", "PSConstBuf", "InputLayout", "VertexBuf", "IndexBuf", "Topology", "VSTextures", "Blend", "DepthStencil", "Rasterizer" };
+static long g_scCalls[SC_N], g_scSame[SC_N];
+static void* g_scLast[SC_N][16];
+static inline int PwEye() { return g_renderEye == 1 ? 1 : 0; }
+static inline void PwDraw() { if (g_renderEye >= 0) ++g_pwDraws[PwEye()][g_pwInShDraw ? 1 : 0]; }
+static inline void ScArr(int k, UINT start, UINT n, void* const* v) {
+    ++g_scCalls[k]; bool same = start + n <= 16 && v;
+    for (UINT i = 0; same && i < n; ++i) same = g_scLast[k][start + i] == v[i];
+    if (same) ++g_scSame[k];
+    if (v) for (UINT i = 0; i < n && start + i < 16; ++i) g_scLast[k][start + i] = v[i];
+}
+static inline void ScOne(int k, void* v) { ++g_scCalls[k]; if (g_scLast[k][0] == v) ++g_scSame[k]; g_scLast[k][0] = v; }
+typedef void (STDMETHODCALLTYPE *SetArr_t)(ID3D10Device*, UINT, UINT, void* const*);
+typedef void (STDMETHODCALLTYPE *SetOne_t)(ID3D10Device*, void*);
+typedef void (STDMETHODCALLTYPE *SetVB_t)(ID3D10Device*, UINT, UINT, void* const*, const UINT*, const UINT*);
+typedef void (STDMETHODCALLTYPE *SetIB_t)(ID3D10Device*, void*, UINT, UINT);
+typedef void (STDMETHODCALLTYPE *SetTopo_t)(ID3D10Device*, UINT);
+typedef void (STDMETHODCALLTYPE *SetBlend_t)(ID3D10Device*, void*, const FLOAT*, UINT);
+typedef void (STDMETHODCALLTYPE *SetDS_t)(ID3D10Device*, void*, UINT);
+static SetArr_t o_scVSCB, o_scPSSRV, o_scPSCB, o_scVSSRV; static SetOne_t o_scPSSH, o_scVSSH, o_scIL, o_scRS;
+static SetVB_t o_scVB; static SetIB_t o_scIB; static SetTopo_t o_scTopo; static SetBlend_t o_scBlend; static SetDS_t o_scDS;
+static void STDMETHODCALLTYPE Sc_VSCB(ID3D10Device* d, UINT s, UINT n, void* const* v) { ScArr(SC_VSCB, s, n, v); o_scVSCB(d, s, n, v); }
+static void STDMETHODCALLTYPE Sc_PSSRV(ID3D10Device* d, UINT s, UINT n, void* const* v) { ScArr(SC_PSSRV, s, n, v); o_scPSSRV(d, s, n, v); }
+static void STDMETHODCALLTYPE Sc_PSCB(ID3D10Device* d, UINT s, UINT n, void* const* v) { ScArr(SC_PSCB, s, n, v); o_scPSCB(d, s, n, v); }
+static void STDMETHODCALLTYPE Sc_VSSRV(ID3D10Device* d, UINT s, UINT n, void* const* v) { ScArr(SC_VSSRV, s, n, v); o_scVSSRV(d, s, n, v); }
+static void STDMETHODCALLTYPE Sc_PSSH(ID3D10Device* d, void* v) { ScOne(SC_PSSH, v); o_scPSSH(d, v); }
+static void STDMETHODCALLTYPE Sc_VSSH(ID3D10Device* d, void* v) { ScOne(SC_VSSH, v); o_scVSSH(d, v); }
+static void STDMETHODCALLTYPE Sc_IL(ID3D10Device* d, void* v) { ScOne(SC_IL, v); o_scIL(d, v); }
+static void STDMETHODCALLTYPE Sc_RS(ID3D10Device* d, void* v) { ScOne(SC_RS, v); o_scRS(d, v); }
+static void STDMETHODCALLTYPE Sc_VB(ID3D10Device* d, UINT s, UINT n, void* const* v, const UINT* st, const UINT* of) {
+    ++g_scCalls[SC_VB]; bool same = s + n <= 8 && v && st && of;
+    static UINT lastSt[8], lastOf[8];
+    for (UINT i = 0; same && i < n; ++i) same = g_scLast[SC_VB][s + i] == v[i] && lastSt[s + i] == st[i] && lastOf[s + i] == of[i];
+    if (same) ++g_scSame[SC_VB];
+    if (v && st && of) for (UINT i = 0; i < n && s + i < 8; ++i) { g_scLast[SC_VB][s + i] = v[i]; lastSt[s + i] = st[i]; lastOf[s + i] = of[i]; }
+    o_scVB(d, s, n, v, st, of); }
+static void STDMETHODCALLTYPE Sc_IB(ID3D10Device* d, void* b, UINT f, UINT o) {
+    static UINT lf, lo; ++g_scCalls[SC_IB]; if (g_scLast[SC_IB][0] == b && lf == f && lo == o) ++g_scSame[SC_IB]; g_scLast[SC_IB][0] = b; lf = f; lo = o; o_scIB(d, b, f, o); }
+static void STDMETHODCALLTYPE Sc_Topo(ID3D10Device* d, UINT t) { ScOne(SC_TOPO, (void*)(uintptr_t)(t + 1)); o_scTopo(d, t); }
+static void STDMETHODCALLTYPE Sc_Blend(ID3D10Device* d, void* b, const FLOAT* f, UINT m) {
+    static FLOAT lf[4]; static UINT lm; ++g_scCalls[SC_BLEND];
+    bool same = g_scLast[SC_BLEND][0] == b && lm == m && (!f || memcmp(lf, f, 16) == 0); if (same) ++g_scSame[SC_BLEND];
+    g_scLast[SC_BLEND][0] = b; lm = m; if (f) memcpy(lf, f, 16); o_scBlend(d, b, f, m); }
+static void STDMETHODCALLTYPE Sc_DS(ID3D10Device* d, void* s, UINT r) {
+    static UINT lr; ++g_scCalls[SC_DS]; if (g_scLast[SC_DS][0] == s && lr == r) ++g_scSame[SC_DS]; g_scLast[SC_DS][0] = s; lr = r; o_scDS(d, s, r); }
+static void HookStateCounters(void** vt) {   // vt: the device's own vtable; the implementations are hooked inline,
+    static bool done = false; if (done) return; done = true;   // because the engine calls cached method pointers
+    InlineHookImpl(vt[4], (void*)&Sc_PSSRV, (void**)&o_scPSSRV, "count PSSetShaderResources");
+    InlineHookImpl(vt[5], (void*)&Sc_PSSH, (void**)&o_scPSSH, "count PSSetShader");
+    InlineHookImpl(vt[10], (void*)&Sc_PSCB, (void**)&o_scPSCB, "count PSSetConstantBuffers");
+    InlineHookImpl(vt[11], (void*)&Sc_IL, (void**)&o_scIL, "count IASetInputLayout");
+    InlineHookImpl(vt[12], (void*)&Sc_VB, (void**)&o_scVB, "count IASetVertexBuffers");
+    InlineHookImpl(vt[13], (void*)&Sc_IB, (void**)&o_scIB, "count IASetIndexBuffer");
+    InlineHookImpl(vt[18], (void*)&Sc_Topo, (void**)&o_scTopo, "count IASetPrimitiveTopology");
+    InlineHookImpl(vt[19], (void*)&Sc_VSSRV, (void**)&o_scVSSRV, "count VSSetShaderResources");
+    InlineHookImpl(vt[25], (void*)&Sc_Blend, (void**)&o_scBlend, "count OMSetBlendState");
+    InlineHookImpl(vt[26], (void*)&Sc_DS, (void**)&o_scDS, "count OMSetDepthStencilState");
+    InlineHookImpl(vt[29], (void*)&Sc_RS, (void**)&o_scRS, "count RSSetState");
+    LOG("perf: state call counters on (Profile=1; VS constant buffers / VS shader not counted)");
+}
+static void PerfWorkReport(int frames) {
+    if (!g_cfg.profile || frames <= 0) return;
+    const double k = 1.0 / frames;
+    LOG("WORK per frame: eye0 shadows cull %.2f gather %.2f draw %.2f ms, draws %ld scene + %ld shadow | eye1 shadows cull %.2f gather %.2f draw %.2f ms, draws %ld scene + %ld shadow",
+        g_pwShT[0][0] * k, g_pwShT[0][1] * k, g_pwShT[0][2] * k, (long)(g_pwDraws[0][0] * k), (long)(g_pwDraws[0][1] * k),
+        g_pwShT[1][0] * k, g_pwShT[1][1] * k, g_pwShT[1][2] * k, (long)(g_pwDraws[1][0] * k), (long)(g_pwDraws[1][1] * k));
+    char b[900]; int o = 0; long tc = 0, ts = 0;
+    for (int i = 0; i < SC_N; ++i) { tc += g_scCalls[i]; ts += g_scSame[i]; o += snprintf(b + o, sizeof b - o, " %s %ld (%ld%% repeat)", kScName[i], (long)(g_scCalls[i] * k), g_scCalls[i] ? 100 * g_scSame[i] / g_scCalls[i] : 0); }
+    LOG("STATE calls per frame: %ld total, %ld%% repeat what is bound |%s", (long)(tc * k), tc ? 100 * ts / tc : 0, b);
+    memset(g_pwShT, 0, sizeof g_pwShT); memset(g_pwDraws, 0, sizeof g_pwDraws); memset(g_scCalls, 0, sizeof g_scCalls); memset(g_scSame, 0, sizeof g_scSame);
 }
 static void HookDeviceVtable(ID3D10Device* dev) {
     g_vtDev = dev;
@@ -1327,6 +1677,20 @@ static void ProfReport() {
         memset(g_bufSites, 0, sizeof g_bufSites);
     } }
     InterlockedExchange(&g_texCreates, 0); InterlockedExchange(&g_rtvCreates, 0);
+    {   // v234 test 54: before/after line for the end-of-frame handover (EndFrameWait, Ctrl+F11), about every 10 s
+        static Prof acc; static int reps = 0;
+        acc.frame += p.frame; acc.wait += p.wait; acc.eye0 += p.eye0; acc.eye1 += p.eye1; acc.end += p.end; acc.n += p.n;
+        if (++reps >= 8 && acc.n) {
+            double ho = 0, hoMax = 0; int hoN = 0; bool gpu = false; xr::HandoverStats(ho, hoMax, hoN, gpu);
+            const double q = 1.0 / acc.n;
+            LOG("HANDOVER %s: frame %.2f ms, render thread busy %.2f ms (eye0 %.2f, eye1 %.2f, end %.2f), spare %.2f ms (xrWaitFrame) | handover wait %.2f ms (max %.2f)",
+                gpu ? "GPU (no wait)" : "render thread waits", acc.frame * q, (acc.eye0 + acc.eye1 + acc.end) * q, acc.eye0 * q, acc.eye1 * q, acc.end * q, acc.wait * q, ho, hoMax);
+            { double a = 0, am = 0; int af = 0, aw = 0;
+              if (xr::FrameAheadStats(a, am, af, aw)) LOG("FRAME AHEAD: waited for the previous frame's GPU work in %d of %d frames, avg %.2f ms (max %.2f)", aw, af, a, am); }
+            PerfWorkReport(acc.n);
+            acc = Prof{}; reps = 0;
+        }
+    }
     p = Prof{};
 }
 
@@ -1366,6 +1730,248 @@ static char __fastcall Hook_ConsoleCmd(void* self, void* edx, uint8_t* str) {
         }
     }
     return o_ConsoleCmd(self, edx, str);
+}
+// ============================================================ v234 game content fixes
+// Bonus content the retail and Steam releases ship but leave locked, and the Jackal tape bug from patch 1.03. All in
+// memory (Dunia.dll on disk is untouched); each checks the game's bytes first and is skipped if they differ.
+//  - Predecessor missions (7 "Intel" missions from the anonymous caller): gated by a partner / pre-order key check.
+//    GOG (retail 1.03) asks HKCU\Software\Ubisoft\Far Cry 2\PartnerKey1 / PartnerKey2 == 1; the Steam (Fortune's)
+//    build asks its UniqueKey manager for key 1000 instead. Steam 0x100488B0 / GOG 0x10048900, one argument (the key
+//    number), ret 4, true in AL. Our hook answers yes for this check only (the game's other key checks are untouched).
+//  - Bonus machetes (Options > Game > Machete Type: Primitive, Homemade): HKCU\...\MachetesKey == 1.
+//    Steam 0x100488D0 / GOG 0x100489A0, no arguments, true in AL. Our hook answers yes.
+//  - Jackal tapes: picking up a tape walks the list of 17 tapes (0x78 bytes each, +0x74 taken, +0x75 from the first
+//    map) for the first untaken tape of the current map. Since 1.03 a taken tape falls through to the map test, so on
+//    the second map tape #9 "Stealing Boots" plays again and again and the later tapes are never marked. The jump
+//    taken by an already-taken tape (Steam 0x1074E464 / GOG 0x10740F54: jne +0Ah) is pointed at the "next tape" step
+//    (+14h). (Problem analysed publicly by FoxAhead; this is our own implementation.)
+static int s_partnerAsks = 0, s_macheteAsks = 0;
+static uint32_t __stdcall Hook_PartnerKey(int key) {
+    if (s_partnerAsks++ < 4) LOG("game fixes: partner content key %d asked - unlocked (predecessor missions)", key);
+    return 1;
+}
+static uint32_t Hook_MachetesKey() {
+    if (s_macheteAsks++ < 2) LOG("game fixes: bonus machetes asked - unlocked");
+    return 1;
+}
+static bool PatchByte(uintptr_t at, const uint8_t* expect, size_t n, size_t index, uint8_t value) {
+    if (!at) return false;
+    uint8_t* p = (uint8_t*)at;
+    if (p[index] == value && memcmp(p, expect, index) == 0 && memcmp(p + index + 1, expect + index + 1, n - index - 1) == 0) return true;   // already fixed (patched DLL)
+    if (memcmp(p, expect, n) != 0) { LOG("patch %08x: unexpected bytes %02x %02x %02x %02x %02x %02x", (unsigned)at, p[0], p[1], p[2], p[3], p[4], p[5]); return false; }
+    DWORD old; VirtualProtect(p + index, 1, PAGE_EXECUTE_READWRITE, &old);
+    p[index] = value;
+    VirtualProtect(p + index, 1, old, &old); FlushInstructionCache(GetCurrentProcess(), p + index, 1);
+    return true;
+}
+// v234: malaria. The player's malaria component update (Steam 0x106A9130 / GOG 0x1069B820, thiscall, float dt) is called
+// from one site (Steam 0x106A94B0 / GOG 0x1069BBA0). Its fields: +0xE8 CurrentAttackType (0 = no attack), +0xEC
+// CurrentNbOfAttack, +0xF0 RemainingPills (4 = the game's own "unlimited pills" mode, set by its SetUnlimitedPills event),
+// +0xF4 TimeSinceLastAttack (counts up; the warning and the attack fire when it passes +0x104 (first) / +0x10C (later)).
+// MalariaAttacks=0 holds that clock at 0 between attacks, so no timed attack (or its warning) ever starts; scripted
+// story attacks are left alone. UnlimitedPills=1 keeps the pill count in the unlimited mode.
+typedef void (__fastcall *MalariaUpd_t)(uint8_t* comp, void* edx, float dt);
+static MalariaUpd_t o_MalariaUpd = nullptr; static bool s_noMalaria = false, s_pillsUnlimited = false;
+static void __fastcall Hook_MalariaUpd(uint8_t* comp, void* edx, float dt) {
+    if (comp && !IsBadWritePtr(comp + 0xE8, 0x10)) {
+        static int nl = 0;
+        if (s_noMalaria && *(int*)(comp + 0xE8) == 0) {
+            float& since = *(float*)(comp + 0xF4);
+            if (since != 0.0f && nl < 3) { ++nl; LOG("game fixes: malaria clock held at 0 (was %.0f s; first attack at %.0f s, later every %.0f s)", since, *(float*)(comp + 0x104), *(float*)(comp + 0x10C)); }
+            since = 0.0f;
+        }
+        if (s_pillsUnlimited) *(int*)(comp + 0xF0) = 4;
+    }
+    o_MalariaUpd(comp, edx, dt);
+}
+static bool RedirectCall(uintptr_t site, uintptr_t target, void* hook, void** orig) {
+    uint8_t* p = (uint8_t*)site;
+    if (!site || p[0] != 0xE8 || (uintptr_t)(p + 5) + *(int32_t*)(p + 1) != target) { LOG("patch %08x: unexpected call", (unsigned)site); return false; }
+    *orig = (void*)target;
+    DWORD old; VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &old);
+    *(int32_t*)(p + 1) = (int32_t)((uintptr_t)hook - (uintptr_t)(p + 5));
+    VirtualProtect(p, 5, old, &old); FlushInstructionCache(GetCurrentProcess(), p, 5);
+    return true;
+}
+// v234 test 56: the game makes its DXGI factory with CreateDXGIFactory (DXGI 1.0), and a D3D10.1 device on a DXGI 1.0
+// adapter cannot create or open keyed-mutex textures (E_INVALIDARG), which the GPU frame handover needs. The device
+// setup's "call [CreateDXGIFactory]" (Steam 0x1042167D, 6 bytes) becomes a call to this: a DXGI 1.1 factory, handed out
+// through the interface the game asked for (IDXGIFactory1 is an IDXGIFactory). Falls back to the game's own call.
+typedef HRESULT (WINAPI *CreateFactory_t)(REFIID, void**);
+static CreateFactory_t* g_gameCreateFactory = nullptr;
+// v234 test 57: DXVK trial (ini Dxvk=1). DXVK's 32-bit dxgi.dll + d3d11.dll from bin\dxvk\ (loaded by full path when
+// the game makes its factory, not under the loader lock). The factory and the D3D10.1 device come from DXVK: the device is
+// made the way DXVK's own d3d10core does it (D3D11CoreCreateDevice on a DXVK adapter, then its ID3D10Device1). Windows'
+// d3d10_1.dll would never reach DXVK on its own (it uses the system D3D10.1 core).
+static bool g_dxvkWanted = false, g_dxvkOn = false;
+static HMODULE g_dxvkDxgi = nullptr, g_dxvkD3d11 = nullptr;
+static bool DxvkLoad() {
+    if (g_dxvkDxgi && g_dxvkD3d11) return true;
+    {   // bin\dxvk\dxvk.conf (if present) is DXVK's config, e.g. dxgi.hideNvidiaGpu = False so the game sees the real GPU
+        char cf[MAX_PATH]; snprintf(cf, MAX_PATH, "%sdxvk\\dxvk.conf", g_dir);
+        if (GetFileAttributesA(cf) != INVALID_FILE_ATTRIBUTES) { SetEnvironmentVariableA("DXVK_CONFIG_FILE", cf); LOG("DXVK: config %s", cf); }
+    }
+    char p1[MAX_PATH], p2[MAX_PATH];
+    snprintf(p1, MAX_PATH, "%sdxvk\\dxgi.dll", g_dir); snprintf(p2, MAX_PATH, "%sdxvk\\d3d11.dll", g_dir);
+    g_dxvkDxgi = LoadLibraryExA(p1, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    g_dxvkD3d11 = g_dxvkDxgi ? LoadLibraryExA(p2, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH) : nullptr;
+    LOG("DXVK: %s -> %p, %s -> %p (error %lu)", p1, (void*)g_dxvkDxgi, p2, (void*)g_dxvkD3d11, GetLastError());
+    return g_dxvkDxgi && g_dxvkD3d11;
+}
+static HRESULT WINAPI Hook_CreateDXGIFactory(REFIID riid, void** out) {
+    if (g_dxvkWanted && DxvkLoad()) {
+        CreateFactory_t f = (CreateFactory_t)GetProcAddress(g_dxvkDxgi, "CreateDXGIFactory1");
+        HRESULT hr = f ? f(riid, out) : E_NOINTERFACE;
+        LOG("DXVK: game factory made by DXVK hr=%08lx", (unsigned long)hr);
+        if (SUCCEEDED(hr)) { g_dxvkOn = true; return hr; }
+    }
+    IDXGIFactory1* f1 = nullptr;
+    HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&f1);
+    if (SUCCEEDED(hr) && f1) { hr = f1->QueryInterface(riid, out); f1->Release(); }
+    LOG("DXGI: game factory made as DXGI 1.1 (for the GPU frame handover) hr=%08lx", (unsigned long)hr);
+    if (SUCCEEDED(hr)) return hr;
+    return (g_gameCreateFactory && *g_gameCreateFactory) ? (*g_gameCreateFactory)(riid, out) : hr;
+}
+typedef HRESULT (WINAPI *CreateDevice1_t)(IDXGIAdapter*, UINT, HMODULE, UINT, UINT, UINT, ID3D10Device1**);
+static CreateDevice1_t* g_gameCreateDevice1 = nullptr;
+static HRESULT WINAPI Hook_D3D10CreateDevice1(IDXGIAdapter* ad, UINT type, HMODULE sw, UINT flags, UINT level, UINT sdk, ID3D10Device1** out) {
+    if (g_dxvkOn && ad) {
+        typedef HRESULT (WINAPI *Core_t)(IDXGIFactory*, IDXGIAdapter*, UINT, HMODULE, UINT, const UINT*, UINT, UINT, ID3D11Device**, UINT*);
+        Core_t core = (Core_t)GetProcAddress(g_dxvkD3d11, "D3D11CoreCreateDevice");
+        IDXGIFactory* fac = nullptr; ad->GetParent(__uuidof(IDXGIFactory), (void**)&fac);
+        ID3D11Device* d11 = nullptr; const UINT fl = level;
+        HRESULT hr = core ? core(fac, ad, 0 /* D3D_DRIVER_TYPE_UNKNOWN */, nullptr, flags, &fl, 1, 7 /* D3D11_SDK_VERSION */, &d11, nullptr) : E_NOINTERFACE;
+        if (fac) fac->Release();
+        if (SUCCEEDED(hr) && d11) {
+            ID3D10Multithread* mt = nullptr;
+            if (SUCCEEDED(d11->QueryInterface(__uuidof(ID3D10Multithread), (void**)&mt)) && mt) { mt->SetMultithreadProtected(!(flags & D3D10_CREATE_DEVICE_SINGLETHREADED)); mt->Release(); }
+            struct IDxvkDev : IUnknown { virtual void STDMETHODCALLTYPE SetAPIVersion(UINT) = 0; virtual UINT STDMETHODCALLTYPE GetAPIVersion() = 0; };
+            static const GUID g1 = { 0x92a5d77b, 0xb6e1, 0x420a, { 0xb2, 0x60, 0xfd, 0xf7, 0x01, 0x27, 0x28, 0x27 } };
+            static const GUID g2 = { 0x92a5d77b, 0xb6e1, 0x420a, { 0xb2, 0x60, 0xfd, 0xd7, 0x01, 0x27, 0x28, 0x27 } };
+            IDxvkDev* dv = nullptr;
+            if ((SUCCEEDED(d11->QueryInterface(g1, (void**)&dv)) || SUCCEEDED(d11->QueryInterface(g2, (void**)&dv))) && dv) { dv->SetAPIVersion(10); dv->Release(); }
+            else LOG("DXVK: no API version interface");
+            hr = d11->QueryInterface(__uuidof(ID3D10Device1), (void**)out);
+            d11->Release();
+        }
+        LOG("DXVK: D3D10.1 device (flags %x, level %x) made by DXVK hr=%08lx", flags, level, (unsigned long)hr);
+        if (SUCCEEDED(hr)) return hr;
+        LOG("DXVK: falling back to the system D3D10.1 device");
+    }
+    return (g_gameCreateDevice1 && *g_gameCreateDevice1) ? (*g_gameCreateDevice1)(ad, type, sw, flags, level, sdk, out) : E_FAIL;
+}
+static bool PatchFactoryCall() {
+    uint8_t* p = (uint8_t*)A(0x1042167D);
+    if (!p || p[0] != 0xFF || p[1] != 0x15) { LOG("DXGI 1.1 factory patch: unexpected bytes - skipped"); return false; }
+    g_gameCreateFactory = *(CreateFactory_t**)(p + 2);
+    DWORD old; VirtualProtect(p, 6, PAGE_EXECUTE_READWRITE, &old);
+    p[0] = 0xE8; *(int32_t*)(p + 1) = (int32_t)((uintptr_t)&Hook_CreateDXGIFactory - (uintptr_t)(p + 5)); p[5] = 0x90;
+    VirtualProtect(p, 6, old, &old); FlushInstructionCache(GetCurrentProcess(), p, 6);
+    if (g_dxvkWanted) {   // "mov eax,[D3D10CreateDevice1]" (Steam 0x104216E4) -> "mov eax,Hook_D3D10CreateDevice1"
+        uint8_t* q = (uint8_t*)A(0x104216E4);
+        if (!q || q[0] != 0xA1) { LOG("DXVK: device patch: unexpected bytes - DXVK off"); g_dxvkWanted = false; return true; }
+        g_gameCreateDevice1 = *(CreateDevice1_t**)(q + 1);
+        VirtualProtect(q, 5, PAGE_EXECUTE_READWRITE, &old);
+        q[0] = 0xB8; *(uint32_t*)(q + 1) = (uint32_t)(uintptr_t)&Hook_D3D10CreateDevice1;
+        VirtualProtect(q, 5, old, &old); FlushInstructionCache(GetCurrentProcess(), q, 5);
+        LOG("DXVK trial on: device creation patched");
+    }
+    return true;
+}
+// v234 test 62: the engine's dynamic buffer allocator (Steam 0x10380xxx) checks every freshly mapped D3D buffer pointer
+// with IsBadWritePtr (call at Steam 0x1038110E / GOG 0x1037311E). That probes every page of the mapped GPU memory by
+// reading and writing it back - reads from write-combined GPU memory are slow - about 0.4 ms per VR frame on an RTX 5090
+// (profiler: KERNEL32!IsBadWritePtr in both eyes). A pointer returned by a successful Map is always writable for the
+// mapped size, so only a null pointer is "bad". FastMapCheck=0 keeps the game's check.
+static BOOL WINAPI FastIsBadWritePtr(void* p, UINT_PTR n) { return p == nullptr && n != 0; }
+static void PatchMapCheck() {
+    uint8_t* p = (uint8_t*)A(0x1038110E);
+    if (!p || p[0] != 0xFF || p[1] != 0x15) { LOG("fast map check: unexpected bytes - not patched"); return; }
+    DWORD old; VirtualProtect(p, 6, PAGE_EXECUTE_READWRITE, &old);
+    p[0] = 0xE8; *(int32_t*)(p + 1) = (int32_t)((uintptr_t)&FastIsBadWritePtr - (uintptr_t)(p + 5)); p[5] = 0x90;
+    VirtualProtect(p, 6, old, &old); FlushInstructionCache(GetCurrentProcess(), p, 6);
+    LOG("fast map check: on (the buffer allocator's IsBadWritePtr probe replaced)");
+}
+// v234: indestructible buggy / hang glider (optional). Every health loss of a vehicle goes through
+// CVehiclePhysComponent::ApplyHealthDamage (Steam 0x10067170, thiscall phys, float dmg, ret 4); explosions through the
+// engine's explosion trigger 0x10107BF0 (ret 4) and explode 0x101075F0 (ret 8, also run by explosion events); engine
+// death 0x10107B00. For a protected vehicle these return at once. Vehicle: entity -> CVehicle (0x1007F440, ecx = entity);
+// CVehicle+0x14 vehicle type (2 = paraglider); buggy = colour index (Implementation +0x1DC) 1-4, 27 or 34.
+typedef void* (__fastcall *GetVehicle_t)(void* ent, void* edx);
+static bool s_protBuggy = false, s_protGlider = false, s_protAtv = false; static float g_vehMaxHealth = -1;
+static uint8_t* VehEntFromPhys(uint8_t* phys) {
+    if (!phys || IsBadReadPtr(phys + 8, 4)) return nullptr; uint8_t* h = *(uint8_t**)(phys + 8);
+    if (!h || IsBadReadPtr(h + 0xC, 4)) return nullptr; return *(uint8_t**)(h + 0xC);
+}
+static uint8_t* VehEntFromEngine(uint8_t* eng) {
+    if (!eng || IsBadReadPtr(eng + 4, 4)) return nullptr; return VehEntFromPhys(*(uint8_t**)(eng + 4));
+}
+static bool VehProtected(uint8_t* ent, const char* why) {
+    if (!ent || IsBadReadPtr(ent, 0x10)) return false;
+    uint8_t* veh = (uint8_t*)((GetVehicle_t)A(0x1007F440))(ent, nullptr);
+    if ((uintptr_t)veh < 0x10000 || IsBadReadPtr(veh + 0x10, 8)) return false;   // no vehicle (the lookup returns a small offset of null)
+    int type = *(int*)(veh + 0x14); uint8_t* impl = *(uint8_t**)(veh + 0x10);
+    int colour = impl && !IsBadReadPtr(impl + 0x1DC, 4) ? *(int*)(impl + 0x1DC) : -1;
+    int anim = impl && !IsBadReadPtr(impl + 4, 4) ? *(int*)(impl + 4) : -1;   // iAnimVehicleType (rider animation set)
+    int cmin = impl && !IsBadReadPtr(impl + 0x1E0, 8) ? *(int*)(impl + 0x1E0) : -1, cmax = impl && !IsBadReadPtr(impl + 0x1E4, 4) ? *(int*)(impl + 0x1E4) : -1;
+    bool glider = type == 2, buggy = colour == 1 || colour == 2 || colour == 3 || colour == 4 || colour == 27 || colour == 34;
+    bool atv = !glider && anim == 5;   // Fortune's Pack ATV: its own rider animation type (5), 1800 max health
+    bool prot = (glider && s_protGlider) || (buggy && s_protBuggy) || (atv && s_protAtv);
+    static void* seen[48]; static int nSeen = 0; bool known = false;
+    for (int i = 0; i < nSeen; ++i) if (seen[i] == ent) { known = true; break; }
+    if (!known && nSeen < 48) { seen[nSeen++] = ent; LOG("vehicles: %s on vehicle %p: type %d colour %d (random %d-%d) anim type %d max health %.0f -> %s%s", why, (void*)ent, type, colour, cmin, cmax, anim, g_vehMaxHealth, glider ? "hang glider" : buggy ? "buggy" : atv ? "ATV" : "other", prot ? " (protected)" : ""); }
+    return prot;
+}
+void VehDescribe(void* ent) { VehProtected((uint8_t*)ent, "offered to get on"); }   // called by the use diagnostics
+typedef void (__fastcall *VehDmg_t)(uint8_t* phys, void* edx, float dmg);
+typedef void (__fastcall *VehBoom_t)(uint8_t* eng, void* edx, int a);
+typedef void (__fastcall *VehExplode_t)(uint8_t* eng, void* edx, int a, int b);
+typedef void (__fastcall *VehKill_t)(uint8_t* eng, void* edx);
+static VehDmg_t o_VehDmg; static VehBoom_t o_VehBoom; static VehExplode_t o_VehExplode; static VehKill_t o_VehKill;
+static void __fastcall Hook_VehDmg(uint8_t* phys, void* edx, float dmg) {
+    g_vehMaxHealth = phys && !IsBadReadPtr(phys + 0x88, 4) ? *(float*)(phys + 0x88) : -1;
+    bool prot = VehProtected(VehEntFromPhys(phys), "damage"); g_vehMaxHealth = -1;
+    if (prot) return;
+    o_VehDmg(phys, edx, dmg);
+}
+static void __fastcall Hook_VehBoom(uint8_t* eng, void* edx, int a) { if (VehProtected(VehEntFromEngine(eng), "explosion")) return; o_VehBoom(eng, edx, a); }
+static void __fastcall Hook_VehExplode(uint8_t* eng, void* edx, int a, int b) { if (VehProtected(VehEntFromEngine(eng), "explode")) return; o_VehExplode(eng, edx, a, b); }
+static void __fastcall Hook_VehKill(uint8_t* eng, void* edx) { if (VehProtected(VehEntFromEngine(eng), "engine kill")) return; o_VehKill(eng, edx); }
+static void InstallGameFixes() {
+    const bool gog = gameaddr::Detect() == gameaddr::GOG;
+    void* unused = nullptr;
+    if (IniF("PredecessorMissions", 1) != 0) {
+        static const uint8_t steamPro[8] = { 0xC7, 0x44, 0x24, 0x04, 0xE8, 0x03, 0x00, 0x00 };   // mov dword [esp+4],1000 (key id)
+        static const uint8_t gogPro[6] = { 0x81, 0xEC, 0x10, 0x01, 0x00, 0x00 };                // sub esp,110h
+        bool ok = gog ? PatchJmpN(A(0x100488B0), gogPro, 6, (void*)&Hook_PartnerKey, &unused)
+                      : PatchJmpN(A(0x100488B0), steamPro, 8, (void*)&Hook_PartnerKey, &unused);
+        LOG("game fixes: predecessor missions unlock %s", ok ? "on" : "not applied");
+    } else LOG("game fixes: predecessor missions unlock off (PredecessorMissions=0)");
+    if (IniF("BonusMachetes", 1) != 0) {
+        static const uint8_t pro[8] = { 0x83, 0xEC, 0x10, 0x53, 0x8D, 0x44, 0x24, 0x08 };     // sub esp,10h; push ebx; lea eax,[esp+8]
+        bool ok = PatchJmpN(A(0x100488D0), pro, 8, (void*)&Hook_MachetesKey, &unused);
+        LOG("game fixes: bonus machetes unlock %s", ok ? "on" : "not applied");
+    } else LOG("game fixes: bonus machetes unlock off (BonusMachetes=0)");
+    if (IniF("JackalTapeFix", 1) != 0) {
+        static const uint8_t site[6] = { 0x75, 0x0A, 0x3B, 0xCA, 0x75, 0x0A };   // jne +0A (taken); cmp ecx,edx; jne +0A
+        uintptr_t at = A(0x1074E465); bool ok = at && PatchByte(at - 1, site, 6, 1, 0x14);
+        LOG("game fixes: Jackal tape fix %s", ok ? "on" : "not applied");
+    } else LOG("game fixes: Jackal tape fix off (JackalTapeFix=0)");
+    s_noMalaria = IniF("MalariaAttacks", 1) == 0; s_pillsUnlimited = IniF("UnlimitedPills", 0) != 0;
+    if (s_noMalaria || s_pillsUnlimited) {
+        bool ok = RedirectCall(A(0x106A94B0), A(0x106A9130), (void*)&Hook_MalariaUpd, (void**)&o_MalariaUpd);
+        LOG("game fixes: malaria - timed attacks %s, unlimited pills %s (%s)", s_noMalaria ? "off" : "on", s_pillsUnlimited ? "on" : "off", ok ? "applied" : "not applied");
+    }
+    s_protBuggy = IniF("IndestructibleBuggy", 0) != 0; s_protGlider = IniF("IndestructibleGlider", 0) != 0; s_protAtv = IniF("IndestructibleATV", 0) != 0;
+    if (s_protBuggy || s_protGlider || s_protAtv) {
+        static const uint8_t pDmg[7] = { 0x80, 0xB9, 0x02, 0x01, 0x00, 0x00, 0x00 }, pBoom[6] = { 0x83, 0xEC, 0x54, 0x56, 0x8B, 0xF1 },
+                             pExp[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF0 }, pKill[9] = { 0x56, 0x8B, 0xF1, 0x8B, 0x86, 0x18, 0x01, 0x00, 0x00 };
+        bool a = PatchJmpN(A(0x10067170), pDmg, 7, (void*)&Hook_VehDmg, (void**)&o_VehDmg);
+        bool b = PatchJmpN(A(0x10107BF0), pBoom, 6, (void*)&Hook_VehBoom, (void**)&o_VehBoom);
+        bool c = PatchJmpN(A(0x101075F0), pExp, 6, (void*)&Hook_VehExplode, (void**)&o_VehExplode);
+        bool d = PatchJmpN(A(0x10107B00), pKill, 9, (void*)&Hook_VehKill, (void**)&o_VehKill);
+        LOG("game fixes: indestructible buggy %s, hang glider %s, ATV %s (damage %d, explosion %d/%d, engine kill %d)", s_protBuggy ? "on" : "off", s_protGlider ? "on" : "off", s_protAtv ? "on" : "off", a, b, c, d);
+    }
 }
 static void InstallDevConsole() {
     if (!g_cfg.devConsole) return;
@@ -1509,7 +2115,12 @@ static ID3D10Texture2D* ShPassDepth(void* self, uint32_t id) {
     void* o = *(void**)(p + 0x38); return o ? ShTex(o) : nullptr;
 }
 static bool ShRightShares() { return g_renderEye == 1 && g_cfg.shareShadows && g_shLeftDone && g_shAtlas; }
+static void __fastcall Hook_ShGatherImpl(void* self, void* edx, void* view, uint32_t pass);
 static void __fastcall Hook_ShGather(void* self, void* edx, void* view, uint32_t pass) {
+    if (!g_cfg.profile || g_renderEye < 0) { Hook_ShGatherImpl(self, edx, view, pass); return; }
+    double t0 = NowMs(); Hook_ShGatherImpl(self, edx, view, pass); g_pwShT[PwEye()][1] += NowMs() - t0;
+}
+static void __fastcall Hook_ShGatherImpl(void* self, void* edx, void* view, uint32_t pass) {
     ID3D10Texture2D* t = ShPassDepth(self, pass);
     if (g_renderEye == 0) {
         if (g_shLeftDone) { g_shLeftDone = false; g_shLeftN = 0; g_shAtlas = nullptr; }   // a new left eye: record afresh
@@ -1527,7 +2138,12 @@ static void __fastcall Hook_ShGather(void* self, void* edx, void* view, uint32_t
     }
     o_ShGather(self, edx, view, pass);
 }
-static void __fastcall Hook_ShDraw(void* self) {   // executes the shadow passes, once per scene
+static void __fastcall Hook_ShDrawImpl(void* self);
+static void __fastcall Hook_ShDraw(void* self) {
+    if (!g_cfg.profile || g_renderEye < 0) { Hook_ShDrawImpl(self); return; }
+    double t0 = NowMs(); g_pwInShDraw = true; Hook_ShDrawImpl(self); g_pwInShDraw = false; g_pwShT[PwEye()][2] += NowMs() - t0;
+}
+static void __fastcall Hook_ShDrawImpl(void* self) {   // executes the shadow passes, once per scene
     if (g_renderEye == 0) {
         o_ShDraw(self); InterlockedIncrement(&g_shRendered); g_shLeftDone = true;
         g_shAtlas = nullptr;   // the sun atlas: a texture used by more than one pass
@@ -1560,7 +2176,9 @@ static void __fastcall Hook_PassExec(void* pass) {   // 0x1039D900: execute (cle
 // the casters' culling: skipped for the sun in the right eye (the caller's light at its [esp+2Ch], 7 args pushed)
 typedef void (__fastcall *CullSetup_t)(void* self, void* edx, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f, uint32_t g);
 typedef void (__fastcall *CullRun_t)(void* self, void* edx, uint32_t a, uint32_t b);
+static double g_pwCull0 = 0;
 static void __fastcall ShCullSetup(void* self, void* edx, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f, uint32_t g) {
+    g_pwCull0 = NowMs();
     g_shSkipCull = false;
     if (ShRightShares()) {
         uint8_t* args = (uint8_t*)__builtin_frame_address(0) + 8;   // our first stack argument = the caller's esp
@@ -1570,8 +2188,9 @@ static void __fastcall ShCullSetup(void* self, void* edx, uint32_t a, uint32_t b
     ((CullSetup_t)A(0x103766A0))(self, edx, a, b, c, d, e, f, g);
 }
 static void __fastcall ShCullRun(void* self, void* edx, uint32_t a, uint32_t b) {
-    if (g_shSkipCull) { g_shSkipCull = false; return; }
+    if (g_shSkipCull) { g_shSkipCull = false; if (g_renderEye >= 0) g_pwShT[PwEye()][0] += NowMs() - g_pwCull0; return; }
     ((CullRun_t)A(0x10375260))(self, edx, a, b);
+    if (g_renderEye >= 0) g_pwShT[PwEye()][0] += NowMs() - g_pwCull0;   // setup + traversal
 }
 static void InstallShadowShare() {
     static const uint8_t proG[8] = { 0x83, 0xEC, 0x10, 0x53, 0x8B, 0x5C, 0x24, 0x1C };   // sub esp,10h; push ebx; mov ebx,[esp+1Ch]
@@ -1669,6 +2288,30 @@ static void HudTick() {   // every frame
         }
     }
     for (int i = 0; i < nHide; ++i) if (!IsBadReadPtr(hide[i], 0x4C)) hide[i][0x48] &= ~1;
+    if (g_cfg.uiBoxProbe2) {   // v234 test 21: dump the prompt / ammo elements (to find their position fields), when found and when shown
+        static const char* dn[] = { "hudprompt", "interact", "InteractionSwitchGroup", "CurrentInteractionIcon", "TargetInteractionIcon",
+                                    "CurrentInteractionIconFade", "TargetInteractionIconFade", "GrenadeGroup", "AmmoCount", "ReloadPrompt", "GrenadeCountGroup" };
+        const int nd = (int)(sizeof dn / sizeof dn[0]);
+        static uint8_t* de[16] = {}; static uint8_t lastVis[16] = {}; static int dumps[16] = {}; static double nextFind = 0; static uint8_t* droot = nullptr;
+        if (droot != root) { droot = root; memset(de, 0, sizeof de); memset(dumps, 0, sizeof dumps); nextFind = 0; }
+        if (now >= nextFind) { nextFind = now + 2000.0; for (int i = 0; i < nd; ++i) if (!de[i]) de[i] = UiFind(root, UiHash(dn[i]), 0); }
+        for (int i = 0; i < nd; ++i) {
+            uint8_t* e = de[i]; if (!e || IsBadReadPtr(e, 0x140)) continue;
+            uint8_t v = e[0x48] & 1;
+            if ((dumps[i] == 0 || (v && !lastVis[i])) && dumps[i] < 3) {
+                ++dumps[i];
+                char line[1600]; int o = snprintf(line, sizeof line, "HUD element %s (%p) vis %d:", dn[i], (void*)e, v);
+                for (int k = 0; k < 0x140 && o < (int)sizeof line - 40; k += 4) {
+                    uint32_t u = *(uint32_t*)(e + k); float f; memcpy(&f, &u, 4);
+                    if (std::isfinite(f) && fabsf(f) > 1e-4f && fabsf(f) < 1e5f && (u & 0x7F800000) != 0) o += snprintf(line + o, sizeof line - o, " +%02X=%.4g", k, f);
+                    else if (u) o += snprintf(line + o, sizeof line - o, " +%02X:%08x", k, u);
+                }
+                LOG("%s", line);
+                uint8_t **b, **en; if (UiChildren(e, b, en)) { char kids[400]; int q = 0; for (uint8_t** c = b; c < en && q < 360; ++c) if (*c && !IsBadReadPtr(*c, 12)) q += snprintf(kids + q, sizeof kids - q, " %08x(%p)", *(uint32_t*)(*c + 8), (void*)*c); LOG("HUD element %s children:%s", dn[i], kids); }
+            }
+            lastVis[i] = v;
+        }
+    }
     // the HUD's reticle update (0x1080AF10) keeps the current weapon's reticle at +0x188 (0 = this weapon has none)
     bool req = !IsBadReadPtr(hud + 0x188, 4) && *(uint32_t*)(hud + 0x188) != 0;
     static bool lastReq = false; if (req != lastReq) { lastReq = req; LOG("HUD: game reticle %s", req ? "on" : "off"); }
@@ -1802,7 +2445,9 @@ static void __fastcall Hook_RenderFrame(void* self) {
     perf::SetPhase(perf::P_RFPRE);
     Trace("RF>");
     if (g_capState == 2) TraceMark("RenderFrame begin");
+    ULONG64 cyc0 = 0; QueryThreadCycleTime(GetCurrentThread(), &cyc0);
     o_RenderFrame(self);
+    { ULONG64 cyc1 = 0; QueryThreadCycleTime(GetCurrentThread(), &cyc1); g_rfCycles += cyc1 - cyc0; }
     if (g_capState == 2) TraceMark("RenderFrame end");
     Trace("RF<");
     perf::SetPhase(perf::P_MID);
@@ -2041,6 +2686,15 @@ static void Hotkeys(const XrPosef* head) {
         else { g_cfg.vehicleViewSmooth = keep; g_cfg.vehicleViewPrev = 1; }
         LOG("vehicle view smoothing %.2f previous %d (Ctrl+F7)", g_cfg.vehicleViewSmooth, g_cfg.vehicleViewPrev);
         ShowToast(g_cfg.vehicleViewSmooth <= 0 ? "Vehicle view: 3 OFF (head bone)" : g_cfg.vehicleViewPrev ? "Vehicle view: 1 seat, drawn update" : "Vehicle view: 2 seat, latest update"); } p7 = k7; }
+    {   // v234 test 54: Ctrl+F11 switches the end-of-frame handover (GPU / render thread waits) for a before/after measurement
+        static bool p = false; bool k = (GetAsyncKeyState(VK_F11) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000);
+        if (k && !p) { bool on = !xr::GpuHandover(); xr::SetGpuHandover(on); ShowToast(!xr::GpuHandoverAvailable() ? "Frame handover: GPU mode unavailable (see log)" : xr::GpuHandover() ? "Frame handover: GPU (new)" : "Frame handover: CPU waits (old)"); }
+        p = k; }
+    {   // v234 test: Ctrl+F10 cycles the view's body clock 2 (drawn update) -> 1 (latest update, 1.0.3) -> 0 (game camera)
+        static bool p = false; bool k = (GetAsyncKeyState(VK_F10) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000);
+        if (k && !p) { g_camBodyClock = g_camBodyClock == 2 ? 1 : g_camBodyClock == 1 ? 0 : 2; LOG("camera body clock %d (Ctrl+F10)", g_camBodyClock);
+            ShowToast(g_camBodyClock == 2 ? "View: 2 drawn body update (new)" : g_camBodyClock == 1 ? "View: 1 latest body update (1.0.3)" : "View: 0 game camera"); }
+        p = k; }
     { static bool p6 = false; bool k6 = (DevKey(VK_F6) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k6 && !p6) { g_handSmooth = !g_handSmooth; LOG("hand smoothing %d (Ctrl+F6)", g_handSmooth); ShowToast(g_handSmooth ? "Hand stabiliser: ON" : "Hand stabiliser: OFF"); } p6 = k6; }
     { static bool p5 = false; bool k5 = (DevKey(VK_F5) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k5 && !p5) { bool on = arms::LocalFrameToggle(); LOG("arm local frame %d (Ctrl+F5)", on); ShowToast(on ? "Arm precision fix: ON" : "Arm precision fix: OFF"); } p5 = k5; }
     {   // v232 test keys (jitter A/B): Insert = DLSS on/off, Page Down = DLSS debug mode (1 = no sub-pixel jitter)
@@ -2377,6 +3031,8 @@ extern "C" void __cdecl OnUiBegin() {
 extern "C" void __cdecl OnUiEnd() {
     if (g_capState == 2) TraceMark("UI tail end (before 0x1037F860)");
     if (g_uiShift && g_cfg.uiMode == 2) {
+        if (g_pIconRestore || g_pIconMeasure == 1) PromptIconAfter();
+        if (g_bbPend) BoxProbeAfter();
         if (g_uiRedirect && g_uiSavedEyeRTV) t_OMSetRT(g_dev10, 1, &g_uiSavedEyeRTV, g_uiSavedEyeDSV);
         if (g_blendSetFixed) {
             ID3D10BlendState* bs = nullptr; FLOAT bf[4]; UINT sm = 0; g_dev10->OMGetBlendState(&bs, bf, &sm);
@@ -2387,6 +3043,7 @@ extern "C" void __cdecl OnUiEnd() {
         if (g_uiSavedEyeRTV) { g_uiSavedEyeRTV->Release(); g_uiSavedEyeRTV = nullptr; }
         if (g_uiSavedEyeDSV) { g_uiSavedEyeDSV->Release(); g_uiSavedEyeDSV = nullptr; }
         if (g_uiCurEye == g_uiPrimary && g_uiDrawOrd > 0) g_uiLayerFresh = true;
+        if (g_uiCurEye == g_uiPrimary) VbFrame();
         if (g_capState == 2 && g_uiCurEye == g_uiPrimary && g_uiDrawOrd > 0) UiProbe(g_uiDrawOrd - 1);
         if (g_capState == 2) LOG("UI layer: eye %d, %d UI draws", g_uiCurEye, g_uiDrawOrd);
         g_uiShift = false; g_uiOnEye = false; g_uiRedirect = false; g_uiCurEye = -1;
@@ -2491,6 +3148,154 @@ static void DrawAmmo(int clip, int pouch) {
         out[y * W + xx] = ((uint32_t)a << 24) | ((uint32_t)(b * a / 255) << 16) | ((uint32_t)(g * a / 255) << 8) | (uint32_t)(r * a / 255);
     }
     xr::SetAmmoImage(out);
+}
+// v234: the ammo panel beside the weapon: rounds in the clip (large) over the spare rounds, in framed light orange boxes.
+static void DrawWeaponAmmo(int clip, int pouch) {
+    static HDC dc = nullptr; static HBITMAP bmp = nullptr; static uint32_t* bits = nullptr; static HFONT fBig = nullptr, fSmall = nullptr;
+    const int W = xr::WAmmoW, H = xr::WAmmoH;
+    if (!dc) {
+        dc = CreateCompatibleDC(nullptr);
+        BITMAPINFO bi{}; bi.bmiHeader.biSize = sizeof bi.bmiHeader; bi.bmiHeader.biWidth = W; bi.bmiHeader.biHeight = -H; bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
+        bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, (void**)&bits, nullptr, 0); SelectObject(dc, bmp);
+        fBig = CreateFontA(104, 0, 0, 0, FW_BOLD, 0, 0, 0, ANSI_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, "Arial");
+        fSmall = CreateFontA(62, 0, 0, 0, FW_BOLD, 0, 0, 0, ANSI_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, "Arial");
+        SetBkMode(dc, TRANSPARENT);
+    }
+    if (!bits) return;
+    RECT all{ 0, 0, W, H }; FillRect(dc, &all, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    // coverage drawn in white: frames (thin) and digits; boxes: clip on top, spare rounds below (narrower)
+    const RECT top{ 8, 6, W - 8, 136 }, bot{ 48, 146, W - 48, H - 6 };
+    HPEN pen = CreatePen(PS_SOLID, 6, RGB(255, 255, 255)); HGDIOBJ op = SelectObject(dc, pen); HGDIOBJ ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
+    RoundRect(dc, top.left, top.top, top.right, top.bottom, 34, 34); RoundRect(dc, bot.left, bot.top, bot.right, bot.bottom, 28, 28);
+    SelectObject(dc, op); SelectObject(dc, ob); DeleteObject(pen);
+    char cl[16], po[16]; snprintf(cl, sizeof cl, "%d", clip < 0 ? 0 : clip); snprintf(po, sizeof po, "%d", pouch < 0 ? 0 : pouch);
+    SetTextColor(dc, RGB(255, 255, 255));
+    RECT t1 = top, t2 = bot;
+    SelectObject(dc, fBig); DrawTextA(dc, cl, -1, &t1, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(dc, fSmall); DrawTextA(dc, po, -1, &t2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    GdiFlush();
+    static uint32_t out[xr::WAmmoW * xr::WAmmoH];
+    for (int i = 0; i < W * H; ++i) {
+        uint32_t p = bits[i]; int a = (int)((p & 0xFF) + ((p >> 8) & 0xFF) + ((p >> 16) & 0xFF)) / 3;
+        const int r = 0xFD, g = 0xAA, b = 0x48;   // light orange #FDAA48
+        int inside = (i / W >= top.top && i / W < top.bottom) || (i / W >= bot.top && i / W < bot.bottom && i % W >= bot.left && i % W < bot.right);
+        int bg = inside ? 70 : 0; int aa = a > bg ? a : bg;   // a faint dark backing inside the frames keeps the digits readable
+        int cr = r * a / 255, cg = g * a / 255, cb = b * a / 255;
+        out[i] = ((uint32_t)aa << 24) | ((uint32_t)cb << 16) | ((uint32_t)cg << 8) | (uint32_t)cr;
+    }
+    xr::SetWeaponAmmoImage(out);
+}
+// v234: grenade / molotov counter (one framed box, same colours as the ammo panel)
+static void DrawGrenades(int count) {
+    static HDC dc = nullptr; static HBITMAP bmp = nullptr; static uint32_t* bits = nullptr; static HFONT fBig = nullptr;
+    const int W = xr::GrenW, H = xr::GrenH;
+    if (!dc) {
+        dc = CreateCompatibleDC(nullptr);
+        BITMAPINFO bi{}; bi.bmiHeader.biSize = sizeof bi.bmiHeader; bi.bmiHeader.biWidth = W; bi.bmiHeader.biHeight = -H; bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
+        bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, (void**)&bits, nullptr, 0); SelectObject(dc, bmp);
+        fBig = CreateFontA(104, 0, 0, 0, FW_BOLD, 0, 0, 0, ANSI_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, "Arial");
+        SetBkMode(dc, TRANSPARENT);
+    }
+    if (!bits) return;
+    RECT all{ 0, 0, W, H }; FillRect(dc, &all, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    const RECT box{ 8, 6, W - 8, H - 6 };
+    HPEN pen = CreatePen(PS_SOLID, 6, RGB(255, 255, 255)); HGDIOBJ op = SelectObject(dc, pen); HGDIOBJ ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
+    RoundRect(dc, box.left, box.top, box.right, box.bottom, 34, 34); SelectObject(dc, op); SelectObject(dc, ob); DeleteObject(pen);
+    char t[16]; snprintf(t, sizeof t, "%d", count < 0 ? 0 : count);
+    SetTextColor(dc, RGB(255, 255, 255)); SelectObject(dc, fBig); RECT tr = box; DrawTextA(dc, t, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    GdiFlush();
+    static uint32_t out[xr::GrenW * xr::GrenH];
+    for (int i = 0; i < W * H; ++i) {
+        uint32_t p = bits[i]; int a = (int)((p & 0xFF) + ((p >> 8) & 0xFF) + ((p >> 16) & 0xFF)) / 3;
+        int inside = i / W >= box.top && i / W < box.bottom; int aa = a > (inside ? 70 : 0) ? a : (inside ? 70 : 0);
+        out[i] = ((uint32_t)aa << 24) | ((uint32_t)(0x48 * a / 255) << 16) | ((uint32_t)(0xAA * a / 255) << 8) | (uint32_t)(0xFD * a / 255);
+    }
+    xr::SetGrenadeImage(out);
+}
+// v234: the clock under the map: h:mm AM/PM (or HH:MM with MapClock24h=1) in one wide framed light orange box
+static void DrawClock(int hh, int mm) {
+    static HDC dc = nullptr; static HBITMAP bmp = nullptr; static uint32_t* bits = nullptr; static HFONT fBig = nullptr, fSmall = nullptr;
+    const int W = xr::ClockW, H = xr::ClockH;
+    if (!dc) {
+        dc = CreateCompatibleDC(nullptr);
+        BITMAPINFO bi{}; bi.bmiHeader.biSize = sizeof bi.bmiHeader; bi.bmiHeader.biWidth = W; bi.bmiHeader.biHeight = -H; bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
+        bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, (void**)&bits, nullptr, 0); SelectObject(dc, bmp);
+        fBig = CreateFontA(84, 0, 0, 0, FW_BOLD, 0, 0, 0, ANSI_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, "Arial");
+        fSmall = CreateFontA(46, 0, 0, 0, FW_BOLD, 0, 0, 0, ANSI_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, "Arial");
+        SetBkMode(dc, TRANSPARENT);
+    }
+    if (!bits) return;
+    RECT all{ 0, 0, W, H }; FillRect(dc, &all, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    const RECT box{ 6, 6, W - 6, H - 6 };
+    HPEN pen = CreatePen(PS_SOLID, 6, RGB(255, 255, 255)); HGDIOBJ op = SelectObject(dc, pen); HGDIOBJ ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
+    RoundRect(dc, box.left, box.top, box.right, box.bottom, 30, 30); SelectObject(dc, op); SelectObject(dc, ob); DeleteObject(pen);
+    SetTextColor(dc, RGB(255, 255, 255));
+    if (g_cfg.mapClock24) { char t[16]; snprintf(t, sizeof t, "%02d:%02d", hh, mm); SelectObject(dc, fBig); RECT tr = box; DrawTextA(dc, t, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE); }
+    else {   // 12 hour: "5:42" large with a smaller AM / PM, centred together on a common baseline
+        char t[16], ap[4]; int h12 = hh % 12 == 0 ? 12 : hh % 12; snprintf(t, sizeof t, "%d:%02d", h12, mm); snprintf(ap, sizeof ap, "%s", hh < 12 ? "AM" : "PM");
+        SIZE s1, s2; SelectObject(dc, fBig); GetTextExtentPoint32A(dc, t, (int)strlen(t), &s1); SelectObject(dc, fSmall); GetTextExtentPoint32A(dc, ap, 2, &s2);
+        int gap = 10, x = (W - (s1.cx + gap + s2.cx)) / 2, base = H / 2 + 28;
+        SetTextAlign(dc, TA_BASELINE | TA_LEFT);
+        SelectObject(dc, fBig); TextOutA(dc, x, base, t, (int)strlen(t));
+        SelectObject(dc, fSmall); TextOutA(dc, x + s1.cx + gap, base, ap, 2);
+        SetTextAlign(dc, TA_TOP | TA_LEFT);
+    }
+    GdiFlush();
+    static uint32_t out[xr::ClockW * xr::ClockH];
+    for (int i = 0; i < W * H; ++i) {
+        uint32_t p = bits[i]; int a = (int)((p & 0xFF) + ((p >> 8) & 0xFF) + ((p >> 16) & 0xFF)) / 3;
+        int inside = i / W >= box.top && i / W < box.bottom && i % W >= box.left && i % W < box.right; int bg = inside ? 150 : 0; int aa = a > bg ? a : bg;
+        out[i] = ((uint32_t)aa << 24) | ((uint32_t)(0x48 * a / 255) << 16) | ((uint32_t)(0xAA * a / 255) << 8) | (uint32_t)(0xFD * a / 255);
+    }
+    xr::SetClockImage(out);
+}
+// v234 test 48: the view follows the DRAWN body update (CameraOnBodyClock=2, one game step behind the newest); a world
+// matrix read from the game (held map, GPS) is from the newest one - move it with the body from the newest update to the drawn one
+static void DrawnBodyFix(float Mc[16]) {
+    float cl[3], Wl[16], cd[3], Wd[16];
+    if (g_camBodyClock != 2 || !arms::CamBoneRoot(cl, Wl, false) || !arms::CamBoneRoot(cd, Wd, true)) return;
+    auto mul = [](const float* a, const float* b, float* o) { for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c) { float v = 0; for (int k = 0; k < 4; ++k) v += a[r * 4 + k] * b[k * 4 + c]; o[r * 4 + c] = v; } };
+    float iW[16] = { Wl[0], Wl[4], Wl[8], 0, Wl[1], Wl[5], Wl[9], 0, Wl[2], Wl[6], Wl[10], 0, 0, 0, 0, 1 };
+    float sx = Wl[0] * Wl[0] + Wl[1] * Wl[1] + Wl[2] * Wl[2];
+    if (!(sx > 1e-6f && fabsf(sx - 1.0f) < 0.05f)) return;
+    for (int c = 0; c < 3; ++c) iW[12 + c] = -(Wl[12] * iW[c] + Wl[13] * iW[4 + c] + Wl[14] * iW[8 + c]);
+    float D[16], T[16]; mul(iW, Wd, D); mul(Mc, D, T);
+    float dd = (T[12] - Mc[12]) * (T[12] - Mc[12]) + (T[13] - Mc[13]) * (T[13] - Mc[13]) + (T[14] - Mc[14]) * (T[14] - Mc[14]);
+    if (dd < 0.5f * 0.5f) memcpy(Mc, T, 64);
+}
+// v234: health + syrettes beside the map clock, in the game's style: syrette icons (white) over a segmented red health bar
+static void DrawHealth(float ratio, int segs, int syr) {
+    const int W = xr::HealthW, H = xr::HealthH; static uint32_t out[xr::HealthW * xr::HealthH];
+    auto put = [&](int x, int y, int r, int g, int b, int a) { if (x < 0 || y < 0 || x >= W || y >= H) return; out[y * W + x] = ((uint32_t)a << 24) | ((uint32_t)(b * a / 255) << 16) | ((uint32_t)(g * a / 255) << 8) | (uint32_t)(r * a / 255); };
+    auto rect = [&](int x0, int y0, int x1, int y1, int r, int g, int b, int a) { for (int y = y0; y < y1; ++y) for (int x = x0; x < x1; ++x) put(x, y, r, g, b, a); };
+    memset(out, 0, sizeof out);
+    // backing: dark, rounded corners
+    for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) { int dx = x < 14 ? 14 - x : x > W - 15 ? x - (W - 15) : 0, dy = y < 14 ? 14 - y : y > H - 15 ? y - (H - 15) : 0; if (dx * dx + dy * dy <= 196) put(x, y, 0, 0, 0, 120); }
+    // syrettes: up to 8 icons, left to right
+    if (syr < 0) syr = 0; if (syr > 8) syr = 8;
+    for (int i = 0; i < syr; ++i) {
+        int x = 16 + i * 37, y = 22;
+        rect(x + 6, y + 8, x + 26, y + 22, 235, 235, 235, 255);     // barrel
+        rect(x + 9, y + 11, x + 23, y + 19, 200, 40, 30, 255);       // red liquid
+        rect(x + 26, y + 13, x + 33, y + 17, 235, 235, 235, 255);    // needle base
+        rect(x + 33, y + 14, x + 35, y + 16, 235, 235, 235, 255);    // needle
+        rect(x + 1, y + 13, x + 6, y + 17, 235, 235, 235, 255);      // plunger rod
+        rect(x + 0, y + 9, x + 2, y + 21, 235, 235, 235, 255);       // plunger head
+    }
+    // health bar: segments, filled red by the health fraction
+    if (segs < 1 || segs > 10) segs = 5;
+    if (!(ratio >= 0.0f)) ratio = 0.0f; if (ratio > 1.0f) ratio = 1.0f;
+    const int bx0 = 16, bx1 = W - 16, by0 = 70, by1 = 104, gap = 6;
+    const float sw = (float)(bx1 - bx0 - gap * (segs - 1)) / segs;
+    for (int k = 0; k < segs; ++k) {
+        int x0 = bx0 + (int)(k * (sw + gap)), x1 = (int)(x0 + sw);
+        float f = ratio * segs - k; if (f < 0) f = 0; if (f > 1) f = 1;
+        rect(x0, by0, x1, by1, 60, 10, 8, 200);                        // empty segment
+        rect(x0, by0, x0 + (int)((x1 - x0) * f), by1, 215, 35, 25, 255);   // health
+        for (int x = x0; x < x1; ++x) { put(x, by0, 255, 255, 255, 140); put(x, by1 - 1, 255, 255, 255, 140); }
+        for (int y = by0; y < by1; ++y) { put(x0, y, 255, 255, 255, 140); put(x1 - 1, y, 255, 255, 255, 140); }
+    }
+    xr::SetHealthImage(out);
 }
 // ---- End key: machete hand menu (pitch / yaw / roll sliders), shown as a panel in front of you.
 // Keyboard: Up/Down select, Left/Right adjust (Shift = 1 deg steps, else 5). Controllers: left stick up/down selects,
@@ -2707,7 +3512,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
     TurnMenu();
     MacheteMenu(fv);
     {   // controller pose for the arms/weapon and shots (game thread reads it)
-        arms::Frame af; const xr::HandState rh = SmoothHand(1, fv.displayTime);
+        arms::Frame af; xr::HandState rh = SmoothHand(1, fv.displayTime);
         xr::HandState physical[2]; XrPosef inputHead; bool inputHeadValid = false;
         const bool inputCurrent = xr::InputSnapshot(physical,inputHead,inputHeadValid,&af.source);
         af.handAuthority = inputCurrent && physical[1].gripValid && physical[1].aimValid;
@@ -2718,6 +3523,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
         auto put = [](float* d, V3 v) { d[0] = v.x; d[1] = v.y; d[2] = v.z; };
         af.game = frame.game; af.frameSequence = frame.sequence;
         af.bonePubValid = arms::CamBonePos(af.bonePub);   // v231 body clock
+        if (g_camBodyClock == 2) { float cp[3], Wm[16]; if (arms::CamBoneRoot(cp, Wm, true)) { memcpy(af.bonePub, cp, 12); af.bonePubValid = true; } }   // v234: the view's origin
         if (g_vehViewUsed) { float cp[3], Wm[16]; if (arms::CamBoneRoot(cp, Wm, g_cfg.vehicleViewPrev != 0)) { af.bonePub[0] = Wm[12]; af.bonePub[1] = Wm[13]; af.bonePub[2] = Wm[14]; af.bonePubRoot = true; af.bonePubValid = true; } }
         if (g_motionDiag) {   // v231 diagnostic (MotionDiag=1): does the skeleton (as the renderer will read it) still hold the hand the mod wrote?
             static int frames = 0, differ = 0; static float worst = 0; static double lastL = 0;
@@ -2764,6 +3570,47 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             lastSeq = seq; lastRaw = raw; lastBone = bone; lastPl = pp;
             if (--g_motionTrace == 0) { LOG("motion trace: done"); }
         }
+        xr::HandState lh = SmoothHand(0, fv.displayTime);
+        {   // v234 two-handed grip through tracking dropouts. Holding the rifle puts the controllers right next to each
+            // other, where the headset's cameras often lose one or both (tracked bit off, the pose only estimated) -
+            // most of all while the hands are still. That revoked the hand's authority and the grip let go. While both
+            // hands are tracked, each hand's grip / aim pose is kept relative to the other's grip; while the grip is held
+            // and one hand is lost, it is put back there, on the weapon. With both lost, the right controller's own
+            // (estimated) pose carries the weapon and the left hand stays on it.
+            static bool haveRel = false; static int nLostL = 0, nLostR = 0, nLostB = 0;
+            static XrVector3f relLP, relLAimP, relRP, relRAimP; static XrQuaternionf relLQg, relLQa, relRQg, relRQa;
+            auto qmul = [](const XrQuaternionf& a, const XrQuaternionf& b) { return XrQuaternionf{
+                a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+                a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z }; };
+            auto qcon = [](const XrQuaternionf& q) { return XrQuaternionf{ -q.x, -q.y, -q.z, q.w }; };
+            auto v3 = [](V3 v) { return XrVector3f{ v.x, v.y, v.z }; };
+            // hand pose (grip + aim) stored in the frame of another grip, and put back from it
+            auto store = [&](const xr::HandState& h, const XrPosef& base, XrVector3f& rp, XrVector3f& rap, XrQuaternionf& rqg, XrQuaternionf& rqa) {
+                XrQuaternionf ic = qcon(base.orientation);
+                rp = v3(QRot(ic, ToV3(h.grip.position) - ToV3(base.position)));
+                rap = v3(QRot(ic, ToV3(h.aim.position) - ToV3(base.position)));
+                rqg = qmul(ic, h.grip.orientation); rqa = qmul(ic, h.aim.orientation); };
+            auto place = [&](xr::HandState& h, const XrPosef& base, const XrVector3f& rp, const XrVector3f& rap, const XrQuaternionf& rqg, const XrQuaternionf& rqa) {
+                h.grip.position = v3(ToV3(base.position) + QRot(base.orientation, ToV3(rp)));
+                h.aim.position = v3(ToV3(base.position) + QRot(base.orientation, ToV3(rap)));
+                h.grip.orientation = qmul(base.orientation, rqg); h.aim.orientation = qmul(base.orientation, rqa);
+                h.gripValid = h.aimValid = true; };
+            const bool held = g_twoHandGrip && haveRel && lh.squeeze > 0.35f;
+            if (af.handAuthority && af.leftAuthority && rh.gripValid && rh.aimValid && lh.gripValid && lh.aimValid) {
+                store(lh, rh.grip, relLP, relLAimP, relLQg, relLQa);
+                store(rh, lh.grip, relRP, relRAimP, relRQg, relRQa); haveRel = true;
+            } else if (held && af.handAuthority && rh.gripValid) {   // left lost: left hand on the weapon
+                place(lh, rh.grip, relLP, relLAimP, relLQg, relLQa); af.leftSynth = true;
+                if (nLostL++ % 300 == 0) LOG("arms: left controller untracked - its hand held on the weapon (%d frames)", nLostL);
+            } else if (held && af.leftAuthority && lh.gripValid) {   // right lost: right hand (and the weapon) follows the left
+                place(rh, lh.grip, relRP, relRAimP, relRQg, relRQa); af.handSynth = true;
+                if (nLostR++ % 300 == 0) LOG("arms: right controller untracked - its hand held on the weapon by the left (%d frames)", nLostR);
+            } else if (held && rh.gripValid && rh.aimValid) {   // both lost: the runtime's estimated right pose, left on the weapon
+                af.handSynth = true; place(lh, rh.grip, relLP, relLAimP, relLQg, relLQa); af.leftSynth = true;
+                if (nLostB++ % 300 == 0) LOG("arms: both controllers untracked - weapon on the right controller's estimated pose (%d frames)", nLostB);
+            }
+            if (af.handSynth) af.handValid = true;
+        }
         const float* Wr = &F<float>(rc, cam::World);
         put(af.camRows[0], Norm({ Wr[0], Wr[1], Wr[2] })); put(af.camRows[1], Norm({ Wr[4], Wr[5], Wr[6] })); put(af.camRows[2], Norm({ Wr[8], Wr[9], Wr[10] }));
         if (af.handValid) {
@@ -2773,9 +3620,8 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             put(af.aimB, frame.ReferenceDirection(QRot(rh.aim.orientation, { 0, 0, 1 })));
             put(af.gripO, frame.ReferencePosition(ToV3(rh.grip.position)));
         }
-        const xr::HandState lh = SmoothHand(0, fv.displayTime);
         af.leftValid = lh.aimValid && lh.gripValid;
-        af.lSqueeze = af.leftAuthority ? lh.squeeze : 0; af.rSqueeze = af.handAuthority ? rh.squeeze : 0;
+        af.lSqueeze = (af.leftAuthority || af.leftSynth) ? lh.squeeze : 0; af.rSqueeze = (af.handAuthority || af.handSynth) ? rh.squeeze : 0;
         af.machete = controls::MacheteSelected(); af.map = controls::MapOpen();
         if (af.leftValid) {
             put(af.laimO, frame.ReferencePosition(ToV3(lh.aim.position)));
@@ -2830,10 +3676,16 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             static void* gripWeapon = nullptr; static xr::InputStamp gripSource;
             bool g = lh.squeeze > (gripDown ? 0.35f : 0.6f);
             if (gripWeapon != af.weapon || gripSource.generation != af.source.generation
-                || gripSource.handGeneration[0] != af.source.handGeneration[0] || gripSource.handGeneration[1] != af.source.handGeneration[1]) {
+                || (gripSource.handGeneration[0] != af.source.handGeneration[0] && !(grabbing && af.leftSynth))
+                || (gripSource.handGeneration[1] != af.source.handGeneration[1] && !(grabbing && af.handSynth))) {
+                if (grabbing) LOG("arms: two-handed grip ended (%s)", gripWeapon != af.weapon ? "weapon changed" : gripSource.generation != af.source.generation ? "input reset" : gripSource.handGeneration[1] != af.source.handGeneration[1] ? "right controller lost tracking" : "left controller lost tracking");
                 grabbing = false; gripDown = g; gripWeapon = af.weapon; gripSource = af.source;
             }
-            if (!af.handAuthority || !af.leftAuthority) grabbing = false;
+            if (grabbing && af.leftSynth) gripSource.handGeneration[0] = af.source.handGeneration[0];   // v234: a held hand keeps the grip
+            if (grabbing && af.handSynth) gripSource.handGeneration[1] = af.source.handGeneration[1];
+            const bool rOk = af.handAuthority || af.handSynth, lOk = af.leftAuthority || af.leftSynth;
+            if (grabbing && (!rOk || !lOk)) LOG("arms: two-handed grip ended (%s controller not tracked)", !rOk ? "right" : "left");
+            if (!rOk || !lOk) grabbing = false;
             float fg[3]; bool oneH = true;
             if (g && !gripDown && af.handAuthority && af.leftAuthority && arms::Foregrip(fg, oneH)) {
                 V3 d = V3{ af.lgripO[0] - fg[0], af.lgripO[1] - fg[1], af.lgripO[2] - fg[2] };
@@ -2841,6 +3693,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
                 if (dist < g_cfg.grabDistance * s) { grabbing = true; xr::Haptic(0, 0.5f, 0.05f); LOG("arms: two-handed grip (%s, %.2f m, hand span %.2f)", oneH ? "pistol" : "rifle", dist / s, arms::LastHandSpan()); }
                 else LOG("arms: left grip %.2f m from the weapon (span %.2f, %s): not grabbing", dist / s, arms::LastHandSpan(), oneH ? "pistol" : "rifle");
             }
+            if (!g && grabbing) LOG("arms: two-handed grip released (grip button)");
             if (!g) grabbing = false;
             gripDown = g;
             af.twoHand = grabbing;
@@ -3248,7 +4101,8 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         }
         g_uiPrimary = afwSkip[0] ? 1 : 0;   // the UI is drawn with the first eye rendered this frame
         bool dlssOn = dlssfc2::Wanted() && g_eyeTex && g_eyeDepthTex && !g_scopeFrame;
-        xr::SetCopyBack(afwOn && dlssOn);   // AFW + DLSS: each eye is rebuilt from its own last DLSS result
+        xr::SetCopyBack(afwOn && dlssOn);
+        xr::SetPlainSharing((dlssOn && !dlssfc2::GuidesHandover()) || afwOn);   // AFW + DLSS: each eye is rebuilt from its own last DLSS result
         if (dlssOn) dlssfc2::BeginFrame(&jx, &jy);
         for (int e = 0; e < 2; ++e) {
             double tE0 = NowMs();
@@ -3395,6 +4249,105 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 XrPosef dp; dp.orientation = QuatFromBasis(xq, yq, zq); dp.position = { p.x, p.y, p.z };
                 float dist = sqrtf(Dot(mid - p, mid - p));
                 xr::SetDotLayer(dp, g_cfg.reticleSize * dist / fmaxf(0.01f, g_cfg.reticleDistance));
+            }
+        }
+        // v234: ammo panel fixed to the right side of the weapon. Position: the right controller grip (where the hand holds
+        // the gun) plus offsets along the weapon's own axes; orientation: the weapon's sight frame (moves and turns with
+        // the gun), facing back toward you, turned inward by AmmoPanelYaw and tilted up by AmmoPanelTilt.
+        if (g_cfg.ammoPanel && controls::Active() && arms::CurrentWeapon() != nullptr && !controls::MacheteSelected() && !controls::MapOpen()
+            && !controls::MountedWeapon() && !controls::MenuControls() && g_hudClip >= 0) {
+            const xr::HandState& rh = xr::Hand(1);
+            float so[3], sd[3], su[3];
+            if (rh.gripValid && arms::SightFrame(so, sd, su)) {
+                V3 o0 = frame.LocalPosition({ so[0], so[1], so[2] });
+                V3 fw = frame.LocalPosition({ so[0] + sd[0], so[1] + sd[1], so[2] + sd[2] }) - o0;
+                V3 up = frame.LocalPosition({ so[0] + su[0], so[1] + su[1], so[2] + su[2] }) - o0;
+                fw = Norm(fw); up = Norm(up - fw * Dot(up, fw));
+                V3 rt = Norm(Cross(fw, up));
+                static LONG drawn = -1; if (drawn != g_hudAmmoSeq) { drawn = g_hudAmmoSeq; DrawWeaponAmmo(g_hudClip, g_hudPouch); }
+                // secondary weapons (hip slot, or held one-handed) sit closer to the hand: their own gap
+                // (decided once per weapon drawn, so a rifle's support hand leaving the gun for a moment can't move it)
+                static void* latchW = nullptr; static bool latchSecond = false; static double latchAt = 0;
+                void* cw = arms::CurrentWeapon();
+                if (cw != latchW) { latchW = cw; latchAt = NowMs(); latchSecond = controls::SecondarySelected(); }
+                else if (NowMs() - latchAt < 2000.0) { float fgx[3]; bool oneH = false; if (arms::Foregrip(fgx, oneH) && oneH && NowMs() - latchAt > 1000.0) latchSecond = true; }   // held one-handed once the draw animation settled
+                const bool second = latchSecond;
+                V3 p = ToV3(rh.grip.position) + rt * (second ? g_cfg.ammoPanelRight2 : g_cfg.ammoPanelRight) + up * g_cfg.ammoPanelUp + fw * g_cfg.ammoPanelFwd;
+                const float yw = g_cfg.ammoPanelYaw * 0.0174533f, tl = g_cfg.ammoPanelTilt * 0.0174533f;
+                V3 back = fw * -1.0f;
+                V3 zq = Norm(back * cosf(yw) - rt * sinf(yw));           // the panel's face: back toward you, turned inward
+                zq = Norm(zq * cosf(tl) + up * sinf(tl));                 // and tilted up
+                V3 xq = Norm(Cross(up, zq)), yq = Cross(zq, xq);
+                XrPosef ap; ap.orientation = QuatFromBasis(xq, yq, zq); ap.position = { p.x, p.y, p.z };
+                xr::SetWeaponAmmoLayer(ap, g_cfg.ammoPanelWidth);
+            }
+        }
+        // v234: grenade counter on the left side of the left hand, for GrenadePanelSeconds after a left-hand throw aim
+        // (left grip + left trigger) starts, and while it is held. Count: the HUD's grenade number (main HUD +0x10C).
+        if (g_cfg.grenPanel && controls::Active()) {
+            static double shownUntil = 0; static bool wasAim = false;
+            bool aim = controls::ThrowAimHand() == 0;
+            if (aim) shownUntil = NowMs() + g_cfg.grenPanelSecs * 1000.0;
+            if (aim && !wasAim) LOG("HUD: grenade counter shown (%d)", g_hudObj && !IsBadReadPtr(g_hudObj + 0x10C, 4) ? *(int*)(g_hudObj + 0x10C) : -1);
+            wasAim = aim;
+            const xr::HandState& lh = xr::Hand(0);
+            uint8_t* hud = g_hudObj;
+            if (NowMs() < shownUntil && lh.aimValid && hud && !IsBadReadPtr(hud + 0x10C, 4) && !controls::MenuControls()) {
+                static int drawnN = -999; int cnt = *(int*)(hud + 0x10C); if (cnt != drawnN) { drawnN = cnt; DrawGrenades(cnt); }
+                const XrPosef& ap0 = lh.aim;
+                V3 fw = QRot(ap0.orientation, { 0, 0, -1 }), up = QRot(ap0.orientation, { 0, 1, 0 }), rt = QRot(ap0.orientation, { 1, 0, 0 });
+                V3 p = ToV3(lh.grip.position) - rt * g_cfg.grenPanelLeft + up * g_cfg.grenPanelUp + fw * g_cfg.grenPanelFwd;
+                const float yw = g_cfg.ammoPanelYaw * 0.0174533f, tl = g_cfg.grenPanelTilt * 0.0174533f;   // more = top edge leans further away
+                V3 zq = Norm(fw * -cosf(yw) + rt * sinf(yw));   // back toward you, turned inward (toward the right)
+                zq = Norm(zq * cosf(tl) + up * sinf(tl));
+                V3 xq = Norm(Cross(up, zq)), yq = Cross(zq, xq);
+                XrPosef gp; gp.orientation = QuatFromBasis(xq, yq, zq); gp.position = { p.x, p.y, p.z };
+                xr::SetGrenadeLayer(gp, g_cfg.grenPanelWidth);
+            }
+        }
+        // v234: clock under the map - its top edge on the map's bottom edge, centred, turned and moved with the map
+        if (g_cfg.mapClock && controls::MapOpen() && !controls::MonocularOut()) {
+            float cp[3], cw[3], ch[3]; int hh, mm;
+            if (arms::MapClock(cp, cw, ch) && arms::GameTimeOfDay(hh, mm)) {
+                static int drawn = -1; if (drawn != hh * 60 + mm) { drawn = hh * 60 + mm; DrawClock(hh, mm); }
+                V3 p0 = frame.LocalPosition({ cp[0], cp[1], cp[2] });
+                V3 xw = frame.LocalPosition({ cp[0] + cw[0], cp[1] + cw[1], cp[2] + cw[2] }) - p0;
+                V3 yh = frame.LocalPosition({ cp[0] + ch[0], cp[1] + ch[1], cp[2] + ch[2] }) - p0;
+                // v234 test 47: the map's world matrix as it is drawn now, converted with this frame (the same one the eye
+                // cameras are posed with) - the game-thread conversion drifted while walking with the stick
+                uint8_t* mg = nullptr; float mp[4][3];
+                if (arms::MapClockModel(mg, mp) && mg && !IsBadReadPtr(mg + 0x170, 64)) {
+                    float Mc[16]; memcpy(Mc, mg + 0x170, 64); const float* M = Mc;
+                    DrawnBodyFix(Mc);   // test 48: the view follows the drawn body update; the matrix is from the newest one
+                    auto loc = [&](const float* m) { V3 w{ m[0] * M[0] + m[1] * M[4] + m[2] * M[8] + M[12], m[0] * M[1] + m[1] * M[5] + m[2] * M[9] + M[13], m[0] * M[2] + m[1] * M[6] + m[2] * M[10] + M[14] };
+                        return frame.LocalPosition(frame.game.ReferencePosition(w)); };
+                    p0 = loc(mp[0]); xw = loc(mp[3]) - loc(mp[2]); yh = loc(mp[1]) - p0;
+                }
+                V3 xq = Norm(xw), yq = Norm(yh - xq * Dot(yh, xq)), zq = Cross(xq, yq);
+                V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
+                if (Dot(zq, mid - p0) < 0) { xq = xq * -1.0f; zq = zq * -1.0f; }   // the face toward you (text not mirrored)
+                // the clock on the left and the health + syrettes panel on the right, side by side, centred under the map,
+                // their top edges on the map's bottom edge
+                const bool hpOn = g_cfg.mapHealth && g_hudObj && !IsBadReadPtr(g_hudObj + 0x288, 0x24);
+                const float cwid = g_cfg.mapClockWidth, hwid = hpOn ? g_cfg.mapHealthWidth : 0.0f, gap = hpOn ? g_cfg.mapPanelGap : 0.0f;
+                const float total = cwid + gap + hwid;
+                const float hgt = cwid * (float)xr::ClockH / (float)xr::ClockW;
+                V3 p = p0 + xq * (-total * 0.5f + cwid * 0.5f) - yq * (hgt * 0.5f - g_cfg.mapClockUp) + zq * 0.002f;
+                XrPosef kp; kp.orientation = QuatFromBasis(xq, yq, zq); kp.position = { p.x, p.y, p.z };
+                xr::SetClockLayer(kp, cwid);
+                if (hpOn) {
+                    float raw = *(float*)(g_hudObj + 0x288); int segs = *(int*)(g_hudObj + 0x290), syr = *(int*)(g_hudObj + 0x2A8);
+                    static float maxHp = 1500.0f; if (raw > maxHp) maxHp = raw;   // the player's health runs 0-1500 (5 segments of 300)
+                    static float dRaw = -1; static int dSyr = -1, dSegs = -1;
+                    if (raw != dRaw || syr != dSyr || segs != dSegs) {
+                        static int nl = 0; if (nl++ < 12) LOG("HUD: health %.0f (%d segments), syrettes %d", raw, segs, syr);
+                        dRaw = raw; dSyr = syr; dSegs = segs; DrawHealth(raw / maxHp, segs, syr);
+                    }
+                    const float hh = hwid * (float)xr::HealthH / (float)xr::HealthW;
+                    V3 q = p0 + xq * (total * 0.5f - hwid * 0.5f) - yq * (hh * 0.5f - g_cfg.mapClockUp) + zq * 0.002f;
+                    XrPosef hp; hp.orientation = kp.orientation; hp.position = { q.x, q.y, q.z };
+                    xr::SetHealthLayer(hp, hwid);
+                }
             }
         }
         {   // throwing arc (grip + trigger): drawn into both eyes
@@ -3618,6 +4571,18 @@ static void __fastcall Hook_Present(void* self, void* edx, int a1) {
     if (g_cfg.enable == 2 && g_haveDevice) {
         static double last = 0; static int n = 0; double now = NowMs();
         if (last > 0 && ++n >= 300) {
+            {   // v234 test 59: CPU-busy time of the render thread in RenderFrame (thread cycles; TSC rate measured against QPC),
+                // and the whole process's CPU time per frame (all threads, e.g. DXVK's worker threads), to tell CPU work from waiting
+                static uint64_t tsc0 = 0; static double q0 = 0; static ULONGLONG proc0 = 0;
+                uint64_t tsc = __rdtsc(); FILETIME c, e, k, u; GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u);
+                ULONGLONG proc = ((ULONGLONG)k.dwHighDateTime << 32 | k.dwLowDateTime) + ((ULONGLONG)u.dwHighDateTime << 32 | u.dwLowDateTime);
+                if (tsc0 && now > q0) {
+                    const double tscPerMs = (double)(tsc - tsc0) / (now - q0);
+                    LOG("FLAT CPU avg %d frames: render thread busy in RenderFrame %.2f ms (of %.2f ms) | whole process CPU %.2f ms per frame (%.1f cores busy) | %s",
+                        n, g_rfCycles / tscPerMs / n, g_rfMs / n, (proc - proc0) / 10000.0 / n, (proc - proc0) / 10000.0 / (now - last), g_dxvkOn ? "DXVK" : "native D3D10");
+                }
+                tsc0 = tsc; q0 = now; proc0 = proc; g_rfCycles = 0;
+            }
             LOG("FLAT avg %d frames: frame=%.2f ms renderFrame=%.2f ms | bufCreates=%ld (%.1f MB) treeMakes=%ld (%.2f ms/frame) cacheHits=%ld parked=%ld freed=%ld resets=%ld", n, (now - last) / n, g_rfMs / n, g_bufCreates, g_bufBytes / 1048576.0, g_treeMakes, g_treeMakeMs / n, g_treeCacheHits, g_treeParked, g_treeFreed);
             g_treeMakeMs = 0; g_rfMs = 0;
             g_treeParked = g_treeFreed = 0;
@@ -3648,6 +4613,12 @@ static void __fastcall Hook_Present(void* self, void* edx, int a1) {
     perf::GpuMark(perf::G_PRESENT);
     perf::SetPhase(perf::P_PRESENT);
     Trace("PRES>");
+    // v234: the desktop window never waits for the monitor (the game's VSync / a driver override would pace the VR loop
+    // against the monitor's refresh): the graphics object's sync interval (+0x8C, passed to IDXGISwapChain::Present)
+    if (g_cfg.noDesktopVsync && self && !IsBadWritePtr((uint8_t*)self + 0x8C, 4)) {
+        uint32_t& si = *(uint32_t*)((uint8_t*)self + 0x8C);
+        if (si != 0) { static int nl = 0; if (nl++ < 2) LOG("present: desktop VSync was %u - turned off (the headset sets the pace)", si); si = 0; }
+    }
     o_Present(self, edx, a1);
     if (capEnding) { TraceMark("present end"); g_traceDraws = false; }
     Trace("PRES<");
@@ -3913,6 +4884,10 @@ static void Install() {
     if (gameaddr::Detect() == gameaddr::GOG) LOG("GOG build: engine addresses translated from the Steam map");
     if (!g_cfg.enable) { LOG("disabled by config"); return; }
     InstallFramePacing();
+    g_cfg.gpuHandover = IniF("EndFrameWait", 0) == 0; g_cfg.dxvk = (int)IniF("Dxvk", 0);   // read before the device patches below
+    g_dxvkWanted = g_cfg.dxvk != 0;
+    if (IniF("FastMapCheck", 1) != 0) PatchMapCheck();
+    if (g_cfg.gpuHandover || g_dxvkWanted) LOG("DXGI 1.1 factory patch: %d", PatchFactoryCall());
     bool ok1 = PatchJmp(A(eng::RenderViewport), eng::RenderViewportPrologue, (void*)&Hook_RenderViewport, (void**)&o_RenderViewport);
     bool ok2 = PatchJmp(A(eng::PresentWrapper), eng::PresentPrologue, (void*)&Hook_Present, (void**)&o_Present);
     static const uint8_t rfPrologue[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF0 };   // push ebp; mov ebp,esp; and esp,-16
@@ -3937,6 +4912,7 @@ static void Install() {
         ac.shoulderSide = IniF("ShoulderSide", 0.17f); ac.shoulderDown = IniF("ShoulderDown", 0.22f); ac.shoulderBack = IniF("ShoulderBack", 0.06f);
         ac.twoHandMaxSpan = IniF("TwoHandMaxSpan", 0.65f); ac.noIdleBreak = (int)IniF("NoIdleAnimation", 1);
         xr::SetHoldLostPose(IniF("HoldLostTracking", 1) != 0);
+        xr::SetGpuHandover(g_cfg.gpuHandover != 0); xr::SetFrameAheadLimit(IniF("FrameAheadLimit", 1) != 0);
         g_cfg.grabDistance = IniF("GrabDistance", 0.15f);
         g_cfg.scopeInstant = (int)IniF("ScopeInstant", 1); g_cfg.scopeNeedsGrip = (int)IniF("ScopeNeedsGrip", 1);
         g_cfg.scopeGameReticle = (int)IniF("ScopeGameReticle", 1); g_cfg.scopeAmmoSize = IniF("ScopeAmmoSize", 0.28f);
@@ -3946,16 +4922,19 @@ static void Install() {
         xr::SetScopeCrosshair((int)IniF("ScopeCrosshair", 2));
         g_cfg.scopeFromWeapon = (int)IniF("ScopeFromWeapon", 1); g_cfg.scopeSmoothing = IniF("ScopeSmoothing", 0.06f);
         g_cfg.testCheats = (int)IniF("TestCheats", 0); { char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); arms::SetIniPath(ip); } g_cfg.reticleDot = (int)IniF("ReticleDot", 1); g_cfg.reticleDistance = IniF("ReticleDistance", 10.0f); g_cfg.reticleSize = IniF("ReticleSize", 0.06f);
+        g_cfg.ammoPanel = (int)IniF("AmmoPanel", 1); g_cfg.ammoPanelWidth = IniF("AmmoPanelWidth", 0.055f); g_cfg.ammoPanelRight = IniF("AmmoPanelRight", 0.05f); g_cfg.ammoPanelRight2 = IniF("AmmoPanelRightSecondary", 0.06f); g_cfg.ammoPanelUp = IniF("AmmoPanelUp", 0.04f); g_cfg.ammoPanelFwd = IniF("AmmoPanelForward", 0.06f); g_cfg.grenPanel = (int)IniF("GrenadePanel", 1); g_cfg.grenPanelWidth = IniF("GrenadePanelWidth", 0.045f); g_cfg.grenPanelLeft = IniF("GrenadePanelLeft", 0.06f); g_cfg.grenPanelUp = IniF("GrenadePanelUp", 0.02f); g_cfg.grenPanelFwd = IniF("GrenadePanelForward", 0.0f); g_cfg.grenPanelSecs = IniF("GrenadePanelSeconds", 3.0f); g_cfg.grenPanelTilt = IniF("GrenadePanelTilt", 30.0f); g_cfg.mapClock = (int)IniF("MapClock", 1); g_cfg.mapClockWidth = IniF("MapClockWidth", 0.07f); g_cfg.mapClockUp = IniF("MapClockUp", 0.0f); g_cfg.mapClock24 = (int)IniF("MapClock24h", 0); g_cfg.mapHealth = (int)IniF("MapHealth", 1); g_cfg.noDesktopVsync = IniF("DesktopVsync", 0) == 0; g_cfg.mapHealthWidth = IniF("MapHealthWidth", 0.06f); g_cfg.mapPanelGap = IniF("MapPanelGap", 0.004f);
+        g_cfg.ammoPanelYaw = IniF("AmmoPanelYaw", 20.0f); g_cfg.ammoPanelTilt = IniF("AmmoPanelTilt", 15.0f);
         ac.handOfs[0] = IniF("HandOffsetX", 0); ac.handOfs[1] = IniF("HandOffsetY", 0); ac.handOfs[2] = IniF("HandOffsetZ", 0);
         ac.leftHandRoll = IniF("LeftHandRoll", 45.0f); ac.macheteAngle = IniF("MacheteAngle", 60.0f);
         ac.leftHandYaw = IniF("LeftHandYaw", 30.0f); ac.leftForearmTwist = IniF("LeftForearmTwist", 1.0f); ac.armsIndependent = (int)IniF("ArmsIndependent", 1); ac.steadyHands = (int)IniF("SteadyHands", 1); ac.grabBoxShrink = IniF("GrabBoxShrink", 0.25f); ac.upperArmTwist = IniF("UpperArmTwist", 0.5f); ac.macheteYaw = IniF("MacheteYaw", 15.0f); ac.macheteRoll = IniF("MacheteRoll", 0.0f); ac.mapAngle = IniF("MapPitch", 0.0f); ac.mapYaw = IniF("MapYaw", 0.0f); ac.mapRoll = IniF("MapRoll", 0.0f); ac.freePitch = IniF("FreeHandPitch", 0.0f); ac.freeYaw = IniF("FreeHandYaw", 0.0f); ac.freeRoll = IniF("FreeHandRoll", 0.0f); ac.phonePitch = IniF("PhonePitch", ac.freePitch); ac.phoneYaw = IniF("PhoneYaw", ac.freeYaw); ac.phoneRoll = IniF("PhoneRoll", ac.freeRoll); ac.phoneDiag = (int)IniF("PhoneDiag", 0);
-        ac.handGrab = (int)IniF("HandGrab", 1); ac.grabRadius = IniF("GrabRadius", 0.35f); ac.grabReach = IniF("GrabReach", 0.06f); ac.pickupReach = IniF("PickupReach", 0.20f); ac.grabPhysics = (int)IniF("GrabPhysics", 1); ac.grabMaxMass = IniF("GrabMaxMass", 25.0f); ac.grabMaxSize = IniF("GrabMaxSize", 0.8f); ac.throwScale = IniF("ThrowScale", 1.3f); ac.bodyRadius = IniF("BodyRadius", 0.30f); ac.climbing = (int)IniF("Climbing", 0); ac.climbReach = IniF("ClimbReach", 0.10f); ac.climbMode = (int)IniF("ClimbMode", 1); ac.mantleBelowHead = IniF("MantleBelowHead", 0.55f); ac.climbGrace = IniF("ClimbGrace", 1.5f); ac.climbTurnSpeed = IniF("ClimbTurnSpeed", 120.0f); ac.watchStickSign = IniF("WatchStickSign", 1.0f); ac.throwSpeed = IniF("ThrowSpeed", 0.0f); ac.throwRange = IniF("ThrowRange", 1.5f); ac.npcGrab = (int)IniF("NpcGrab", 0); ac.bodyClock = (int)IniF("HandsOnBodyClock", 1); ac.armSmooth = IniF("ArmSmoothing", 0.0f); ac.clavSmooth = IniF("ClavicleSmoothing", 0.5f); g_handSmooth = IniF("HandSmoothing", 1) != 0; g_handCut = IniF("HandSmoothCutoff", 8.0f); g_handBeta = IniF("HandSmoothBeta", 4.0f); g_handRotBeta = IniF("HandSmoothRotBeta", 0.06f); ac.localFrame = (int)IniF("ArmLocalFrame", 1); g_framePacing = (int)IniF("FramePacing", 1); ac.foregripSmooth = IniF("ForegripSmoothing", 0.3f); ac.twistFadeFrom = IniF("UpperArmTwistFadeFrom", -1.0f); ac.twistFadeTo = IniF("UpperArmTwistFadeTo", 0.0f); ac.twistSmooth = IniF("UpperArmTwistSmoothing", 0.0f); ac.softIk = IniF("SoftIkStart", 0.0f); ac.softIkMaxPull = IniF("SoftIkMaxShoulderPull", 0.12f); ac.elbowSmooth = IniF("ElbowSmoothing", 0.0f); g_camBodyClock = (int)IniF("CameraOnBodyClock", 1); g_motionDiag = (int)IniF("MotionDiag", 0); ac.roomScale = (int)IniF("RoomScale", 0); ac.roomLeash = IniF("RoomScaleLeash", 0.10f); ac.roomMaxSpeed = IniF("RoomScaleMaxSpeed", 4.0f); ac.roomRadius = IniF("RoomScaleWallDistance", 0.30f); g_rsDelay = (int)IniF("RoomScaleViewDelay", 1); g_rsOn = ac.roomScale != 0; ac.contactPush = (int)IniF("ContactPush", 1); ac.freezeReload = (int)IniF("FreezeReload", 1); ac.macheteHits = (int)IniF("MacheteHits", 1); ac.macheteSpeed = IniF("MacheteSwingSpeed", 2.5f); ac.macheteCooldown = IniF("MacheteCooldown", 0.5f); ac.macheteSound = (int)IniF("MacheteSwingSound", 1); ac.seatWeapon = (int)IniF("SeatWeapon", 1); ac.macheteSoundSpeed = IniF("MacheteSoundSpeed", 6.0f); ac.flashRange = IniF("FlashlightRange", 30.0f); ac.flashInner = IniF("FlashlightInnerAngle", 18.0f); ac.flashOuter = IniF("FlashlightOuterAngle", 32.0f); ac.flashBright = IniF("FlashlightBrightness", 1.0f); ac.noColorFilter = (int)IniF("NoColorFilter", 0); ac.noRimLight = (int)IniF("NoRimLight", 0);
+        ac.handGrab = (int)IniF("HandGrab", 1); ac.grabRadius = IniF("GrabRadius", 0.35f); ac.grabReach = IniF("GrabReach", 0.06f); ac.pickupReach = IniF("PickupReach", 0.20f); ac.grabPhysics = (int)IniF("GrabPhysics", 1); ac.grabMaxMass = IniF("GrabMaxMass", 25.0f); ac.grabMaxSize = IniF("GrabMaxSize", 0.8f); ac.throwScale = IniF("ThrowScale", 1.3f); ac.bodyRadius = IniF("BodyRadius", 0.30f); ac.climbing = (int)IniF("Climbing", 0); ac.climbReach = IniF("ClimbReach", 0.10f); ac.climbMode = (int)IniF("ClimbMode", 1); ac.mantleBelowHead = IniF("MantleBelowHead", 0.55f); ac.climbGrace = IniF("ClimbGrace", 1.5f); ac.climbTurnSpeed = IniF("ClimbTurnSpeed", 120.0f); ac.watchStickSign = IniF("WatchStickSign", 1.0f); ac.throwSpeed = IniF("ThrowSpeed", 0.0f); ac.throwRange = IniF("ThrowRange", 1.5f); ac.npcGrab = (int)IniF("NpcGrab", 0); ac.bodyClock = (int)IniF("HandsOnBodyClock", 1); ac.armSmooth = IniF("ArmSmoothing", 0.0f); ac.clavSmooth = IniF("ClavicleSmoothing", 0.5f); g_handSmooth = IniF("HandSmoothing", 1) != 0; g_handCut = IniF("HandSmoothCutoff", 8.0f); g_handBeta = IniF("HandSmoothBeta", 4.0f); g_handRotBeta = IniF("HandSmoothRotBeta", 0.06f); ac.localFrame = (int)IniF("ArmLocalFrame", 1); g_framePacing = (int)IniF("FramePacing", 1); ac.foregripSmooth = IniF("ForegripSmoothing", 0.3f); ac.twistFadeFrom = IniF("UpperArmTwistFadeFrom", -1.0f); ac.twistFadeTo = IniF("UpperArmTwistFadeTo", 0.0f); ac.twistSmooth = IniF("UpperArmTwistSmoothing", 0.0f); ac.softIk = IniF("SoftIkStart", 0.0f); ac.softIkMaxPull = IniF("SoftIkMaxShoulderPull", 0.12f); ac.elbowSmooth = IniF("ElbowSmoothing", 0.0f); g_camBodyClock = (int)IniF("CameraOnBodyClock", 2); g_motionDiag = (int)IniF("MotionDiag", 0); ac.roomScale = (int)IniF("RoomScale", 0); ac.roomLeash = IniF("RoomScaleLeash", 0.10f); ac.roomMaxSpeed = IniF("RoomScaleMaxSpeed", 4.0f); ac.roomRadius = IniF("RoomScaleWallDistance", 0.30f); g_rsDelay = (int)IniF("RoomScaleViewDelay", 1); g_rsOn = ac.roomScale != 0; ac.contactPush = (int)IniF("ContactPush", 1); ac.freezeReload = (int)IniF("FreezeReload", 1); ac.macheteHits = (int)IniF("MacheteHits", 1); ac.macheteSpeed = IniF("MacheteSwingSpeed", 2.5f); ac.macheteCooldown = IniF("MacheteCooldown", 0.5f); ac.macheteSound = (int)IniF("MacheteSwingSound", 1); ac.seatWeapon = (int)IniF("SeatWeapon", 1); ac.macheteSoundSpeed = IniF("MacheteSoundSpeed", 6.0f); ac.flashRange = IniF("FlashlightRange", 30.0f); ac.flashInner = IniF("FlashlightInnerAngle", 18.0f); ac.flashOuter = IniF("FlashlightOuterAngle", 32.0f); ac.flashBright = IniF("FlashlightBrightness", 1.0f); ac.noColorFilter = (int)IniF("NoColorFilter", 0); ac.noRimLight = (int)IniF("NoRimLight", 0); ac.gameAimAssist = (int)IniF("GameAimAssist", 0);
         { char b[64], ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "MacheteSoundIds", "", b, sizeof b, ip); unsigned a1 = 0, a2 = 0; int n = b[0] ? sscanf(b, "%x,%x", &a1, &a2) : 0;
-          if (n >= 1) { ac.macheteSnd[0] = a1; ac.macheteSnd[1] = n >= 2 ? a2 : 0; } } ac.bladeLen = IniF("MacheteBladeLength", 0.55f); ac.pushMinSpeed = IniF("PushMinSpeed", 0.3f); ac.pushRadius = IniF("PushRadius", 0.06f); ac.pushScale = IniF("PushScale", 1.0f); ac.pushMass = IniF("PushMass", 40.0f); ac.pushWeaponLen = IniF("PushWeaponLen", 0.7f); ac.npcReach = IniF("NpcReach", 0.25f); ac.npcGain = IniF("NpcPullGain", 0.6f); ac.npcMaxSpeed = IniF("NpcMaxSpeed", 10.0f); ac.npcRagdollTime = IniF("NpcRagdollTime", 2.5f); ac.npcActive = (int)IniF("NpcActive", 1); ac.npcActiveWeight = IniF("NpcActiveWeight", 1.0f); ac.npcStiffness = IniF("NpcStiffness", 1.0f); ac.npcKnockPull = IniF("NpcKnockPull", 1.12f); ac.npcKnockDown = IniF("NpcKnockDown", 0.35f); ac.npcLeadGain = IniF("NpcLeadGain", 8.0f); ac.npcLeadSpeed = IniF("NpcLeadSpeed", 4.5f); ac.npcKnockSpeed = IniF("NpcKnockSpeed", 2.1f); ac.weaponRollFix = (int)IniF("WeaponRollFix", 0); ac.climbHolster = (int)IniF("ClimbHolster", 1); ac.gripInteract = (int)IniF("GripInteract", 0); ac.throwMaxSpeed = IniF("ThrowMaxSpeed", 25.0f); ac.useReach = IniF("UseReach", 0.9f); ac.mouthReach = IniF("MouthReach", 0.18f);
+          if (n >= 1) { ac.macheteSnd[0] = a1; ac.macheteSnd[1] = n >= 2 ? a2 : 0; } } ac.bladeLen = IniF("MacheteBladeLength", 0.55f); ac.pushMinSpeed = IniF("PushMinSpeed", 0.3f); ac.pushRadius = IniF("PushRadius", 0.06f); ac.pushScale = IniF("PushScale", 1.0f); ac.pushMass = IniF("PushMass", 40.0f); ac.pushWeaponLen = IniF("PushWeaponLen", 0.7f); ac.npcReach = IniF("NpcReach", 0.25f); ac.npcGain = IniF("NpcPullGain", 0.6f); ac.npcMaxSpeed = IniF("NpcMaxSpeed", 10.0f); ac.npcRagdollTime = IniF("NpcRagdollTime", 2.5f); ac.npcActive = (int)IniF("NpcActive", 1); ac.npcActiveWeight = IniF("NpcActiveWeight", 1.0f); ac.npcStiffness = IniF("NpcStiffness", 1.0f); ac.npcKnockPull = IniF("NpcKnockPull", 1.12f); ac.npcKnockDown = IniF("NpcKnockDown", 0.35f); ac.npcLeadGain = IniF("NpcLeadGain", 8.0f); ac.npcLeadSpeed = IniF("NpcLeadSpeed", 4.5f); ac.npcKnockSpeed = IniF("NpcKnockSpeed", 2.1f); ac.weaponRollFix = (int)IniF("WeaponRollFix", 0); ac.climbHolster = (int)IniF("ClimbHolster", 1); ac.gripInteract = (int)IniF("GripInteract", 0); ac.throwMaxSpeed = IniF("ThrowMaxSpeed", 25.0f); ac.useReach = IniF("UseReach", 0.9f); ac.mouthReach = IniF("MouthReach", 0.18f); ac.useFromHead = (int)IniF("UseFromHead", 1); ac.useDiag = (int)IniF("UseDiag", 1); ac.useCone = IniF("UseCone", 30.0f); ac.useCenter = IniF("UseCenter", 10.0f);
         ac.backpackFwd = IniF("BackpackZoneFwd", 0.0f); ac.backpackUp = IniF("BackpackZoneUp", -0.25f);
         if (cc.enable) { arms::Install(g_base, ac, &PatchJmpN); arms::SetUseCallback(&controls::PulseUse); }
     }
     InstallDevConsole();
+    InstallGameFixes();
     static const uint8_t rsPrologue[8] = { 0x51, 0x56, 0x8B, 0xF1, 0x83, 0x7E, 0x40, 0x00 };  // push ecx; push esi; mov esi,ecx; cmp [esi+40],0
     bool ok4 = PatchJmpN(A(0x104204A0), rsPrologue, 8, (void*)&Hook_DrvReset, (void**)&o_DrvReset);
     static const uint8_t tlPrologue[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8 };   // push ebp; mov ebp,esp; and esp,-8
@@ -3999,13 +4978,49 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v233 = 1.0.3: frame pacing, arm precision / shoulder / hand stabiliser, vehicle view on the seat, monocular HDR fix, HUD strip fix; build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 73: weapon barrel brought onto the view in its hold (crossbow); v234 test 72: weapon holds only taken with the weapon settled on the hand, no reload; v234 test 71: CPU placement (CpuPlacement, CpuPriority); v234 test 70: machete taken from the held weapon, not the slot guess; v234 test 69: at most one frame ahead of the GPU (FrameAheadLimit=1); v234 test 68: DLSS hand-over guides made on the D3D10 device; v234 test 67: DlssGuideHandover A/B; v234 test 66: DLSS guides handed over with keyed mutexes (no CPU wait with DLSS); v234 test 65: merged main (PR #8 headset body yaw, grass fix, shoulder fix); v234 test 64: GPU handover with DLSS off even when the DLSS module is loaded; v234 test 63: keyed mutex on every shared texture (right-eye twitch fix); v234 test 62: fast map check (FastMapCheck=1); v234 test 61: counters on the runtime implementations, profiler names system functions; v234 test 60: Profile=1 work breakdown (shadows, draws, state calls); v234 test 59: flat CPU-busy measurement, dxvk.conf; v234 test 58: Dxvk ini read before the device patch; v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.
             char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir);
             int lim = (int)GetPrivateProfileIntA("VR", "CoreLimit", 16, ip);
             DWORD_PTR pm = 0, sm = 0;
+            // v234 test 71: CpuPlacement=1 - keep the game on the best cores before the limit picks the first ones:
+            // Intel hybrid CPUs -> the performance cores (highest efficiency class), AMD X3D with two CCDs -> the cores
+            // that share the largest L3 (the 3D V-Cache). Background work keeps the other cores.
+            if (GetPrivateProfileIntA("VR", "CpuPlacement", 1, ip) && GetProcessAffinityMask(GetCurrentProcess(), &pm, &sm)) {
+                DWORD len = 0; GetLogicalProcessorInformationEx(RelationAll, nullptr, &len);
+                std::vector<uint8_t> buf(len);
+                if (len && GetLogicalProcessorInformationEx(RelationAll, (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buf.data(), &len)) {
+                    DWORD_PTR best = 0; int bestClass = -1, classes = 0; bool seen[256] = {};
+                    DWORD l3Size[16] = {}; DWORD_PTR l3Mask[16] = {}; int nl3 = 0;
+                    for (DWORD o = 0; o < len; ) {
+                        auto* e = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)(buf.data() + o);
+                        if (e->Relationship == RelationProcessorCore && e->Processor.GroupCount && e->Processor.GroupMask[0].Group == 0) {
+                            int c = e->Processor.EfficiencyClass; if (!seen[c]) { seen[c] = true; ++classes; }
+                            if (c > bestClass) { bestClass = c; best = 0; }
+                            if (c == bestClass) best |= (DWORD_PTR)e->Processor.GroupMask[0].Mask;
+                        } else if (e->Relationship == RelationCache && e->Cache.Level == 3 && e->Cache.GroupMask.Group == 0 && nl3 < 16) {
+                            l3Size[nl3] = e->Cache.CacheSize; l3Mask[nl3] = (DWORD_PTR)e->Cache.GroupMask.Mask; ++nl3;
+                        }
+                        o += e->Size; if (!e->Size) break;
+                    }
+                    DWORD_PTR want = 0; const char* why = nullptr;
+                    if (classes > 1 && (best & pm)) { want = best & pm; why = "performance cores"; }
+                    else if (nl3 > 1) {
+                        int b = 0; for (int i = 1; i < nl3; ++i) if (l3Size[i] > l3Size[b]) b = i;
+                        bool differ = false; for (int i = 0; i < nl3; ++i) if (l3Size[i] != l3Size[b]) differ = true;
+                        if (differ && (l3Mask[b] & pm)) { want = l3Mask[b] & pm; char t[64]; snprintf(t, sizeof t, "the cores with the %lu MB L3 cache", (unsigned long)(l3Size[b] >> 20)); static char tb[64]; memcpy(tb, t, sizeof tb); why = tb; }
+                    }
+                    if (want && want != pm) {
+                        int n = 0; for (int b = 0; b < (int)(sizeof(DWORD_PTR) * 8); ++b) if (want & ((DWORD_PTR)1 << b)) ++n;
+                        LOG("cpu placement: %s - %d logical processors, mask %08lx (%s)", why, n, (unsigned long)want, SetProcessAffinityMask(GetCurrentProcess(), want) ? "set" : "failed");
+                    } else if (want) LOG("cpu placement: already on %s (mask %08lx)", why, (unsigned long)want);
+                    else LOG("cpu placement: all cores are alike (%d efficiency class%s, %d L3 cache%s) - no change", classes, classes == 1 ? "" : "es", nl3, nl3 == 1 ? "" : "s");
+                }
+            }
+            if (GetPrivateProfileIntA("VR", "CpuPriority", 0, ip))   // v234 test 71: above normal - background programs can't delay the game
+                LOG("cpu priority: above normal (%s)", SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS) ? "set" : "failed");
             if (lim > 0 && GetProcessAffinityMask(GetCurrentProcess(), &pm, &sm)) {
                 DWORD_PTR m = 0; int n = 0, all = 0;
                 for (int b = 0; b < (int)(sizeof(DWORD_PTR) * 8); ++b) if (pm & ((DWORD_PTR)1 << b)) { ++all; if (n < lim) { m |= (DWORD_PTR)1 << b; ++n; } }

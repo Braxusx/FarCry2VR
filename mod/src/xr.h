@@ -44,6 +44,13 @@ void SetEyeRect(int e, int x, int y, int w, int h);
 // show instead of it (same size and format family), or null for the eye image itself.
 typedef ID3D11Texture2D* (*EyeFilter)(ID3D11Device* dev, ID3D11DeviceContext* ctx, int eye, ID3D11Texture2D* eyeImage);
 void SetEyeFilter(EyeFilter f);
+void SetPlainSharing(bool on);
+void SetFrameAheadLimit(bool on);   // v234 test 69: at most one frame of GPU work in flight with the GPU hand-over
+bool FrameAheadStats(double& avgMs, double& maxMs, int& frames, int& waits);
+// v234 test 66: a texture made with a keyed mutex that the game's device writes each frame and ours reads, handed over
+// with the eye images (the caller gets its own reference to both; ReleaseHandoverTexture drops ours)
+bool CreateHandoverTexture(UINT w, UINT h, DXGI_FORMAT fmt, ID3D10Texture2D** t10, ID3D11Texture2D** t11);
+void ReleaseHandoverTexture(ID3D10Texture2D* t10);   // v234 test 64: DLSS / AFW pass plain shared textures this frame (the render thread waits for the GPU)
 // AFW with DLSS: copy each filtered (DLSS) result back into the eye's shared texture, so the game device can rebuild
 // that eye from what it showed. EyeTexture10: that texture on the game's device; WaitEyeCopies before reading it.
 void SetCopyBack(bool on);
@@ -73,6 +80,18 @@ void SetDotLayer(const XrPosef& pose, float size);
 void SetArc(const XrVector3f* pts, int n, bool land, const XrVector3f& normal, bool ok);
 constexpr int MenuW = 512, MenuH = 320;
 constexpr int AmmoW = 384, AmmoH = 96;
+constexpr int WAmmoW = 256, WAmmoH = 224;
+void SetWeaponAmmoImage(const uint32_t* px);                 // v234: ammo panel beside the weapon (RGBA premultiplied, WAmmoW x WAmmoH)
+void SetWeaponAmmoLayer(const XrPosef& pose, float width);   // this frame: show it (LOCAL space)
+constexpr int GrenW = 256, GrenH = 144;
+constexpr int ClockW = 320, ClockH = 112;
+constexpr int HealthW = 320, HealthH = 128;
+void SetHealthImage(const uint32_t* px);                     // v234: health + syrettes under the GPS
+void SetHealthLayer(const XrPosef& pose, float width);
+void SetClockImage(const uint32_t* px);                      // v234: clock under the map (ClockW x ClockH)
+void SetClockLayer(const XrPosef& pose, float width);
+void SetGrenadeImage(const uint32_t* px);                    // v234: grenade / molotov counter by the left hand (GrenW x GrenH)
+void SetGrenadeLayer(const XrPosef& pose, float width);
 void SetAmmoImage(const uint32_t* px);   // the mod's own ammo counter (RGBA premultiplied, AmmoW x AmmoH)
 void SetMenu(const uint32_t* px, const XrPosef& pose, float width);   // this frame: show the mod menu (px: new RGBA premultiplied pixels, or null to keep)
 void SetScopeCrosshair(int style);
@@ -107,6 +126,10 @@ bool HeadCurrent(const InputStamp& source);
 bool AcceptedInputCurrent(const InputStamp& source, int hand);   // accepted snapshot, not permission to refresh a raw pose
 void InvalidateForRecenter();   // render thread; invalidates leases and requires neutral controls again
 void SetRumble(float left, float right);
+void SetGpuHandover(bool on);   // v234 test 54: EndFrameWait=0 - the GPU hands the frame over (keyed-mutex fence), the render thread does not wait
+bool GpuHandover();
+bool GpuHandoverAvailable();
+bool HandoverStats(double& avgMs, double& maxMs, int& frames, bool& gpu);   // since the last call (render thread)
 void SetHoldLostPose(bool on);   // HoldLostTracking: keep the last pose of a controller that loses tracking   // 0..1 per hand, applied every frame
 
 void Shutdown();

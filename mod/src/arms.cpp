@@ -1,3 +1,4 @@
+#include <functional>
 // arms.cpp - first-person weapon and arms follow the right motion controller; shots follow the controller.
 //
 // Far Cry 2's first-person arms are the player pawn's own skeleton, animated relative to its "Camera" bone; the
@@ -19,6 +20,7 @@
 #include <cstring>
 #include <wincrypt.h>
 
+void VehDescribe(void* ent);   // main.cpp: logs which vehicle an entity is (once per vehicle)
 namespace arms {
 
 static uintptr_t g_base = 0;
@@ -114,10 +116,10 @@ static volatile ULONGLONG g_diagUntil = 0;
 static uint8_t* volatile g_wGfx = nullptr; static uint8_t* volatile g_wSkel = nullptr;   // the held weapon's graphic component (world matrix +0x170) and its skeleton   // weapon attachment diagnostic window (after a projectile shot)
 static void* volatile g_reloadState = nullptr; static volatile DWORD g_reloadT = 0;
 
-static float g_lastSpan = 0; static float g_rayRefO[3], g_rayRefD[3]; static DWORD g_rayTick = 0;
+static float g_lastSpan = 0; static float g_rayRefO[3], g_rayRefD[3], g_rayRefU[3]; static DWORD g_rayTick = 0;
 static float g_foregripRef[3]; static bool g_foregripValid = false, g_oneHanded = true;
 static float g_shotO[3], g_shotF[3], g_camFwdNow[3], g_camRefO[3], g_camRefD[3]; static bool g_shotValid = false;
-static fc2vr::authority::Stamp g_shotSource; static void* g_shotWeapon = nullptr;
+static fc2vr::authority::Stamp g_shotSource; static void* g_shotWeapon = nullptr; static bool g_shotSynth = false;   // v234: aim from a held (synthesized) right hand
 
 
 // v231 rotation helpers (row-vector matrices: rows 0..2 are the basis vectors)
@@ -157,7 +159,7 @@ bool ReadFrameUsage(FrameUsage& out) {
 void SubmitFrame(const Frame& f) {
     if (!g_csInit) return;
     Lock(); g_frame = f; Unlock();
-    if (!f.valid || !f.handAuthority) { Lock(); g_shotValid = false; g_rayTick = 0; g_scopeTick = 0; Unlock(); }
+    if (!f.valid || !(f.handAuthority || f.handSynth)) { Lock(); g_shotValid = false; g_rayTick = 0; g_scopeTick = 0; Unlock(); }
     // Learn how the Camera bone's axes map onto the game camera's rows (right, forward, up) once both are known.
     if (!g_permOk && f.valid && g_camBoneSeq > 30) {
         float B[3][3]; Lock(); memcpy(B, g_camBoneRot, sizeof B); Unlock();
@@ -275,6 +277,7 @@ static void SubtreeXform(M4* Bw, Bone* bones, int n, int root, const M4& D) {
 }
 
 static M4 g_relR, g_relL; static volatile bool g_relHave = false; static bool g_relCached = false;
+static volatile ULONGLONG g_onHandSince = 0;   // v234 test 72: the held weapon has hung on the hand by itself since (0 = not now: elsewhere, pinned back by us, none)
 static volatile uint32_t g_weaponKey = 0;
 static volatile uint32_t g_typeKey = 0;   // v208: the hold key - reticle id + inventory slot + model bone count (the reticle alone is shared by most guns)
 static bool g_freeLDirty = false;   // the empty-hands hold was taken again: reload the free left hand pose
@@ -313,7 +316,7 @@ static void SaveHold(uint32_t key, const M4& r, const M4& l, int axis, float sig
 }
  static void* volatile g_curWeapon = nullptr;
 static bool ShotCurrent(const fc2vr::authority::Stamp& source, void* weapon) {
-    return fc2vr::authority::SameOwner(weapon,g_curWeapon) && xr::InputCurrent(source,1);
+    return fc2vr::authority::SameOwner(weapon,g_curWeapon) && (xr::InputCurrent(source,1) || (g_shotSynth && xr::InputCurrent(source,-1)));
 }
 static bool ReadAim(float o[3], float d[3], float* cameraForward = nullptr) {
     fc2vr::authority::Stamp shotSource,scopeSource; void* shotWeapon; void* scopeWeapon;
@@ -550,18 +553,34 @@ static void __fastcall Hook_MonoUpd(void* self, void* edx) {
 }
 static bool MonoAimRay(float o[3], float d[3]);
 typedef void (__fastcall *AimPos_t)(void* self, void* edx, int slot, float* out);
-static AimPos_t o_AimPos = nullptr;
-static void __fastcall Hook_AimPos(void* self, void* edx, int slot, float* out) {
-    o_AimPos(self, edx, slot, out);
-    float o[3], d[3]; if (slot == 0 && out && MonoAimRay(o, d)) memcpy(out, o, 12);
+// v234 interaction from the head. The game's interaction monitor (CPawnInteractionMonitor update, Steam 0x1009E460,
+// thiscall, 2 args, ret 8) gathers usable objects in a box in front of the BODY (body yaw; physics box query 0x1048DCE0
+// called at 0x1009CF12) and a 1 m sphere ahead of the chest (0x1048DCB0 at 0x1009D010), asks each one whether it is
+// usable, then scores them against the pawn's aim ray (AimPos 0x1010D780 / AimRot 0x1010D850, slot 0) in 0x1014DBB0.
+// In VR the body yaw and the game's level aim ignore where the player looks, and crouching in the room does not lower
+// it, so low cases (diamonds) in tight spots were hard to get a prompt for. While the player's monitor updates (same
+// thread only), the box is turned to the head's heading, the sphere is put just in front of the eyes, and the aim ray
+// is the head's. UseFromHead=0 restores the game's behaviour.
+static float g_useHeadO[3], g_useHeadD[3], g_useHand[3] = { 1e9f, 1e9f, 1e9f }; static volatile ULONGLONG g_useHeadTick = 0;
+static volatile DWORD g_useThread = 0;   // the thread inside the player's interaction update (0 = none)
+static int g_useDiagN = 0; static ULONGLONG g_useDiagLast = 0; static char g_useDiagLine[2048]; static int g_useDiagLen = 0;
+static uint32_t g_useBoxHits = 0, g_useSphereHits = 0; static float g_useBox[6];
+// while one candidate is asked, the aim line points at it (within UseCone of the view): small objects need the line on them
+static float g_useCandPt[3]; static bool g_useCandOn = false, g_useInCheck = false; static int g_useAimAsks = 0;
+static bool UseAimRay(float o[3], float d[3]) {
+    if (!g_useThread || GetCurrentThreadId() != g_useThread) return false;
+    memcpy(o, g_useHeadO, 12);
+    if (g_useCandOn) {
+        ++g_useAimAsks;
+        float v[3] = { g_useCandPt[0] - g_useHeadO[0], g_useCandPt[1] - g_useHeadO[1], g_useCandPt[2] - g_useHeadO[2] };
+        float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        if (l > 1e-3f) { for (int k = 0; k < 3; ++k) d[k] = v[k] / l; return true; }
+    }
+    memcpy(d, g_useHeadD, 12); return true;
 }
-typedef void (__fastcall *AimRot_t)(void* self, void* edx, int slot, float* out);
-static AimRot_t o_AimRot = nullptr;
-static void __fastcall Hook_AimRot(void* self, void* edx, int slot, float* out) {
-    o_AimRot(self, edx, slot, out);
-    float o[3], d[3];
-    if (slot != 0 || !out || !MonoAimRay(o, d)) return;
-    float l = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]); if (l < 1e-6f) return;
+// the aim rotation the game uses: a quaternion turning +Y onto d (the game's own rotation decides the convention)
+static void AimQuatFromDir(const float* dIn, float* out, const char* who) {
+    float d[3] = { dIn[0], dIn[1], dIn[2] }; float l = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]); if (l < 1e-6f) return;
     for (float& x : d) x /= l;
     alignas(16) float q[4] = { d[2], 0.0f, -d[0], 1.0f + d[1] };   // shortest turn from +Y to d
     if (q[3] < 1e-4f) { q[0] = 0; q[1] = 0; q[2] = 1; q[3] = 0; }
@@ -572,10 +591,27 @@ static void __fastcall Hook_AimRot(void* self, void* edx, int slot, float* out) 
         alignas(16) float v[4] = { 0, 1, 0, 0 }, r[4] = {};
         ((Rot_t)A(0x10032EE0))(q, nullptr, r, v);
         conv = (r[0] * d[0] + r[1] * d[1] + r[2] * d[2]) > 0.9f ? 1 : -1;
-        LOG("monocular: tag ray rotation %s (check %.2f)", conv > 0 ? "as built" : "conjugated", r[0] * d[0] + r[1] * d[1] + r[2] * d[2]);
+        LOG("%s: aim rotation %s (check %.2f)", who, conv > 0 ? "as built" : "conjugated", r[0] * d[0] + r[1] * d[1] + r[2] * d[2]);
     }
     if (conv < 0) { q[0] = -q[0]; q[1] = -q[1]; q[2] = -q[2]; }
     memcpy(out, q, 16);
+}
+static AimPos_t o_AimPos = nullptr;
+static void __fastcall Hook_AimPos(void* self, void* edx, int slot, float* out) {
+    o_AimPos(self, edx, slot, out);
+    float o[3], d[3];
+    if (out && slot == 3 && g_useInCheck && UseAimRay(o, d)) { memcpy(out, o, 12); return; }   // v234: pickups measure reach from aim slot 3
+    if (slot == 0 && out && (UseAimRay(o, d) || MonoAimRay(o, d))) memcpy(out, o, 12);
+}
+typedef void (__fastcall *AimRot_t)(void* self, void* edx, int slot, float* out);
+static AimRot_t o_AimRot = nullptr;
+static void __fastcall Hook_AimRot(void* self, void* edx, int slot, float* out) {
+    o_AimRot(self, edx, slot, out);
+    float o[3], d[3];
+    if (slot != 0 || !out) return;
+    if (UseAimRay(o, d)) { AimQuatFromDir(d, out, "interaction"); return; }
+    if (!MonoAimRay(o, d)) return;
+    AimQuatFromDir(d, out, "monocular");
     static int nl = 0; if (nl++ < 3) LOG("monocular: tag ray from the head (dir %.2f %.2f %.2f)", d[0], d[1], d[2]);
 }   // v215: the game's render camera and the scope camera posed from the head
 typedef void (__fastcall *EquipMono_t)(void* self, void* edx);
@@ -958,12 +994,18 @@ static void Apply(uint8_t* skel) {
         bool manual = recapUntil > t;
         g_relCached = false;   // no automatic renewals
         bool due = g_c.steadyHands && (!g_relHave || manual) && t - tChange > 300 && t - stableSince > (manual ? 200u : 400u) && !f.map && controls::NormalControls();
+        // v234 test 72: never while the weapon is not on the hand by itself or a reload runs - the crossbow reloads as
+        // soon as it is drawn (the game hangs it on the spine and we pin it back), and a hold taken then was saved turned
+        if (due && w && (ReloadActive() || !g_onHandSince || t - g_onHandSince < 1000)) {
+            static ULONGLONG lastLog = 0; if (t - lastLog > 3000) { lastLog = t; LOG("arms: hold for weapon %p waits: %s", w, ReloadActive() ? "reload running" : "weapon not settled on the hand yet"); }
+            due = false;
+        }
         // The weapon's own barrel: the weapon entity axis that points along the view in a normal hold differs per
         // weapon type (rifles +X, the pistol -Z), so it is learned per type and saved with the hold. A hold is taken
         // or renewed only while that axis points along the view (the relaxed gun of a cease-fire town points up);
         // with the barrel along the view any turn of the hand is fine (e.g. a gun brought back rolled in the hand
         // after a phone call). Without a known barrel axis (empty hands, a new type) a renewal must stay within 20 deg.
-        float dAx[3] = { 0, 0, 0 }; bool haveAx = false;
+        float dAx[3] = { 0, 0, 0 }; bool haveAx = false; float wRows[3][3] = {};
         if (due && w) {
             uint8_t* went = nullptr;
             uint8_t* wh = !IsBadReadPtr((uint8_t*)w + 8, 4) ? *(uint8_t**)((uint8_t*)w + 8) : nullptr;   // component -> owner handle {id, id, ref, entity}
@@ -971,6 +1013,7 @@ static void Apply(uint8_t* skel) {
             if (went && !IsBadReadPtr(went + 0x30, 64)) {
                 float rows[3][3];
                 for (int k = 0; k < 3; ++k) { for (int j = 0; j < 3; ++j) rows[k][j] = *(float*)(went + 0x30 + k * 16 + j * 4); Normalize(rows[k]); dAx[k] = Dot3(rows[k], cf); }
+                memcpy(wRows, rows, sizeof wRows);
                 haveAx = true;
             }
         }
@@ -996,13 +1039,44 @@ static void Apply(uint8_t* skel) {
             int best = 0; for (int k = 1; k < 3; ++k) if (fabsf(dAx[k]) > fabsf(dAx[best])) best = k;
             if (fabsf(dAx[best]) > 0.85f) { g_curAxis = best; g_curSign = dAx[best] > 0 ? 1.0f : -1.0f; LOG("arms: weapon %p (type %08x) barrel axis %c%c", w, key, g_curSign > 0 ? '+' : '-', "XYZ"[best]); }
         }
+        // v234 test 73: the weapon's barrel is brought onto the view before the hold is kept, so it points where the
+        // controller points. The game holds some weapons canted (the crossbow ~50 deg inward of the view, so no axis
+        // was ever learned and the hand held it turned in). The barrel axis is the learned one, or the weapon axis
+        // nearest the view when it is within 60 deg (then learned); the hand turns about its own origin.
+        M4 barrelR; bool barrelTurn = false;
+        if (due && haveAx && w) {
+            int ax = g_curAxis; float sg = g_curSign;
+            if (ax < 0) { int b = 0; for (int k = 1; k < 3; ++k) if (fabsf(dAx[k]) > fabsf(dAx[b])) b = k;
+                          if (fabsf(dAx[b]) > 0.5f) { ax = b; sg = dAx[b] > 0 ? 1.0f : -1.0f; g_curAxis = ax; g_curSign = sg; LOG("arms: weapon %p (type %08x) barrel axis %c%c (%.0f deg off the view in the game's pose)", w, key, sg > 0 ? '+' : '-', "XYZ"[ax], acosf(fminf(1.0f, fabsf(dAx[b]))) * 57.2958f); } }
+            if (ax >= 0) {
+                float b[3] = { wRows[ax][0] * sg, wRows[ax][1] * sg, wRows[ax][2] * sg }, v[3] = { cf[0], cf[1], cf[2] };
+                Normalize(b); Normalize(v);
+                float c = fmaxf(-1.0f, fminf(1.0f, Dot3(b, v))), deg = acosf(c) * 57.2958f;
+                float axis[3] = { b[1] * v[2] - b[2] * v[1], b[2] * v[0] - b[0] * v[2], b[0] * v[1] - b[1] * v[0] }; float sn = sqrtf(Dot3(axis, axis));
+                if (deg > 3.0f && deg < 70.0f && sn > 1e-5f) {
+                    for (int k = 0; k < 3; ++k) axis[k] /= sn;
+                    M4 R = RotMat(axis, atan2f(sn, c)), hw = Bw[rh];
+                    for (int i = 0; i < 3; ++i) { float row[3] = { hw.m[i][0], hw.m[i][1], hw.m[i][2] }, o[3]; XformDir(R, row, o); hw.m[i][0] = o[0]; hw.m[i][1] = o[1]; hw.m[i][2] = o[2]; }
+                    relNow = Mul(hw, Cinv); barrelR = R; barrelTurn = true;
+                    LOG("arms: weapon %p barrel turned %.0f deg onto the view in its hold", w, deg);
+                }
+            }
+        }
         if (due) {
             if (manual) { recapUntil = 0; g_haveOff0 = false; xr::Haptic(1, 0.6f, 0.08f); LOG("arms: hold for weapon %p taken again on request", w); }
             if (g_relCached) LOG("arms: steady hold renewed for weapon %p (%.1f s after the change, %.1f deg from the remembered one)", w, (t - tChange) / 1000.0, rotAngle(g_relR, relNow));
             else LOG("arms: steady hold taken for weapon %p (type %08x, %.1f s after the change)", w, key, (t - tChange) / 1000.0);
             g_relCached = false;
             g_relR = relNow;
-            if (lhs >= 0 && lhs < n && g_armMask[lhs]) g_relL = Mul(Bw[lhs], Cinv);
+            if (lhs >= 0 && lhs < n && g_armMask[lhs]) {
+                M4 lw = Bw[lhs];
+                if (barrelTurn) {   // the left hand turns with the weapon, about the right hand
+                    for (int i = 0; i < 3; ++i) { float row[3] = { lw.m[i][0], lw.m[i][1], lw.m[i][2] }, o[3]; XformDir(barrelR, row, o); lw.m[i][0] = o[0]; lw.m[i][1] = o[1]; lw.m[i][2] = o[2]; }
+                    float d[3] = { lw.m[3][0] - Bw[rh].m[3][0], lw.m[3][1] - Bw[rh].m[3][1], lw.m[3][2] - Bw[rh].m[3][2] }, o[3]; XformDir(barrelR, d, o);
+                    for (int k = 0; k < 3; ++k) lw.m[3][k] = Bw[rh].m[3][k] + o[k];
+                }
+                g_relL = Mul(lw, Cinv);
+            }
             g_relHave = true;
             int slot = -1; for (int i = 0; i < nCache; ++i) if (cache[i].w == w) slot = i;
             if (slot < 0) slot = nCache < 16 ? nCache++ : (int)(t % 16);
@@ -1050,7 +1124,7 @@ static void Apply(uint8_t* skel) {
         if (fabsf(g_c.mapAngle) > 0.1f) Map = Mul(Mul(Mul(Map, T1), RotMat(axr, g_c.mapAngle * 0.0174533f)), T2);
         if (fabsf(g_c.mapYaw) > 0.1f) Map = Mul(Mul(Mul(Map, T1), RotMat(axu, g_c.mapYaw * 0.0174533f)), T2);
     }
-    if (g_curWeapon && controls::PhoneOut()) controls::ClearPhone();   // the call is over once a weapon is back in the hand
+    if (g_curWeapon && controls::PhoneOut() && controls::PhoneAgeMs() > 2500) controls::ClearPhone();   // (v234: not in the first moments of a call - the gun is still in the hand then)   // the call is over once a weapon is back in the hand
     // a phone call: its own angles. Only the phone (and the map controls it starts with) - cut scenes and other scripted
     // scenes ("cinematic", conversations) keep the free-hand angles, as the phone angles turned the hands up and sideways
     const bool phoneMode = (controls::PhoneOut() || controls::MapControls()) && !f.map && !g_curWeapon;
@@ -1125,21 +1199,22 @@ static void Apply(uint8_t* skel) {
     // shots follow the sight line of the re-posed weapon
     // (steady hands: from the camera as it sat on the hand when the hold was taken, carried by the re-pose - not
     // from the game's camera now, which sways while sprinting and would make the aiming dot and shots sway with it)
-    { float so[3], sf[3]; XformPt(Map, co, so); XformDir(Map, cf, sf);
+    { float so[3], sf[3], su[3]; XformPt(Map, co, so); XformDir(Map, cf, sf); XformDir(Map, cu, su);
       if (g_c.steadyHands && g_relHave && !f.map) {
           M4 ir; if (Inv(g_relR, ir)) {
               M4 V = Mul(Mul(ir, Bw[rh]), Map);   // the capture-time camera, re-posed with the weapon
-              for (int k = 0; k < 3; ++k) { so[k] = V.m[3][k]; sf[k] = -V.m[2][k]; }
+              for (int k = 0; k < 3; ++k) { so[k] = V.m[3][k]; sf[k] = -V.m[2][k]; su[k] = V.m[1][k]; }
           }
       }
-      Normalize(sf);
+      Normalize(sf); Normalize(su);
+      float sur[3]; Put3(sur, f.game.ReferenceDirection(Read3(su)));
       float sr[3], sfr[3]; Put3(sfr, f.game.ReferenceDirection(Read3(sf))); toRef(so, sr);
       float cro[3], crd[3]; Put3(crd, f.game.ReferenceDirection(Read3(cf))); toRef(co, cro);   // raw native camera line: turrets still aim along it
-      const bool authority = f.handAuthority && f.weapon && f.weapon == g_curWeapon && xr::InputCurrent(f.source,1);
+      const bool authority = (f.handSynth || (f.handAuthority && xr::InputCurrent(f.source,1))) && f.weapon && f.weapon == g_curWeapon;
       Lock(); if (g_shotWeapon != f.weapon) g_scopeTick = 0;
-      g_shotSource = f.source; g_shotWeapon = f.weapon;
+      g_shotSource = f.source; g_shotWeapon = f.weapon; g_shotSynth = f.handSynth;
       for (int k = 0; k < 3; ++k) so[k] += O[k];
-      memcpy(g_shotO, so, 12); memcpy(g_shotF, sf, 12); memcpy(g_camFwdNow, cf, 12); g_shotValid = authority; memcpy(g_rayRefO, sr, 12); memcpy(g_rayRefD, sfr, 12);
+      memcpy(g_shotO, so, 12); memcpy(g_shotF, sf, 12); memcpy(g_camFwdNow, cf, 12); g_shotValid = authority; memcpy(g_rayRefO, sr, 12); memcpy(g_rayRefD, sfr, 12); memcpy(g_rayRefU, sur, 12);
       memcpy(g_camRefO, cro, 12); memcpy(g_camRefD, crd, 12); g_rayTick = GetTickCount(); Unlock(); }
     // rigid re-pose of both arm chains
     for (int i = 0; i < n && i < 512; ++i) if (g_armMask[i]) Bw[i] = Mul(Bw[i], Map);
@@ -2421,6 +2496,70 @@ static void SnapUpdate(uint8_t* playerEnt, float dt) {
     verify = 3;
 }
 
+// ---------------------------------------------------------------- v234: clock under the map
+// The map in the hand is the map gadget's own entity: strategy (*(*(gadget+0x24)+8)) -> [[+0x38]+8]+0xC. Its graphic
+// (0x104E2CC0, type 0x10FDF1AC; world matrix +0x170) has four corner bones whose name ids the strategy keeps at
+// +0xB8 UpLeft, +0xBC UpRight, +0xC0 DownLeft, +0xC4 DownRight (skeleton = graphic vt+0x78; bones [skel+0x20], count
+// [skel+0x2C], stride 0xA0, id +0, translation +0x80, model space). Published in the reference frame each frame.
+static float g_clkP[3], g_clkW[3], g_clkH[3]; static DWORD g_clkTick = 0;
+static uint8_t* g_gpsGfx = nullptr; static DWORD g_gpsTick = 0;
+static float g_clkRel[9]; static bool g_clkRelOk = false; static uint8_t* g_clkGfx = nullptr; static float g_clkModel[4][3]; static DWORD g_clkModelTick = 0;   // v234: P, W, H in the left controller's aim frame (R, U, B), same game frame
+static void MapClockUpdate(const Frame& f, uint8_t* pd, const std::function<void(const float*, float*)>& toRef) {
+    if (!controls::MapOpen() || !pd || IsBadReadPtr(pd + 0x4F0, 8)) return;
+    typedef uint8_t* (__fastcall *Get_t)(void* inv, void* edx);
+    uint8_t* g = ((Get_t)A(0x10129E20))(pd + 0x4F0, nullptr);
+    if (!g || IsBadReadPtr(g + 0x24, 4)) return;
+    uint8_t* u = *(uint8_t**)(g + 0x24); if (!u || IsBadReadPtr(u + 8, 4)) return;
+    uint8_t* st = *(uint8_t**)(u + 8); if (!st || IsBadReadPtr(st + 0x38, 0x90)) return;
+    uint8_t* gd = *(uint8_t**)(st + 0x38); if (!gd || IsBadReadPtr(gd + 8, 4)) return;
+    uint8_t* h = *(uint8_t**)(gd + 8); if (!h || IsBadReadPtr(h + 0xC, 4)) return;
+    uint8_t* ent = *(uint8_t**)(h + 0xC); if (!ent) return;
+    typedef uint8_t* (__fastcall *Comp_t)(void* ent, void* edx, const void* type);
+    if (!*(uint32_t*)A(0x10FDF194)) return;
+    {   // v234: the GPS (strategy +0x108 CompassEntity handle -> +0xC entity) for the health panel under it
+        uint8_t* gg = nullptr;
+        if (!IsBadReadPtr(st + 0x108, 4)) { uint8_t* hg = *(uint8_t**)(st + 0x108);
+            if (hg && !IsBadReadPtr(hg + 0xC, 4)) { uint8_t* ge = *(uint8_t**)(hg + 0xC); if (ge) gg = ((Comp_t)A(0x104E2CC0))(ge, nullptr, (const void*)A(0x10FDF1AC)); } }
+        Lock(); g_gpsGfx = gg && !IsBadReadPtr(gg + 0x170, 64) ? gg : nullptr; g_gpsTick = GetTickCount(); Unlock();
+    }
+    uint8_t* gfx = ((Comp_t)A(0x104E2CC0))(ent, nullptr, (const void*)A(0x10FDF1AC));
+    if (!gfx || IsBadReadPtr(gfx + 0x170, 64)) return;
+    typedef uint8_t* (__fastcall *Sk_t)(void* g, void* edx);
+    uint8_t* sk = ((Sk_t)(*(void***)gfx)[0x78 / 4])(gfx, nullptr);
+    if (!sk || IsBadReadPtr(sk + 0x20, 0x10)) return;
+    uint8_t* bones = *(uint8_t**)(sk + 0x20); int n = *(int*)(sk + 0x2C);
+    if (!bones || n <= 0 || n > 256 || IsBadReadPtr(bones, n * 0xA0)) return;
+    auto bonePos = [&](uint32_t id, float out[3]) { for (int i = 0; i < n; ++i) if (*(uint32_t*)(bones + i * 0xA0) == id) { memcpy(out, bones + i * 0xA0 + 0x80, 12); return true; } return false; };
+    float ul[3], dl[3], dr[3];
+    if (!bonePos(*(uint32_t*)(st + 0xB8), ul) || !bonePos(*(uint32_t*)(st + 0xC0), dl) || !bonePos(*(uint32_t*)(st + 0xC4), dr)) {
+        static int nl = 0; if (nl++ < 3) LOG("map clock: map corner bones not found (%d bones)", n); return; }
+    const float* M = (const float*)(gfx + 0x170);
+    auto toW = [&](const float* m, float* w) { for (int k = 0; k < 3; ++k) w[k] = m[0] * M[k] + m[1] * M[4 + k] + m[2] * M[8 + k] + M[12 + k]; };
+    float mid[3], top[3], right[3]; for (int k = 0; k < 3; ++k) { mid[k] = (dl[k] + dr[k]) * 0.5f; top[k] = mid[k] + (ul[k] - dl[k]); right[k] = dr[k]; }
+    Lock(); g_clkGfx = gfx; memcpy(g_clkModel[0], mid, 12); memcpy(g_clkModel[1], top, 12); memcpy(g_clkModel[2], dl, 12); memcpy(g_clkModel[3], dr, 12); g_clkModelTick = GetTickCount(); Unlock();   // v234: drawn from the render thread
+    float wm[3], wt[3], wr[3], wl[3]; toW(mid, wm); toW(top, wt); toW(right, wr); toW(dl, wl);
+    float rm[3], rt[3], rr[3], rl[3]; toRef(wm, rm); toRef(wt, rt); toRef(wr, rr); toRef(wl, rl);
+    Lock(); for (int k = 0; k < 3; ++k) { g_clkP[k] = rm[k]; g_clkW[k] = rr[k] - rl[k]; g_clkH[k] = rt[k] - rm[k]; } g_clkTick = GetTickCount();
+    // relative to the left controller in the same game frame: drawn from the current controller pose, the clock stays
+    // on the map while you move (the map's world position and the drawn view are a frame or two apart)
+    g_clkRelOk = f.leftValid;
+    if (f.leftValid) { const float* ax[3] = { f.laimR, f.laimU, f.laimB }; float d[3] = { rm[0] - f.lgripO[0], rm[1] - f.lgripO[1], rm[2] - f.lgripO[2] };
+        for (int a = 0; a < 3; ++a) { g_clkRel[a] = Dot3(d, ax[a]); g_clkRel[3 + a] = Dot3(g_clkW, ax[a]); g_clkRel[6 + a] = Dot3(g_clkH, ax[a]); } }
+    Unlock();
+    static bool once = false; if (!once) { once = true; float w = sqrtf(Dot3(g_clkW, g_clkW)), hh = sqrtf(Dot3(g_clkH, g_clkH)); LOG("map clock: map %.2f x %.2f (reference units)", w, hh); }
+}
+// v234: the map's graphic and its bottom-middle / top-middle / bottom-left / bottom-right points in model space
+bool MapClockModel(uint8_t*& gfx, float pts[4][3]) { if (!g_csInit) return false; Lock(); bool ok = g_clkGfx && g_clkModelTick && GetTickCount() - g_clkModelTick < 200; gfx = g_clkGfx; memcpy(pts, g_clkModel, sizeof g_clkModel); Unlock(); return ok; }
+uint8_t* GpsGfx() { if (!g_csInit) return nullptr; Lock(); uint8_t* g = g_gpsTick && GetTickCount() - g_gpsTick < 200 ? g_gpsGfx : nullptr; Unlock(); return g; }   // v234
+bool MapClockHand(float rel[9]) { if (!g_csInit) return false; Lock(); bool ok = g_clkRelOk && g_clkTick && GetTickCount() - g_clkTick < 200; memcpy(rel, g_clkRel, 36); Unlock(); return ok; }
+bool MapClock(float p[3], float w[3], float h[3]) {
+    if (!g_csInit) return false; Lock(); bool ok = g_clkTick && GetTickCount() - g_clkTick < 200; memcpy(p, g_clkP, 12); memcpy(w, g_clkW, 12); memcpy(h, g_clkH, 12); Unlock(); return ok; }
+// the game's time of day: environment manager [0x10FE4174] +0x260, seconds since midnight
+bool GameTimeOfDay(int& hh, int& mm) {
+    uint8_t* env = *(uint8_t**)A(0x10FE4174); if (!env || IsBadReadPtr(env + 0x260, 4)) return false;
+    float t = *(float*)(env + 0x260); if (!(t >= 0.0f && t < 86400.5f)) return false;
+    int s = (int)t; hh = (s / 3600) % 24; mm = (s % 3600) / 60; return true;
+}
 // ---------------------------------------------------------------- safehouse watch (sleep): the right stick sets the time
 // CGadgetUseWatchStrategy update (0x1072DFD0, thiscall this, float dt): in its time-setting mode (+0x80 == 1) the
 // time hand turns by the input axis at +0x68 (written by the input listener from A / D); the right stick writes it.
@@ -2741,15 +2880,15 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
     if (!f.valid || g_camBoneSeq == 0) return;
     if (!xr::InputCurrent()) controls::CancelPendingInput();
     // Keep presentation fallback out of gameplay, including when render publication stops.
-    f.handValid = f.handValid && f.handAuthority && xr::InputCurrent(f.source,1);
-    f.leftValid = f.leftValid && f.leftAuthority && xr::InputCurrent(f.source,0);
+    f.handValid = f.handValid && (f.handSynth || (f.handAuthority && xr::InputCurrent(f.source,1)));
+    f.leftValid = f.leftValid && (f.leftSynth || (f.leftAuthority && xr::InputCurrent(f.source,0)));   // v234: a held two-handed grip survives the left controller's tracking dropouts
     f.headValid = f.headValid && f.headAuthority && xr::HeadCurrent(f.source);
     static fc2vr::authority::Stamp previousInput;
     for (int hnd = 0; hnd < 2; ++hnd) {
         if (previousInput.generation != f.source.generation || previousInput.handGeneration[hnd] != f.source.handGeneration[hnd]) {
             // A short dropout can occur entirely between game ticks. Cancel old
             // holds/history once even if the newest sample is tracked again.
-            if (hnd) f.handValid = false; else f.leftValid = false;
+            if (hnd) { if (!f.handSynth) f.handValid = false; } else if (!f.leftSynth) f.leftValid = false;
             g_hist[hnd].n = 0; g_gripPrev[hnd] = true;
             Lock(); g_npcDrive[hnd] = NpcDrive{}; Unlock();
         }
@@ -2763,6 +2902,12 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
     g_pawn = pawn;
     uint8_t* playerEnt = player ? player->ent : nullptr;
     g_playerEntR = playerEnt;
+    if (f.headValid) {   // v234: head ray for the game's interaction target (UseFromHead)
+        float o[3], d[3]; toWorld(f.headO, o, true); toWorld(f.headF, d, false);
+        float l = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        if (l > 1e-4f) { for (float& x : d) x /= l; memcpy(g_useHeadO, o, 12); memcpy(g_useHeadD, d, 12); g_useHeadTick = GetTickCount64(); }
+        if (f.handValid) toWorld(f.gripO, g_useHand, true);
+    }
     ReloadInputTick();
     {   // the held weapon's graphic component, as the projectile code finds it (entity -> component 0x104E2CC0 with
         // the type id at 0x10FDF1AC; muzzle bones are read from it with 0x1051D2F0, world matrix at +0x170)
@@ -2858,7 +3003,7 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
         controls::SetHandsAway((g_userHolster && !g_climbWas) || (foreignLock && controls::NormalControls()));
     }
     { auto toRef = [&](const float* w, float* out) { Put3(out, f.game.ReferencePosition(Read3(w))); };
-      ThrowArcUpdate(f, pd, toWorld, toRef); }
+      ThrowArcUpdate(f, pd, toWorld, toRef); MapClockUpdate(f, pd, toRef); }
     { float o[3], d[3], p[3], t; if (AimPoint(o, d, p, &t)) { g_aimDist = t; g_aimTick = GetTickCount(); } }   // the aiming dot sits on what the weapon points at
     if (controls::VehicleMode() != 0) {   // in a vehicle: no grabbing, climbing or snap turns (the grips are vehicle controls)
         for (int i = 0; i < 2; ++i) { if (g_held[i].active) { HandleRelease(g_held[i].h); g_held[i] = Held{}; } g_gripPrev[i] = true; }
@@ -3268,7 +3413,7 @@ static void AttachWatch() {
     uint8_t* ent = HeldEnt();
     static uint8_t* lastEnt = nullptr; static float handOff[16]; static bool haveOff = false; static int lastIdx = -3; static ULONGLONG onHandSince = 0;
     int hand = g_slot[12];
-    if (!ent || IsBadReadPtr(ent + 0x78, 4) || hand < 0) { lastEnt = nullptr; g_attachForced = false; g_wRestN = 0; return; }
+    if (!ent || IsBadReadPtr(ent + 0x78, 4) || hand < 0) { lastEnt = nullptr; g_attachForced = false; g_wRestN = 0; g_onHandSince = 0; return; }
     uint8_t* at = *(uint8_t**)(ent + 0x78);
     if (!at || IsBadReadPtr(at, 0xC0)) return;
     int idx = *(int*)(at + 0x1C); float* off = (float*)(at + 0x80);
@@ -3283,7 +3428,7 @@ static void AttachWatch() {
             if (k == nSaved) { if (nSaved < 8) ++nSaved; else k = 0; }
             saved[k].ent = lastEnt; memcpy(saved[k].off, handOff, 64); memcpy(saved[k].bones, g_wRestBones, sizeof g_wRestBones); saved[k].n = g_wRestN; saved[k].base = g_wRestBase;
         }
-        lastEnt = ent; haveOff = false; lastIdx = -3; onHandSince = t; g_wRestN = 0;
+        lastEnt = ent; haveOff = false; lastIdx = -3; onHandSince = t; g_wRestN = 0; g_onHandSince = 0;
         for (int k = 0; k < nSaved; ++k) if (saved[k].ent == ent) {
             memcpy(handOff, saved[k].off, 64); memcpy(g_wRestBones, saved[k].bones, sizeof g_wRestBones); g_wRestBase = saved[k].base; g_wRestN = saved[k].n; haveOff = true;
             LOG("arms: held weapon %p - its hand pose from before is used", ent); break;
@@ -3294,9 +3439,10 @@ static void AttachWatch() {
     if (idx != lastIdx) { static int nl = 0; if (nl++ < 40) LOG("arms: held weapon attachment %p: game puts it on bone %d (hand %d)", at, idx, hand); lastIdx = idx; if (idx == hand) onHandSince = t; }
     // the weapon's place on the hand and its model's pose there, taken once it has hung on the hand for a moment
     static ULONGLONG forcedUntil = 0;
-    if (idx == hand && t < forcedUntil) { if (g_diagUntil + 300 > forcedUntil) forcedUntil = g_diagUntil + 300; return; }   // still our pin: keep the model's pose held (through the reload after the shot)
+    if (idx == hand && t < forcedUntil) { g_onHandSince = 0; if (g_diagUntil + 300 > forcedUntil) forcedUntil = g_diagUntil + 300; return; }   // still our pin: keep the model's pose held (through the reload after the shot)
     if (idx == hand) {
         g_attachForced = false;
+        if (!g_onHandSince) g_onHandSince = t;
         // v207: each weapon type's place in the hand is recorded once (normal controls, settled, saved in [Holds] O<key>)
         // and restored whenever the game re-attaches the weapon turned or shifted (after a phone call, the map, climbing,
         // putting it away, a cut scene) - the weapon sat tilted in the steady hand until left grip + A.
@@ -3340,6 +3486,7 @@ static void AttachWatch() {
         }
         return;
     }
+    g_onHandSince = 0;
     // the game hung it elsewhere (the crossbow's bolt reload: the spine, or the camera while scoped): back on the hand,
     // with the model held in its pose there (Hook_PoseBones) - in VR the hand holds the weapon throughout
     g_attachForced = false;
@@ -3395,6 +3542,254 @@ static void __fastcall Hook_EnvLight(void* env, void* edx, float t, uint8_t* out
     static int nl = 0; if (nl++ < 2) LOG("rim light off (was %.2f)", *(float*)(out + 0x60));
     *(float*)(out + 0x60) = 0.0f;
 }
+// v234 the game's gamepad aim assist. The mod plays through a synthesised pad, so the right-thumb PadFilter's helpers
+// (Config\InputActionMap*.xml: StickyHelper, FollowEnemyHelper - strafeStrength 1.0 in the "look" map, IronSightHelper,
+// ShootCorrectionHelper) turned the view toward nearby enemies by themselves, most noticeably while strafing.
+// CActionMapPadFilter apply = 0x107DA700 (thiscall filter, 3 args, ret 0Ch); its enable flags are bytes +0x15C follow
+// enemy, +0x15D sticky, +0x15E iron sight, +0x15F shoot correction (set by the XML loader 0x107DB1E0).
+typedef void (__fastcall *AimHelp_t)(void* f, void* edx, void* a, void* b, void* c);
+static AimHelp_t o_AimHelp = nullptr;
+static void __fastcall Hook_AimHelp(void* f, void* edx, void* a, void* b, void* c) {
+    if (!g_c.gameAimAssist && f && !IsBadWritePtr((uint8_t*)f + 0x15C, 4)) {
+        uint8_t* fl = (uint8_t*)f + 0x15C;
+        if (fl[0] | fl[1] | fl[2] | fl[3]) {
+            static int nl = 0; if (nl++ < 4) LOG("aim assist: the game's pad aim helpers off (filter %p: follow enemy %d, sticky %d, iron sight %d, shoot correction %d)", f, fl[0], fl[1], fl[2], fl[3]);
+            fl[0] = fl[1] = fl[2] = fl[3] = 0;
+        }
+    }
+    o_AimHelp(f, edx, a, b, c);
+}
+// v234 interaction from the head (see UseAimRay): the player's interaction monitor update
+typedef void (__fastcall *UseMon_t)(uint8_t* self, void* edx, uint32_t a, uint32_t b);
+static UseMon_t o_UseMon = nullptr;
+static void __fastcall Hook_UseMon(uint8_t* self, void* edx, uint32_t a, uint32_t b) {
+    bool mine = false;
+    if (g_c.useFromHead && GetTickCount64() - g_useHeadTick < 250 && g_playerEntR && !IsBadReadPtr(self + 4, 4)) {
+        static const int kOffs[2] = { 4, 0xC };
+        for (int off : kOffs) {   // owner handles (-> entity at +0xC)
+            uint8_t* h = *(uint8_t**)(self + off);
+            if (h && !IsBadReadPtr(h + 0xC, 4) && *(uint8_t**)(h + 0xC) == g_playerEntR) mine = true;
+        }
+        static int nd = 0; if (!mine && nd++ < 3) LOG("interaction: monitor %p is not the player's (player entity %p)", self, g_playerEntR);
+    }
+    if (!mine) { o_UseMon(self, edx, a, b); return; }
+    static int nl = 0; if (nl++ == 0) LOG("interaction: the game's use target follows the head (monitor %p)", self);
+    g_useThread = GetCurrentThreadId();
+    g_useDiagLen = 0; g_useDiagLine[0] = 0; g_useBoxHits = g_useSphereHits = 0xFFFFFFFF;
+    o_UseMon(self, edx, a, b);
+    g_useThread = 0;
+    if (g_c.useDiag && g_useBoxHits != 0xFFFFFFFF && g_useDiagN < 600) {
+        static char last[2048] = ""; ULONGLONG now = GetTickCount64();
+        if (strcmp(last, g_useDiagLine) != 0 || now - g_useDiagLast > 3000) {
+            strcpy(last, g_useDiagLine); g_useDiagLast = now; ++g_useDiagN;
+            const float* hb = g_useBox; float pitch = asinf(fmaxf(-1.0f, fminf(1.0f, g_useHeadD[2]))) * 57.29578f;
+            LOG("use: head z %.2f pitch %+.0f | box half %.2f %.2f %.2f at z %.2f (%+.2f from head) | box %u sphere %u candidates%s",
+                g_useHeadO[2], pitch, hb[0], hb[1], hb[2], hb[5], hb[5] - g_useHeadO[2], g_useBoxHits, g_useSphereHits, g_useDiagLine[0] ? g_useDiagLine : " | none asked");
+        }
+    }
+}
+// v234 test 12: who answers the usable question (event->SetUsable(bool) 0x102DC380: mov al,[esp+4]; mov [ecx+34h],al; ret 4)
+static uint32_t g_useSetBy[6], g_useSetVt[6]; static uint8_t g_useSetVal[6]; static int g_useSetN = 0; static bool g_useRec = false;
+typedef void (__fastcall *SetUsable_t)(uint8_t* ev, void* edx, int v);
+static SetUsable_t o_SetUsable = nullptr;
+static void UsePlayerState(uint32_t by, int v, uint8_t* comp);
+static void __fastcall Hook_SetUsable(uint8_t* ev, void* edx, int v) {
+    uint8_t* comp; asm volatile("mov %%esi, %0" : "=r"(comp));   // the answering component (esi in the pickup handler)
+    ev[0x34] = (uint8_t)v;
+    {   uint32_t by = (uint32_t)(uintptr_t)__builtin_return_address(0) - (uint32_t)g_base + 0x10000000u;
+        if (g_useThread == GetCurrentThreadId() && (by == 0x10147F19 || by == 0x10147D4E)) UsePlayerState(by, v, comp); }
+    if (g_useRec && g_useThread == GetCurrentThreadId() && g_useSetN < 6) {
+        g_useSetBy[g_useSetN] = (uint32_t)(uintptr_t)__builtin_return_address(0) - (uint32_t)g_base + 0x10000000u; g_useSetVal[g_useSetN] = (uint8_t)v;
+        g_useSetVt[g_useSetN] = comp && !IsBadReadPtr(comp, 4) && *(uint32_t*)comp ? *(uint32_t*)comp - (uint32_t)g_base + 0x10000000u : 0; ++g_useSetN;
+    }
+}
+// the pickup check's player-side conditions (0x10146BF0), read directly, logged when they change
+static void UsePlayerState(uint32_t by, int v, uint8_t* comp) {
+    if (!g_playerEntR) return;
+    typedef uint8_t* (__fastcall *PComp_t)(void*, void*, void*);
+    uint8_t* pawn = ((PComp_t)A(0x104E2CC0))(g_playerEntR, nullptr, (void*)A(0x10FDE39C));   // as the pickup check finds it
+    if (!pawn || IsBadReadPtr(pawn + 0x10, 4)) return;
+    uint8_t* pd = *(uint8_t**)(pawn + 0x10); if (!pd || IsBadReadPtr(pd + 0x4F4, 4)) return;
+    int dead = pd[0x499], st = IsBadReadPtr(pd + 0xD8 + 0x50, 1) ? -1 : pd[0xD8 + 0x50];
+    int tag = -1, busy = -1, veh = -1, itemCount = -9;
+    {   void** vt = *(void***)pawn; typedef void* (__fastcall *Get_t)(void*, void*); typedef bool (__fastcall *Has_t)(void*, void*, void*);
+        void* list = ((Get_t)vt[0x78 / 4])(pawn, nullptr);
+        if (list) tag = ((Has_t)A(0x1029DBA0))(list, nullptr, (void*)A(0x10FE4C7C)) ? 1 : 0; }
+    if (g_playerEntR) {   typedef void* (__fastcall *Comp_t)(void*, void*, void*); typedef bool (__fastcall *B_t)(void*, void*);
+        void* c = ((Comp_t)A(0x104E2CC0))(g_playerEntR, nullptr, (void*)A(0x10FDEAC0));
+        if (c) busy = ((B_t)(*(void***)c)[0x7C / 4])(c, nullptr) ? 1 : 0; }
+    {   typedef void* (__cdecl *V_t)(void*); veh = ((V_t)A(0x100E7330))(pawn) ? 1 : 0; }
+    {   uint8_t* inv = pd + 0x4F0; uint8_t* m = !IsBadReadPtr(inv + 4, 4) ? *(uint8_t**)(inv + 4) : nullptr;
+        uint8_t* h = m && !IsBadReadPtr(m + 0x10, 4) ? *(uint8_t**)(m + 0x10) : nullptr;
+        uint8_t* e = h && !IsBadReadPtr(h + 0xC, 4) ? *(uint8_t**)(h + 0xC) : nullptr;
+        typedef uint8_t* (__fastcall *Comp_t)(void*, void*, void*);
+        uint8_t* wc = e ? ((Comp_t)A(0x104E2CC0))(e, nullptr, (void*)A(0x10FE01F8)) : nullptr;
+        uint8_t* q = wc && !IsBadReadPtr(wc + 0x24, 4) ? *(uint8_t**)(wc + 0x24) : nullptr;
+        itemCount = q && !IsBadReadPtr(q + 0x18, 4) ? *(int*)(q + 0x18) : (e ? -2 : -1); }
+    uint32_t cvt = comp && !IsBadReadPtr(comp, 4) ? *(uint32_t*)comp : 0;
+    uint32_t f8c = cvt && !IsBadReadPtr((void*)(uintptr_t)(cvt + 0x8C), 4) ? *(uint32_t*)(uintptr_t)(cvt + 0x8C) : 0;
+    char line[256]; snprintf(line, sizeof line, "%s: dead %d state %d tag %d busy %d vehicle %d hands-item count %d | pickup comp vt %08x (+8c %08x) flags %d %d %d +7c %d",
+        v ? "yes" : "no", dead, st, tag, busy, veh, itemCount, cvt ? cvt - (uint32_t)g_base + 0x10000000u : 0, f8c ? f8c - (uint32_t)g_base + 0x10000000u : 0,
+        comp ? comp[0x14] : -1, comp ? comp[0x15] : -1, comp ? comp[0x16] : -1, comp && !IsBadReadPtr(comp + 0x7C, 4) ? *(int*)(comp + 0x7C) : -1);
+    static char last[256] = ""; static int n = 0;
+    if (strcmp(last, line) && n < 200) { strcpy(last, line); ++n; LOG("use pickup check %s", line); }
+    (void)by;
+}
+// v234: pickups such as diamond cases decide "can be taken" in 0x106C4E90 (thiscall comp, arg -> asker handle ptr,
+// ret 4, AL) from the player's view angles (pawn data +0x2D0, then +0x54 (flag 4 at +4) or +0x38: pitch, roll, yaw in rad;
+// forward = (-cos p sin y, cos p cos y, sin p)) - facing the case's front, the case inside its look cone - and reach from
+// aim slot 3. In VR those were the body's level view. Both when the prompt is chosen and when use is pressed, the check
+// sees the head: its position for slot 3 and its view, aimed at the case when it is within UseCone.
+typedef bool (__fastcall *CaseCheck_t)(uint8_t* comp, void* edx, void* arg);
+static CaseCheck_t o_CaseCheck = nullptr;
+static bool __fastcall Hook_CaseCheck(uint8_t* comp, void* edx, void* arg) {
+    uint8_t* h = arg && !IsBadReadPtr(arg, 4) ? *(uint8_t**)arg : nullptr;
+    uint8_t* asker = h && !IsBadReadPtr(h + 0xC, 4) ? *(uint8_t**)(h + 0xC) : nullptr;
+    if (!g_c.useFromHead || !asker || asker != g_playerEntR || GetTickCount64() - g_useHeadTick > 250 || !A(0x10FDE39C)) return o_CaseCheck(comp, edx, arg);
+    typedef uint8_t* (__fastcall *PComp_t)(void*, void*, void*);
+    uint8_t* pc = ((PComp_t)A(0x104E2CC0))(g_playerEntR, nullptr, (void*)A(0x10FDE39C));
+    uint8_t* pd = pc && !IsBadReadPtr(pc + 0x10, 4) ? *(uint8_t**)(pc + 0x10) : nullptr;
+    uint8_t* vs = pd && !IsBadReadPtr(pd + 0x2D0, 0x60) ? pd + 0x2D0 : nullptr;
+    if (!vs) return o_CaseCheck(comp, edx, arg);
+    float d[3]; memcpy(d, g_useHeadD, 12);
+    {   // the pickup's own entity (comp +8 handle): aim at it when it is near the view
+        uint8_t* ph = !IsBadReadPtr(comp + 8, 4) ? *(uint8_t**)(comp + 8) : nullptr;
+        uint8_t* pe = ph && !IsBadReadPtr(ph + 0xC, 4) ? *(uint8_t**)(ph + 0xC) : nullptr;
+        if (pe && !IsBadReadPtr(pe + 0x60, 12) && g_c.useCone > 0) {
+            const float* p0 = (const float*)(pe + 0x60);
+            float v[3] = { p0[0] - g_useHeadO[0], p0[1] - g_useHeadO[1], p0[2] + 0.1f - g_useHeadO[2] };
+            float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            if (l > 0.05f) {
+                float a = acosf(fmaxf(-1.0f, fminf(1.0f, (v[0] * d[0] + v[1] * d[1] + v[2] * d[2]) / l))) * 57.29578f;
+                if (a <= g_c.useCone) for (int k = 0; k < 3; ++k) d[k] = v[k] / l;
+            }
+        }
+    }
+    float* ang = (float*)(vs + ((vs[4] & 4) ? 0x54 : 0x38)); float saved[3]; memcpy(saved, ang, 12);
+    ang[0] = asinf(fmaxf(-1.0f, fminf(1.0f, d[2]))); ang[1] = 0; ang[2] = atan2f(-d[0], d[1]);
+    DWORD prevThread = g_useThread; bool prevCand = g_useCandOn;
+    g_useThread = GetCurrentThreadId(); g_useCandOn = false; g_useInCheck = true;   // AimPos slot 3 -> the head
+    bool r = o_CaseCheck(comp, edx, arg);
+    g_useInCheck = false; g_useCandOn = prevCand; g_useThread = prevThread;
+    memcpy(ang, saved, 12);
+    static int nl = 0; if (nl < 6) { ++nl; LOG("interaction: case check from the head %s (view pitch %.0f yaw %.0f, game had %.0f %.0f)%s", r ? "yes" : "no",
+        asinf(fmaxf(-1.0f, fminf(1.0f, d[2]))) * 57.29578f, atan2f(-d[0], d[1]) * 57.29578f, saved[0] * 57.29578f, saved[2] * 57.29578f, prevThread ? "" : " - use pressed"); }
+    return r;
+}
+// candidate box in front of the body: {vtbl, flag, half extents[3], centre[3], rotation quaternion[4]} - turned to the head
+typedef void (__fastcall *ShapeQuery_t)(void* world, void* edx, float* shape, void* filter, void* results, int z);
+static void __fastcall Use_BoxQuery(void* world, void* edx, float* shape, void* filter, void* results, int z) {
+    if (shape && UseAimRay(g_useHeadO, g_useHeadD)) {
+        // the game put the box (half depth hy) hy + 0.2 m ahead of the body along the body's heading (the box's own +Y)
+        float* c = shape + 5; float* q = shape + 8; const float L = shape[3] + 0.2f;
+        typedef float* (__fastcall *Rot_t)(const float* q, void* edx, float* out, const float* v);
+        alignas(16) float qq[4], v[4] = { 0, 1, 0, 0 }, fb[4] = {}; memcpy(qq, q, 16);
+        ((Rot_t)A(0x10032EE0))(qq, nullptr, fb, v);
+        float f[3] = { g_useHeadD[0], g_useHeadD[1], 0 }; float fl = sqrtf(f[0] * f[0] + f[1] * f[1]);
+        if (fl > 0.2f && L > 0.05f && L < 3.0f && fabsf(fb[0] * fb[0] + fb[1] * fb[1] - 1.0f) < 0.1f) {
+            f[0] /= fl; f[1] /= fl;
+            float px = c[0] - fb[0] * L, py = c[1] - fb[1] * L;   // the body
+            c[0] = px + f[0] * L; c[1] = py + f[1] * L;
+            alignas(16) float nq[4]; AimQuatFromDir(f, nq, "interaction box"); memcpy(q, nq, 16);
+            static int nl = 0; if (nl++ < 2) LOG("interaction: candidate box turned to the head (%.2f m ahead, body heading %.2f %.2f, head %.2f %.2f)", L, fb[0], fb[1], f[0], f[1]);
+        }
+    }
+    ((ShapeQuery_t)A(0x1048DCE0))(world, edx, shape, filter, results, z);
+    if (g_useThread == GetCurrentThreadId() && results && shape) { g_useBoxHits = ((uint32_t*)results)[1]; memcpy(g_useBox, shape + 2, 24); }
+}
+// candidate sphere ahead of the chest: put just in front of the eyes
+typedef void (__fastcall *SphereQuery_t)(void* world, void* edx, float* point, float radius, void* results, void* filter, int z);
+static void __fastcall Use_SphereQuery(void* world, void* edx, float* point, float radius, void* results, void* filter, int z) {
+    float o[3], d[3];
+    if (point && UseAimRay(o, d)) for (int k = 0; k < 3; ++k) point[k] = o[k] + d[k] * 0.5f;
+    ((SphereQuery_t)A(0x1048DCB0))(world, edx, point, radius, results, filter, z);
+    if (g_useThread == GetCurrentThreadId() && results) g_useSphereHits = ((uint32_t*)results)[1];
+}
+// v234 test 8 diagnostic (UseDiag=1): what the interaction monitor finds and what each candidate answers
+typedef bool (__fastcall *IsUsable_t)(void* self, void* edx, void* cand, void* usage, float* pos);
+// angle (deg) from the view centre to the candidate's bounds: 0 when the view ray passes through them
+static float UseViewAngle(void* cand, const float* pos) {
+    uint8_t* h = cand && !IsBadReadPtr(cand, 4) ? *(uint8_t**)cand : nullptr;
+    uint8_t* e = h && !IsBadReadPtr(h + 0xC, 4) ? *(uint8_t**)(h + 0xC) : nullptr;
+    float c[3], rad = 0; bool have = false;
+    uint8_t* pc = e && *(uint32_t*)A(0x10FDE930) ? (uint8_t*)GetComp(e, 0x10FDE940) : nullptr;   // physics component: world box (vtable +0xC4)
+    if (pc && !IsBadReadPtr(pc, 4)) {
+        typedef void (__fastcall *Box_t)(void* comp, void* edx, float* mn, float* mx);
+        float mn[3] = { 0, 0, 0 }, mx[3] = { 0, 0, 0 };
+        ((Box_t)(*(void***)pc)[0xC4 / 4])(pc, nullptr, mn, mx);
+        if (std::isfinite(mn[0]) && std::isfinite(mx[0]) && mx[0] >= mn[0] && mx[1] >= mn[1] && mx[2] >= mn[2] && mx[0] - mn[0] < 30.0f && mx[2] - mn[2] < 30.0f) {
+            float ex[3] = { mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2] };
+            for (int k = 0; k < 3; ++k) c[k] = 0.5f * (mn[k] + mx[k]);
+            rad = 0.4f * sqrtf(ex[0] * ex[0] + ex[1] * ex[1] + ex[2] * ex[2]);   // a little inside the corners (boxes are loose)
+            have = true;
+        }
+    }
+    if (!have && pos) { memcpy(c, pos, 12); rad = 0.15f; have = true; }
+    if (!have) return 1e9f;
+    float v[3] = { c[0] - g_useHeadO[0], c[1] - g_useHeadO[1], c[2] - g_useHeadO[2] };
+    float d = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (d <= rad) return 0;
+    float a = acosf(fmaxf(-1.0f, fminf(1.0f, (v[0] * g_useHeadD[0] + v[1] * g_useHeadD[1] + v[2] * g_useHeadD[2]) / d))) * 57.29578f;
+    return fmaxf(0.0f, a - asinf(rad / d) * 57.29578f);
+}
+static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usage, float* pos) {
+    float cone = -1;
+    if (g_useThread == GetCurrentThreadId() && g_c.useCone > 0) {
+        uint8_t* h0 = cand && !IsBadReadPtr(cand, 4) ? *(uint8_t**)cand : nullptr;
+        uint8_t* e0 = h0 && !IsBadReadPtr(h0 + 0xC, 4) ? *(uint8_t**)(h0 + 0xC) : nullptr;
+        if (e0 && !IsBadReadPtr(e0 + 0x60, 12)) {
+            const float* p0 = (const float*)(e0 + 0x60);
+            float v[3] = { p0[0] - g_useHeadO[0], p0[1] - g_useHeadO[1], p0[2] + 0.1f - g_useHeadO[2] };
+            float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            if (l > 0.05f && l < 4.0f) {
+                cone = acosf(fmaxf(-1.0f, fminf(1.0f, (v[0] * g_useHeadD[0] + v[1] * g_useHeadD[1] + v[2] * g_useHeadD[2]) / l))) * 57.29578f;
+                if (cone <= g_c.useCone) { g_useCandPt[0] = p0[0]; g_useCandPt[1] = p0[1]; g_useCandPt[2] = p0[2] + 0.1f; g_useCandOn = true; }
+            }
+        }
+    }
+    int asks0 = g_useAimAsks; g_useSetN = 0; g_useRec = true;
+    bool r = ((IsUsable_t)A(0x1009D480))(self, edx, cand, usage, pos);
+    g_useRec = false;
+    // v234: only offer what the view centre is on or near: the angle from the view centre to the object's bounds (the
+    // physics box when it has one, else the use point it reports) must be within UseCenter - the same margin on all sides
+    if (r && g_c.useCenter > 0 && g_useThread == GetCurrentThreadId()) {
+        float a = UseViewAngle(cand, pos);
+        if (a > g_c.useCenter) r = false;
+        static int nl = 0; if (nl < 20 && a < 1e8f) { ++nl; LOG("use: candidate %.0f deg outside its bounds from the view centre -> %s", a, r ? "offered" : "not offered"); }
+    }
+    bool aimed = g_useCandOn; g_useCandOn = false;
+    int asked = g_useAimAsks - asks0;
+    if (g_c.useDiag && g_useThread == GetCurrentThreadId() && g_useDiagLen < (int)sizeof g_useDiagLine - 160) {
+        uint8_t* h = cand && !IsBadReadPtr(cand, 4) ? *(uint8_t**)cand : nullptr;
+        uint8_t* e = h && !IsBadReadPtr(h + 0xC, 4) ? *(uint8_t**)(h + 0xC) : nullptr;
+        float d = -1, dz = 0, ad = -1;
+        const float* ep = (e && !IsBadReadPtr(e + 0x60, 12)) ? (const float*)(e + 0x60) : nullptr;   // entity world matrix translation
+        if (r && pos) ep = pos;
+        if (ep) {
+            float dx = ep[0] - g_useHeadO[0], dy = ep[1] - g_useHeadO[1]; dz = ep[2] - g_useHeadO[2]; d = sqrtf(dx * dx + dy * dy + dz * dz);
+            if (d > 1e-3f) ad = acosf(fmaxf(-1.0f, fminf(1.0f, (dx * g_useHeadD[0] + dy * g_useHeadD[1] + dz * g_useHeadD[2]) / d))) * 57.29578f;
+        }
+        uint32_t vt = e && !IsBadReadPtr(e, 4) ? *(uint32_t*)e : 0;
+        int eflag = e && !IsBadReadPtr(e + 0x70, 4) ? (int)((*(uint32_t*)(e + 0x70) >> 4) & 1) : -1;   // the monitor's own skip flag (0x1009D480)
+        float hd = -1; if (ep) { float hx = ep[0] - g_useHand[0], hy = ep[1] - g_useHand[1], hz = ep[2] - g_useHand[2]; hd = sqrtf(hx * hx + hy * hy + hz * hz); }
+        (void)vt;
+        if (r && e) VehDescribe(e);
+        g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " | %p %s %.2f m dz %+.2f %.0f deg off view, %.2f m from right hand, aim %s (asked %d), skip flag %d, answered by",
+                                 (void*)e, r ? "USABLE" : "no", d, dz, ad, hd, aimed ? "on it" : "view", asked, eflag);
+        for (int k = 0; k < g_useSetN && g_useDiagLen < (int)sizeof g_useDiagLine - 24; ++k)
+            g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " %08x=%d (comp vt %08x)", g_useSetBy[k], g_useSetVal[k], g_useSetVt[k]);
+        if (!g_useSetN) g_useDiagLen += snprintf(g_useDiagLine + g_useDiagLen, sizeof g_useDiagLine - g_useDiagLen, " nobody");
+    }
+    return r;
+}
+static bool PatchCallSite(uintptr_t va, uintptr_t callee, void* fn, const char* what) {   // va: a "call callee" (Steam VAs)
+    uint8_t* p = (uint8_t*)A(va); uintptr_t want = A(callee);
+    if (!p || !want || p[0] != 0xE8 || (uintptr_t)p + 5 + *(int32_t*)(p + 1) != want) { LOG("%s: unexpected bytes, not applied", what); return false; }
+    DWORD old; VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &old);
+    *(int32_t*)(p + 1) = (int32_t)((uintptr_t)fn - ((uintptr_t)p + 5));
+    VirtualProtect(p, 5, old, &old); FlushInstructionCache(GetCurrentProcess(), p, 5);
+    return true;
+}
 // ---------------------------------------------------------------- install
 void Install(uintptr_t base, const Config& c, PatchFn patch) {
     g_base = base; g_c = c;
@@ -3414,6 +3809,20 @@ void Install(uintptr_t base, const Config& c, PatchFn patch) {
     if (c.noColorFilter) { static const uint8_t proB[5] = { 0x83, 0xEC, 0x08, 0x56, 0x57 };   // sub esp,8; push esi; push edi
         LOG("arms: colour filter off hook %d", patch(A(0x101177D0), proB, 5, (void*)&Hook_EnvBloom, (void**)&o_EnvBloom)); }
     if (c.noRimLight) LOG("arms: rim light off hook %d", patch(A(0x10119100), pro, 6, (void*)&Hook_EnvLight, (void**)&o_EnvLight));
+    if (!c.gameAimAssist) { static const uint8_t proH[10] = { 0x8B, 0x44, 0x24, 0x04, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00 };   // mov eax,[esp+4]; sub esp,80h
+        LOG("arms: game aim assist off hook %d", patch(A(0x107DA700), proH, 10, (void*)&Hook_AimHelp, (void**)&o_AimHelp)); }
+    if (c.useFromHead) {
+        static const uint8_t proU[6] = { 0x81, 0xEC, 0xC4, 0x00, 0x00, 0x00 };   // sub esp,0C4h
+        bool u1 = patch(A(0x1009E460), proU, 6, (void*)&Hook_UseMon, (void**)&o_UseMon);
+        bool u2 = u1 && PatchCallSite(0x1009CF12, 0x1048DCE0, (void*)&Use_BoxQuery, "interaction box");
+        bool u3 = u1 && PatchCallSite(0x1009D010, 0x1048DCB0, (void*)&Use_SphereQuery, "interaction sphere");
+        bool u4 = u1 && PatchCallSite(0x1009DC8C, 0x1009D480, (void*)&Use_IsUsable, "interaction usable check");
+        { static const uint8_t proC[7] = { 0x8B, 0x44, 0x24, 0x04, 0x83, 0xEC, 0x60 };   // mov eax,[esp+4]; sub esp,60h
+          LOG("arms: pickup view check from the head %d", patch(A(0x106C4E90), proC, 7, (void*)&Hook_CaseCheck, (void**)&o_CaseCheck)); }
+        if (c.useDiag) { static const uint8_t proS[7] = { 0x8A, 0x44, 0x24, 0x04, 0x88, 0x41, 0x34 };
+            LOG("arms: usable-answer probe %d", patch(A(0x102DC380), proS, 7, (void*)&Hook_SetUsable, (void**)&o_SetUsable)); }
+        LOG("arms: interaction from the head: monitor %d, box %d, sphere %d, check %d (diagnostic %d)", u1, u2, u3, u4, c.useDiag);
+    }
     {   static const uint8_t proP[6] = { 0x83, 0xEC, 0x18, 0x56, 0x8B, 0xF1 };   // sub esp,18h; push esi; mov esi,ecx
         bool m1 = patch(A(0x1072C260), pro, 6, (void*)&Hook_MonoUpd, (void**)&o_MonoUpd);
         bool m2 = patch(A(0x1010D780), proP, 6, (void*)&Hook_AimPos, (void**)&o_AimPos);
@@ -3446,6 +3855,8 @@ float AimDistance() { return g_aimTick && GetTickCount() - g_aimTick < 300 ? g_a
 bool SightRay(float o[3], float d[3], RayContext* context) { if (!g_csInit) return false; fc2vr::authority::Stamp source; void* weapon;
     Lock(); bool ok = g_shotValid && g_rayTick && GetTickCount()-g_rayTick < 200; source = g_shotSource; weapon = g_shotWeapon;
     memcpy(o,g_rayRefO,12); memcpy(d,g_rayRefD,12); if (context) *context = {source,weapon}; Unlock(); return ok && ShotCurrent(source,weapon); }
+bool SightFrame(float o[3], float d[3], float u[3]) {   // v234: the sight line plus its up direction, fixed to the held weapon (ref frame)
+    if (!g_csInit) return false; Lock(); bool ok = g_rayTick && GetTickCount() - g_rayTick < 200; memcpy(o, g_rayRefO, 12); memcpy(d, g_rayRefD, 12); memcpy(u, g_rayRefU, 12); Unlock(); return ok; }
 static bool MonoAimRay(float o[3], float d[3]) {
     if (!g_inMonoUpd || !controls::MonocularAtFace() || !g_csInit) return false;
     Lock(); bool ok = g_scopeTick && GetTickCount() - g_scopeTick < 250; memcpy(o, g_scopeO, 12); memcpy(d, g_scopeD, 12); Unlock();
@@ -3472,6 +3883,25 @@ bool MonoTarget() { return g_monoTarget && GetTickCount() - g_monoTargetTick < 3
 void SetScopeRay(const float o[3], const float d[3], const RayContext& context) { if (!g_csInit) return;
     Lock(); memcpy(g_scopeO,o,12); memcpy(g_scopeD,d,12); g_scopeSource = context.source; g_scopeWeapon = context.weapon; g_scopeTick = GetTickCount(); Unlock(); }
 void* CurrentWeapon() { return g_curWeapon; }
+// v234 test 70: whether the held weapon is a melee weapon (its strategy is the melee one, vtable 0x10E21DE0): 1 yes,
+// 0 no, -1 nothing held / not readable. The machete used to be taken from the weapon-slot guess, which a game-side
+// switch can leave on the machete while the crossbow is held - then the machete hand angles tilted the crossbow and a
+// hold taken then (left grip + A) was saved tilted.
+int HeldMelee() {
+    uint8_t* w = (uint8_t*)g_curWeapon;
+    static uint8_t* lastW = nullptr; static int last = -1;
+    if (!w) return -1;
+    if (w == lastW && last >= 0) return last;
+    int r = -1;
+    if (!IsBadReadPtr(w + 0x24, 4)) {
+        uint8_t* a = *(uint8_t**)(w + 0x24);
+        uint8_t* strat = a && !IsBadReadPtr(a + 0x54, 4) ? *(uint8_t**)(a + 0x54) : nullptr;
+        if (strat && !IsBadReadPtr(strat, 4)) r = *(uintptr_t*)strat == A(0x10E21DE0) ? 1 : 0;
+        else if (a) r = 0;
+    }
+    if (r >= 0) { if (w != lastW) LOG("arms: held weapon %p is %s", w, r ? "a melee weapon (machete)" : "not a melee weapon"); lastW = w; last = r; }
+    return r;
+}
 void SetMachete(float angle, float yaw, float roll) { g_c.macheteAngle = angle; g_c.macheteYaw = yaw; g_c.macheteRoll = roll; }
 void GetMachete(float& angle, float& yaw, float& roll) { angle = g_c.macheteAngle; yaw = g_c.macheteYaw; roll = g_c.macheteRoll; }
 void SetMapHands(float angle, float yaw, float roll) { g_c.mapAngle = angle; g_c.mapYaw = yaw; g_c.mapRoll = roll; }

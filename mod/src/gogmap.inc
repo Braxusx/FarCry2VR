@@ -1,14 +1,26 @@
 // generated from the offline Steam->GOG Dunia.dll map (scratchpad/gog/map1.txt); sorted by Steam VA
 static const uint32_t kGogMap[][2] = {
     { 0x10032EE0, 0x10033010 },   // quat rotate vec (v216)
+    { 0x100488B0, 0x10048900 },   // partner (pre-order) content check - predecessor missions (v234)
+    { 0x100488D0, 0x100489A0 },   // bonus machetes check (v234)
     { 0x100506F0, 0x100505F0 },
     { 0x10050F30, 0x10050E30 },
     { 0x10060890, 0x10060050 },
+    { 0x10067170, 0x100669A0 },   // vehicle ApplyHealthDamage (v234)
     { 0x1007F3E0, 0x1007EB00 },
+    { 0x1007F440, 0x1007EB60 },   // entity -> CVehicle (v234)
+    { 0x1009CF12, 0x1009C182 },   // interaction box query call (v234)
+    { 0x1009D010, 0x1009C280 },   // interaction sphere query call (v234)
+    { 0x1009D480, 0x1009C690 },   // interaction: ask one candidate (v234)
+    { 0x1009DC8C, 0x1009CE6C },   // interaction: usable check call (v234)
+    { 0x1009E460, 0x1009D640 },   // interaction monitor update (v234)
     { 0x100A0460, 0x1009F640 },
     { 0x100A04E0, 0x1009F6C0 },
     { 0x100D7B10, 0x100D6B20 },
     { 0x100EA6C0, 0x100E9490 },
+    { 0x101075F0, 0x10106840 },   // vehicle engine explode (v234)
+    { 0x10107B00, 0x10106D50 },   // vehicle engine kill (v234)
+    { 0x10107BF0, 0x10106E40 },   // vehicle explosion trigger (v234)
     { 0x1010D780, 0x1010CA50 },   // aim bone position (v216)
     { 0x1010D850, 0x1010CB20 },   // aim bone rotation (v216)
     { 0x10112600, 0x10111900 },
@@ -61,6 +73,7 @@ static const uint32_t kGogMap[][2] = {
     { 0x103766A0, 0x103686B0 },
     { 0x10379C36, 0x1036BC76 },
     { 0x1037F860, 0x10371930 },
+    { 0x1038110E, 0x1037311E },   // buffer allocator: call [IsBadWritePtr] (v234 test 62)
     { 0x1038E6E0, 0x103805B0 },
     { 0x10395E40, 0x10387BF0 },
     { 0x10396CB0, 0x10388A40 },
@@ -89,6 +102,8 @@ static const uint32_t kGogMap[][2] = {
     { 0x104204A0, 0x10412660 },
     { 0x1042060C, 0x104127CC },
     { 0x10420D50, 0x10412F10 },
+    { 0x1042167D, 0x1041383D },   // D3D10 device setup: call [CreateDXGIFactory] (v234 test 56)
+    { 0x104216E4, 0x104138A4 },   // D3D10 device setup: mov eax,[D3D10CreateDevice1] (v234 test 57 DXVK)
     { 0x104324B0, 0x10424E70 },
     { 0x10449550, 0x1043B920 },
     { 0x10455410, 0x10447880 },   // render setting get (bloom)
@@ -96,6 +111,7 @@ static const uint32_t kGogMap[][2] = {
     { 0x10459550, 0x10445EF0 },   // light manager: free
     { 0x104596F0, 0x1044BB40 },   // light manager: get
     { 0x1048DCB0, 0x10480120 },
+    { 0x1048DCE0, 0x10480150 },   // physics box query (v234)
     { 0x1048DD30, 0x104801A0 },
     { 0x1048E790, 0x10480C00 },
     { 0x1048EC40, 0x104810D0 },
@@ -123,9 +139,14 @@ static const uint32_t kGogMap[][2] = {
     { 0x1064EC50, 0x10640ED0 },
     { 0x106933E0, 0x10685AB0 },
     { 0x10693C00, 0x106862D0 },
+    { 0x106A9130, 0x1069B820 },   // malaria component update (v234)
+    { 0x106A94B0, 0x1069BBA0 },   // malaria update call site (v234)
+    { 0x106C4E90, 0x106B7720 },   // pickup view check (diamond cases) (v234)
     { 0x106EFB40, 0x106E2420 },   // CGadgetMapStrategy::EquipMonocular (v213)
     { 0x1072C260, 0x1071ED80 },   // binoculars update (v216)
     { 0x1072DFD0, 0x10720B10 },
+    { 0x1074E465, 0x10740F55 },   // Jackal tape pick-up: 'already taken' branch (v234)
+    { 0x107DA700, 0x107CDE30 },   // pad aim helpers apply (v234)
     { 0x1080AF10, 0x107FE190 },
     { 0x1080BB30, 0x107FEDB0 },
     { 0x10831C30, 0x108251A0 },
@@ -158,6 +179,7 @@ static const uint32_t kGogMap[][2] = {
     { 0x10FDF190, 0x10F2E890 },
     { 0x10FDF194, 0x10F2E894 },
     { 0x10FDF1AC, 0x10F2E8AC },
+    { 0x10FE4174, 0x10F33874 },   // environment manager instance (v234 map clock)
     { 0x10FE4DA4, 0x10F344A4 },
     { 0x11609560, 0x11558950 },
     { 0x11609668, 0x11558A58 },

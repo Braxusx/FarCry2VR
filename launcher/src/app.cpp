@@ -88,6 +88,8 @@ static const Setting kSettings[] = {
     { 0, "Upscaling & anti-aliasing", L"DlssPreset", "DLSS preset", "K and J are the tested models. M suits Performance and L suits Ultra Performance; \"NVIDIA recommended\" picks K, M or L by mode.", SCombo, 0, 0, nullptr, 0, kPreset, 5, "11" },
     { 0, "Performance", L"ShareShadows", "Shared shadow maps", "The sun's shadows are drawn once and used by both eyes. A big saving in busy areas; looks the same.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
     { 0, "Performance", L"Afw", "AFW (alternate frame warping)", "Renders one eye per frame and rebuilds the other: much lighter, with some artefacts in motion. Works with DLAA only (not the upscaling modes).", SCheck, 0, 0, nullptr, 0, nullptr, 0, "0" },
+    { 0, "Performance", L"CpuPlacement", "Best CPU cores", "Keeps the game on the CPU's fastest cores for games: the performance cores on Intel CPUs with E-cores, the 3D V-Cache cores on AMD X3D CPUs. Other programs keep the rest.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
+    { 0, "Performance", L"CpuPriority", "Higher game priority", "Runs the game above normal priority, so background programs can't hold it up.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "0" },
     { 0, "Performance", L"CullMode", "Culling", "How the game decides what's in view for both eyes.", SCombo, 0, 0, nullptr, 0, kCull, 4, "1" },
     { 0, "Shadows", L"ShadowRadialScale", "Sharp shadow reach", "How far around you sun shadows stay sharp (game: 20 m). Lower it for frame rate.", SSlider, 1.0f, 10.0f, "%.0f m", 20, nullptr, 0, "7.0" },
     { 0, "Shadows", L"ShadowMapSize", "Shadow resolution", nullptr, SCombo, 0, 0, nullptr, 0, kShadowRes, 2, "2720" },
@@ -139,6 +141,33 @@ static void SavePrefs() {
     SetPref(L"Cheats", L"NoGunJam", o.noJam ? L"1" : L"0"); SetPref(L"Cheats", L"UnlockAllWeapons", o.allWeapons ? L"1" : L"0");
     SetPref(L"Cheats", L"SkipIntroMovies", o.skipIntro ? L"1" : L"0");
 }
+// v234 options: ini key, label, help, default, inverted (the checkbox means "0" in the ini)
+struct V234Opt { const wchar_t* key; const char* label; const char* help; const wchar_t* def; bool inv; bool on; };
+static V234Opt g_v234Game[] = {
+    { L"MalariaAttacks", "No malaria attacks", "No timed malaria attacks while you play. Attacks the story itself triggers still happen.", L"1", true, false },
+    { L"UnlimitedPills", "Unlimited malaria pills", "Your malaria pills never run out.", L"0", false, false },
+    { L"IndestructibleBuggy", "Indestructible dune buggy", "The dune buggy takes no damage and never breaks down or explodes.", L"0", false, false },
+    { L"IndestructibleGlider", "Indestructible hang glider", "The hang glider takes no damage and never breaks down or explodes.", L"0", false, false },
+    { L"IndestructibleATV", "Indestructible ATV", "The ATV (Fortune's Pack) takes no damage and never breaks down or explodes.", L"0", false, false },
+    { L"PredecessorMissions", "Predecessor missions", "Unlocks the 7 Intel predecessor missions (an anonymous phone call in the central town).", L"1", false, true },
+    { L"BonusMachetes", "Bonus machetes", "Unlocks the Primitive and Homemade machetes: main menu > Options > Game > Machete Type.", L"1", false, true },
+    { L"JackalTapeFix", "Jackal tape fix", "Fixes Jackal tape #9 repeating on the southern map (a patch 1.03 bug).", L"1", false, true },
+    { L"HeadsetBodyYaw", "Turn the body with your head", "Turning physically with the headset turns your character's body too (on foot). Steam version only.", L"0", false, false },
+    { L"GrassHeadYawFix", "Steady grass when turning", "Keeps grass from swinging around when you turn physically. Needs \"Turn the body with your head\". Steam version only.", L"0", false, false },
+};
+static V234Opt g_v234Hud[] = {
+    { L"AmmoPanel", "Ammo counter on the gun", "Rounds in the clip and spare rounds, beside the gun in your right hand.", L"1", false, true },
+    { L"GrenadePanel", "Grenade counter", "Grenades / molotovs left, by your left hand for a few seconds when you aim a throw.", L"1", false, true },
+    { L"MapClock", "Clock under the map", "The time of day under the map.", L"1", false, true },
+    { L"MapClock24h", "24-hour clock", "Shows the clock as 17:42 instead of 5:42 PM.", L"0", false, false },
+    { L"MapHealth", "Health and syrettes under the map", "Your health bar and syrettes beside the clock under the map.", L"1", false, true },
+};
+static void ReadV234(V234Opt* o, int n) { for (int i = 0; i < n; ++i) { bool v = IniGet(g_app.game, o[i].key, o[i].def) != L"0"; o[i].on = o[i].inv ? !v : v; } }
+static bool DrawV234(V234Opt* o, int n) {
+    bool changed = false;
+    for (int i = 0; i < n; ++i) if (theme::Checkbox(o[i].label, &o[i].on, o[i].help)) { bool v = o[i].inv ? !o[i].on : o[i].on; IniSet(g_app.game, o[i].key, v ? L"1" : L"0"); changed = true; }
+    return changed;
+}
 static void ReadOptional() {
     if (!g_app.state.iniExists) return;
     g_app.optClimb = IniGet(g_app.game, L"Climbing", L"0") != L"0";
@@ -148,6 +177,7 @@ static void ReadOptional() {
     g_app.optFlash = IniGet(g_app.game, L"Flashlight", L"0") != L"0";
     g_app.optNoFilter = IniGet(g_app.game, L"NoColorFilter", L"0") != L"0";
     g_app.optNoRim = IniGet(g_app.game, L"NoRimLight", L"0") != L"0";
+    ReadV234(g_v234Game, (int)(sizeof g_v234Game / sizeof g_v234Game[0])); ReadV234(g_v234Hud, (int)(sizeof g_v234Hud / sizeof g_v234Hud[0]));
 }
 static void SelectGame(const Game& g) {
     g_app.game = g; g_app.state = Check(g); g_set.loaded = false;
@@ -314,6 +344,22 @@ static void PageOverviewDraw(HWND hwnd) {
             ImGui::Unindent(14 * g_scale);
         }
         RuntimeSection();
+        {   // v234: the game's own video settings the VR mod needs
+            theme::Section("Game settings");
+            static ProfileCheck pc; static double lastCheck = -10;
+            if (ImGui::GetTime() - lastCheck > 2.0) { pc = CheckGameProfile(); lastCheck = ImGui::GetTime(); }
+            if (!pc.found) StatusLine('!', "Start Far Cry 2 once, then set DirectX 10, Anti-aliasing None and V-Sync Off in its options. (The launcher checks them once the game has made its settings file.)");
+            else if (pc.issues.empty()) StatusLine('+', "OK: DirectX 10, anti-aliasing off, V-Sync off.");
+            else {
+                for (const auto& i : pc.issues) StatusLine('!', i.c_str());
+                if (theme::Button("Fix game settings", true, !g_app.busy && !g_app.running)) {
+                    std::string err;
+                    if (FixGameProfile(err)) { g_app.notice = "Game settings fixed: DirectX 10, anti-aliasing off, V-Sync off. A backup of GamerProfile.xml was kept."; g_app.noticeCol = theme::Good(); lastCheck = -10; }
+                    else { g_app.notice = err; g_app.noticeCol = theme::Bad(); }
+                }
+                if (g_app.running) { ImGui::SameLine(); theme::Wrapped("Close the game to fix them.", theme::Faded()); }
+            }
+        }
         theme::Section("Shortcuts");
         if (theme::Button("Create desktop shortcut")) DesktopShortcut();
         ImGui::SameLine(); theme::Wrapped("A shortcut to this launcher. Play starts the game in VR from here.", theme::Faded());
@@ -425,6 +471,10 @@ static void PageOptionalDraw() {
         IniSet(g_app.game, L"NoRimLight", g_app.optNoRim ? L"1" : L"0");
         g_app.notice = "Saved. Takes effect the next time the game starts."; g_app.noticeCol = theme::Good();
     }
+    theme::Section("VR HUD");
+    if (DrawV234(g_v234Hud, (int)(sizeof g_v234Hud / sizeof g_v234Hud[0]))) { g_app.notice = "Saved. Takes effect the next time the game starts."; g_app.noticeCol = theme::Good(); }
+    theme::Section("Gameplay");
+    if (DrawV234(g_v234Game, (int)(sizeof g_v234Game / sizeof g_v234Game[0]))) { g_app.notice = "Saved. Takes effect the next time the game starts."; g_app.noticeCol = theme::Good(); }
 }
 static void PageBindingsDraw() {
     std::wstring snap = g_app.state.iniExists ? IniGet(g_app.game, L"SnapTurn", L"0") : L"0";

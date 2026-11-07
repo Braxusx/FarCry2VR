@@ -59,6 +59,9 @@ static DXGI_FORMAT g_eyeChainFmt = DXGI_FORMAT_UNKNOWN;
 struct Shared {
     ID3D10Texture2D*  tex10 = nullptr;   // owned by the game's D3D10 device
     ID3D11Texture2D*  tex11 = nullptr;   // same memory opened on our D3D11 device
+    IDXGIKeyedMutex*  km10 = nullptr;    // v234 test 63: keyed mutex (texture made with SHARED_KEYEDMUTEX), D3D10 side
+    IDXGIKeyedMutex*  km11 = nullptr;    // and D3D11 side
+    bool held10 = false, held11 = false;
 };
 static Shared g_shared[5];   // 0,1 = eyes, 2 = screen quad, 3 = HUD, 4 = reticle
 
@@ -76,6 +79,10 @@ static Chain g_dot; static ID3D11Texture2D* g_dotTex = nullptr;
 static bool g_dotOn = false; static XrPosef g_dotPose{}; static float g_dotSize = 0.06f;
 static Chain g_menu; static ID3D11Texture2D* g_menuTex = nullptr; static bool g_menuOn = false, g_menuDirty = false; static XrPosef g_menuPose{}; static float g_menuWidth = 0.6f;
 static uint32_t g_menuPx[MenuW * MenuH];
+static Chain g_wammo; static ID3D11Texture2D* g_wammoTex = nullptr; static bool g_wammoDirty = false, g_wammoHave = false, g_wammoOn = false; static uint32_t g_wammoPx[WAmmoW * WAmmoH]; static XrPosef g_wammoPose{}; static float g_wammoWidth = 0.08f;
+static Chain g_gren; static ID3D11Texture2D* g_grenTex = nullptr; static bool g_grenDirty = false, g_grenHave = false, g_grenOn = false; static uint32_t g_grenPx[GrenW * GrenH]; static XrPosef g_grenPose{}; static float g_grenWidth = 0.05f;
+static Chain g_clk; static ID3D11Texture2D* g_clkTex = nullptr; static bool g_clkDirty = false, g_clkHave = false, g_clkOn = false; static uint32_t g_clkPx[ClockW * ClockH]; static XrPosef g_clkPose{}; static float g_clkWidth = 0.07f;
+static Chain g_hp; static ID3D11Texture2D* g_hpTex = nullptr; static bool g_hpDirty = false, g_hpHave = false, g_hpOn = false; static uint32_t g_hpPx[HealthW * HealthH]; static XrPosef g_hpPose{}; static float g_hpWidth = 0.07f;
 static Chain g_ammo; static ID3D11Texture2D* g_ammoTex = nullptr; static bool g_ammoDirty = false, g_ammoHave = false; static uint32_t g_ammoPx[AmmoW * AmmoH];
 // scope: round window + crosshair drawn over the (square-cropped) scope view
 static Chain g_vig; static ID3D11Texture2D* g_vigTex = nullptr; static ID3D11Texture2D* g_vigPlainTex = nullptr; static int g_scopeCross = 2;
@@ -214,7 +221,14 @@ static bool CreateD3D11(const LUID& luid) {
 
 static ID3D10Query* g_evt10 = nullptr;
 
-static bool CreateShared(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt) {
+static bool g_kmOk = true;   // every shared texture has a keyed mutex (else: the render thread waits for the GPU)
+static void ReleaseShared(Shared& s) {
+    if (s.km11 && s.held11) s.km11->ReleaseSync(0);
+    if (s.km10 && s.held10) s.km10->ReleaseSync(0);
+    s.held10 = s.held11 = false;
+    SafeRelease(s.km10); SafeRelease(s.km11); SafeRelease(s.tex10); SafeRelease(s.tex11);
+}
+static bool CreateSharedPlain(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt) {
     D3D10_TEXTURE2D_DESC td{};
     td.Width = w; td.Height = h; td.MipLevels = 1; td.ArraySize = 1;
     td.Format = fmt; td.SampleDesc.Count = 1; td.Usage = D3D10_USAGE_DEFAULT;
@@ -229,15 +243,56 @@ static bool CreateShared(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt) {
     if (FAILED(hr) || !sh) { LOG("XR: GetSharedHandle hr=%08lx", (unsigned long)hr); return false; }
     hr = g_dev11->OpenSharedResource(sh, __uuidof(ID3D11Texture2D), (void**)&s.tex11);
     if (FAILED(hr)) { LOG("XR: D3D11 OpenSharedResource hr=%08lx", (unsigned long)hr); return false; }
-    if (!g_evt10) {
-        D3D10_QUERY_DESC qd{ D3D10_QUERY_EVENT, 0 };
-        g_dev10->CreateQuery(&qd, &g_evt10);
-    }
     return true;
+}
+// v234 test 63: each shared texture carries its own keyed mutex, so the GPU orders every hand-over of that texture
+// between the two devices (test 54-56 used one separate 1x1 keyed-mutex texture as a fence; drivers only order the
+// resource the mutex belongs to, and a slower GPU showed the right eye - written last - from an unfinished frame).
+// Made on our D3D11 device and opened on the game's D3D10 device (the order that works; needs the DXGI 1.1 factory).
+static bool CreateSharedKM(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt, const char** stepOut, HRESULT* hrOut) {
+    const char* step = "D3D11 CreateTexture2D"; HANDLE sh = nullptr;
+    D3D11_TEXTURE2D_DESC td{}; td.Width = w; td.Height = h; td.MipLevels = td.ArraySize = 1; td.Format = fmt;
+    td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    td.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    HRESULT hr = g_dev11->CreateTexture2D(&td, nullptr, &s.tex11);
+    if (SUCCEEDED(hr)) { step = "GetSharedHandle"; IDXGIResource* r = nullptr; s.tex11->QueryInterface(__uuidof(IDXGIResource), (void**)&r); hr = r ? r->GetSharedHandle(&sh) : E_NOINTERFACE; if (r) r->Release(); }
+    if (SUCCEEDED(hr) && sh) { step = "D3D10 OpenSharedResource"; hr = g_dev10->OpenSharedResource(sh, __uuidof(ID3D10Texture2D), (void**)&s.tex10); }
+    if (SUCCEEDED(hr) && s.tex10) { step = "keyed mutex"; hr = s.tex10->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&s.km10); }
+    if (SUCCEEDED(hr) && s.km10) hr = s.tex11->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&s.km11);
+    if (SUCCEEDED(hr) && s.km11) { step = "first AcquireSync"; hr = s.km10->AcquireSync(0, 100); }
+    if (hr == S_OK) { s.held10 = true; return true; }
+    *stepOut = step; *hrOut = hr; ReleaseShared(s); return false;
+}
+static bool CreateShared(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt) {
+    if (!g_evt10) { D3D10_QUERY_DESC qd{ D3D10_QUERY_EVENT, 0 }; g_dev10->CreateQuery(&qd, &g_evt10); }
+    const char* step = ""; HRESULT hr = S_OK;
+    if (CreateSharedKM(s, w, h, fmt, &step, &hr)) return true;
+    LOG("XR: keyed-mutex shared texture %ux%u fmt %d failed (%s hr=%08lx) - plain shared texture, the render thread waits for the GPU", w, h, (int)fmt, step, (unsigned long)hr);
+    g_kmOk = false;
+    return CreateSharedPlain(s, w, h, fmt);
+}
+// v234 test 66: extra keyed-mutex textures other modules hand from the game's device to ours each frame (the DLSS
+// guides: depth, motion vectors, near-pass mask per eye); they join the same hand-over as g_shared
+static Shared g_extra[8];
+// v234 test 68: the same, but made on the game's D3D10 device and opened on ours (the way the plain DLSS guides were
+// always made); test 66/67 made them on D3D11, and the hands and weapon trembled under DLSS with those
+static bool CreateSharedKM10(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt, const char** stepOut, HRESULT* hrOut) {
+    const char* step = "D3D10 CreateTexture2D"; HANDLE sh = nullptr;
+    D3D10_TEXTURE2D_DESC td{}; td.Width = w; td.Height = h; td.MipLevels = td.ArraySize = 1; td.Format = fmt;
+    td.SampleDesc.Count = 1; td.Usage = D3D10_USAGE_DEFAULT; td.BindFlags = D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE;
+    td.MiscFlags = D3D10_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    HRESULT hr = g_dev10->CreateTexture2D(&td, nullptr, &s.tex10);
+    if (SUCCEEDED(hr)) { step = "GetSharedHandle"; IDXGIResource* r = nullptr; s.tex10->QueryInterface(__uuidof(IDXGIResource), (void**)&r); hr = r ? r->GetSharedHandle(&sh) : E_NOINTERFACE; if (r) r->Release(); }
+    if (SUCCEEDED(hr) && sh) { step = "D3D11 OpenSharedResource"; hr = g_dev11->OpenSharedResource(sh, __uuidof(ID3D11Texture2D), (void**)&s.tex11); }
+    if (SUCCEEDED(hr) && s.tex11) { step = "keyed mutex"; hr = s.tex10->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&s.km10); }
+    if (SUCCEEDED(hr) && s.km10) hr = s.tex11->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&s.km11);
+    if (SUCCEEDED(hr) && s.km11) { step = "first AcquireSync"; hr = s.km10->AcquireSync(0, 100); }
+    if (hr == S_OK) { s.held10 = true; return true; }
+    *stepOut = step; *hrOut = hr; ReleaseShared(s); return false;
 }
 
 // Make the D3D10 copies visible to D3D11: flush the game device and wait for its GPU work to finish.
-static void Sync10() {
+static void Sync10Wait() {
     if (!g_evt10) { g_dev10->Flush(); return; }
     g_evt10->End();
     g_dev10->Flush();
@@ -246,6 +301,57 @@ static void Sync10() {
         if (GetTickCount() - t0 > 100) break;
         YieldProcessor();
     }
+}
+// v234 test 54/63: GPU-side handover. The game's D3D10 device holds every shared texture's keyed mutex (key 0) while
+// it renders a frame. At the end it releases them with key 1 (queued behind its work), our D3D11 device acquires key 1
+// (the GPU waits, the CPU goes on), copies, releases key 0, and D3D10 takes key 0 back at once, so its next writes wait
+// on the GPU for our copies. The render thread no longer waits for the GPU. EndFrameWait=1: it also waits as before.
+static bool g_gpuHandover = false;   // ini EndFrameWait=0
+static double g_hoMs = 0, g_hoMax = 0; static int g_hoN = 0; static bool g_hoLastGpu = false;
+static EyeFilter g_eyeFilter = nullptr; static bool g_copyBack = false, g_plainSharing = false;
+// after our D3D11 work on the shared textures: give them back to D3D10
+template <class F> static void ForAllShared(F f) { for (Shared& s : g_shared) f(s); for (Shared& s : g_extra) f(s); }
+// v234 test 69: with the GPU hand-over the render thread can run a whole frame ahead of a busy GPU; then frames reach
+// the headset late, the runtime re-projects them for the head only, and what the controllers hold (arms, weapon)
+// trembles (Pala, DLAA, GPU near its limit). A query after our copies marks the end of each frame's GPU work; the next
+// frame's hand-over waits for the previous one, so at most one frame is in flight (FrameAheadLimit=0: no limit).
+static ID3D11Query* g_frameQ[2] = {}; static bool g_frameQPending[2] = {}; static int g_frameQi = 0; static bool g_frameAheadLimit = true;
+static double g_aheadMs = 0, g_aheadMax = 0; static int g_aheadN = 0, g_aheadWaits = 0;
+static void FrameQueryMark() {
+    if (!g_frameQ[g_frameQi]) { D3D11_QUERY_DESC qd{ D3D11_QUERY_EVENT, 0 }; if (FAILED(g_dev11->CreateQuery(&qd, &g_frameQ[g_frameQi]))) return; }
+    g_ctx11->End(g_frameQ[g_frameQi]); g_frameQPending[g_frameQi] = true; g_frameQi ^= 1;
+}
+static void FrameQueryWaitPrevious() {
+    const int p = g_frameQi ^ 1;   // the query issued at the end of the previous frame
+    if (!g_frameAheadLimit || !g_frameQ[p] || !g_frameQPending[p]) return;
+    double t0 = QpcMs(); BOOL done = FALSE; bool waited = false;
+    while (g_ctx11->GetData(g_frameQ[p], &done, sizeof done, 0) == S_FALSE) { waited = true; if (QpcMs() - t0 > 100) break; YieldProcessor(); }
+    g_frameQPending[p] = false;
+    double d = QpcMs() - t0; g_aheadMs += d; if (d > g_aheadMax) g_aheadMax = d; ++g_aheadN; if (waited) ++g_aheadWaits;
+}
+static void HandoverDone() {
+    bool had = false;
+    ForAllShared([&had](Shared& s) { if (s.km11 && s.held11) { s.km11->ReleaseSync(0); s.held11 = false; had = true; } });
+    if (had) FrameQueryMark();
+    ForAllShared([](Shared& s) { if (s.km10 && !s.held10) {
+        if (s.km10->AcquireSync(0, 100) == S_OK) s.held10 = true;
+        else LOG("XR: handover: D3D10 could not take a shared texture back");
+    } });
+}
+static void Sync10() {
+    HandoverDone();
+    double t0 = QpcMs();
+    // DLSS / AFW move more textures between the devices (plain shared ones): those still need the GPU to be done
+    const bool wait = !g_gpuHandover || !g_kmOk || g_plainSharing || g_copyBack;
+    if (wait) Sync10Wait(); else { g_dev10->Flush(); FrameQueryWaitPrevious(); }
+    ForAllShared([](Shared& s) { if (s.km10 && s.held10) { s.km10->ReleaseSync(1); s.held10 = false; } });
+    g_dev10->Flush();
+    ForAllShared([](Shared& s) { if (s.km11 && !s.held11) {
+        HRESULT hr = s.km11->AcquireSync(1, 100);
+        if (hr == S_OK) s.held11 = true;
+        else { static int n = 0; if (n++ < 5) LOG("XR: handover: D3D11 acquire hr=%08lx", (unsigned long)hr); }
+    } });
+    double d = QpcMs() - t0; g_hoMs += d; if (d > g_hoMax) g_hoMax = d; ++g_hoN; g_hoLastGpu = !wait;
 }
 
 static bool CreateChain(Chain& c, int32_t w, int32_t h, int64_t fmt) {
@@ -556,8 +662,10 @@ void Haptic(int side, float amplitude, float seconds, float frequency) {
 // ---------------------------------------------------------------- init
 static void Teardown() {
     InvalidateInput("teardown",true); g_referenceChanges.clear(); ++g_spaceGeneration;
-    for (int i = 0; i < 5; ++i) { SafeRelease(g_shared[i].tex10); SafeRelease(g_shared[i].tex11); }
-    g_hud = Chain{}; g_ret = Chain{}; g_dot = Chain{}; SafeRelease(g_dotTex); g_menu = Chain{}; SafeRelease(g_menuTex); g_ammo = Chain{}; SafeRelease(g_ammoTex); g_vig = Chain{}; SafeRelease(g_vigTex); SafeRelease(g_vigPlainTex); SafeRelease(g_vigMonoTex[0]); SafeRelease(g_vigMonoTex[1]);
+    for (int i = 0; i < 5; ++i) ReleaseShared(g_shared[i]);
+    for (Shared& e : g_extra) ReleaseShared(e);
+    for (auto& q : g_frameQ) SafeRelease(q); g_frameQPending[0] = g_frameQPending[1] = false;
+    g_hud = Chain{}; g_ret = Chain{}; g_dot = Chain{}; SafeRelease(g_dotTex); g_menu = Chain{}; SafeRelease(g_menuTex); g_ammo = Chain{}; SafeRelease(g_ammoTex); g_wammo = Chain{}; SafeRelease(g_wammoTex); g_gren = Chain{}; SafeRelease(g_grenTex); g_clk = Chain{}; SafeRelease(g_clkTex); g_hp = Chain{}; SafeRelease(g_hpTex); g_vig = Chain{}; SafeRelease(g_vigTex); SafeRelease(g_vigPlainTex); SafeRelease(g_vigMonoTex[0]); SafeRelease(g_vigMonoTex[1]);
     g_eye[0] = Chain{}; g_eye[1] = Chain{}; g_screen = Chain{};
     if (g_inst && p_xrDestroyInstance) p_xrDestroyInstance(g_inst);   // also destroys session/space/swapchains
     g_inst = XR_NULL_HANDLE; g_sess = XR_NULL_HANDLE; g_local = XR_NULL_HANDLE; g_view = XR_NULL_HANDLE; g_sys = XR_NULL_SYSTEM_ID;
@@ -681,12 +789,32 @@ static bool SwapchainsImpl(const D3D10_TEXTURE2D_DESC& eye, const D3D10_TEXTURE2
     for (int i = 0; i < 2; ++i) if (!CreateShared(g_shared[i], g_eyeW, g_eyeH, g_eyeFormat)) { snprintf(g_err, sizeof(g_err), "shared eye texture %d failed", i); return false; }
     if (!CreateShared(g_shared[2], g_w, g_h, g_bbFormat)) { snprintf(g_err, sizeof(g_err), "shared screen texture failed"); return false; }
     if (CreateChain(g_hud, (int32_t)g_eyeW, (int32_t)g_eyeH, fe) && CreateShared(g_shared[3], g_eyeW, g_eyeH, g_eyeFormat)) LOG("XR: HUD layer %ux%u ready", g_eyeW, g_eyeH);
-    else { LOG("XR: HUD layer unavailable"); SafeRelease(g_shared[3].tex10); SafeRelease(g_shared[3].tex11); }
+    else { LOG("XR: HUD layer unavailable"); ReleaseShared(g_shared[3]); }
     if (CreateChain(g_ret, (int32_t)g_eyeW, (int32_t)g_eyeH, fe) && CreateShared(g_shared[4], g_eyeW, g_eyeH, g_eyeFormat)) LOG("XR: reticle layer ready");
     if (CreateChain(g_ammo, AmmoW, AmmoH, fe)) {
         D3D11_TEXTURE2D_DESC td{}; td.Width = AmmoW; td.Height = AmmoH; td.MipLevels = td.ArraySize = 1; td.Format = (DXGI_FORMAT)fe;
         td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         if (FAILED(g_dev11->CreateTexture2D(&td, nullptr, &g_ammoTex))) g_ammoTex = nullptr;
+    }
+    if (CreateChain(g_wammo, WAmmoW, WAmmoH, fe)) {
+        D3D11_TEXTURE2D_DESC td{}; td.Width = WAmmoW; td.Height = WAmmoH; td.MipLevels = td.ArraySize = 1; td.Format = (DXGI_FORMAT)fe;
+        td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(g_dev11->CreateTexture2D(&td, nullptr, &g_wammoTex))) g_wammoTex = nullptr;
+    }
+    if (CreateChain(g_gren, GrenW, GrenH, fe)) {
+        D3D11_TEXTURE2D_DESC td{}; td.Width = GrenW; td.Height = GrenH; td.MipLevels = td.ArraySize = 1; td.Format = (DXGI_FORMAT)fe;
+        td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(g_dev11->CreateTexture2D(&td, nullptr, &g_grenTex))) g_grenTex = nullptr;
+    }
+    if (CreateChain(g_clk, ClockW, ClockH, fe)) {
+        D3D11_TEXTURE2D_DESC td{}; td.Width = ClockW; td.Height = ClockH; td.MipLevels = td.ArraySize = 1; td.Format = (DXGI_FORMAT)fe;
+        td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(g_dev11->CreateTexture2D(&td, nullptr, &g_clkTex))) g_clkTex = nullptr;
+    }
+    if (CreateChain(g_hp, HealthW, HealthH, fe)) {
+        D3D11_TEXTURE2D_DESC td{}; td.Width = HealthW; td.Height = HealthH; td.MipLevels = td.ArraySize = 1; td.Format = (DXGI_FORMAT)fe;
+        td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(g_dev11->CreateTexture2D(&td, nullptr, &g_hpTex))) g_hpTex = nullptr;
     }
     if (CreateChain(g_menu, MenuW, MenuH, fe)) {
         D3D11_TEXTURE2D_DESC td{}; td.Width = MenuW; td.Height = MenuH; td.MipLevels = td.ArraySize = 1; td.Format = (DXGI_FORMAT)fe;
@@ -758,13 +886,21 @@ static bool SwapchainsImpl(const D3D10_TEXTURE2D_DESC& eye, const D3D10_TEXTURE2
             if (FAILED(g_dev11->CreateTexture2D(&td, &sd, &g_vigMonoTex[k]))) g_vigMonoTex[k] = nullptr;
         }
     }
-    else { LOG("XR: reticle layer unavailable"); SafeRelease(g_shared[4].tex10); SafeRelease(g_shared[4].tex11); }
+    else { LOG("XR: reticle layer unavailable"); ReleaseShared(g_shared[4]); }
     g_ready = true; g_fatal = false;
     LOG("XR: ready");
     return true;
 }
 
 ID3D10Texture2D* HudTexture() { return g_shared[3].tex10; }
+void SetWeaponAmmoImage(const uint32_t* px) { if (px) { memcpy(g_wammoPx, px, sizeof g_wammoPx); g_wammoDirty = true; g_wammoHave = true; } }
+void SetWeaponAmmoLayer(const XrPosef& pose, float width) { if (g_wammo.sc && g_wammoTex && g_wammoHave) { g_wammoOn = true; g_wammoPose = pose; g_wammoWidth = width; } }
+void SetGrenadeImage(const uint32_t* px) { if (px) { memcpy(g_grenPx, px, sizeof g_grenPx); g_grenDirty = true; g_grenHave = true; } }
+void SetGrenadeLayer(const XrPosef& pose, float width) { if (g_gren.sc && g_grenTex && g_grenHave) { g_grenOn = true; g_grenPose = pose; g_grenWidth = width; } }
+void SetClockImage(const uint32_t* px) { if (px) { memcpy(g_clkPx, px, sizeof g_clkPx); g_clkDirty = true; g_clkHave = true; } }
+void SetClockLayer(const XrPosef& pose, float width) { if (g_clk.sc && g_clkTex && g_clkHave) { g_clkOn = true; g_clkPose = pose; g_clkWidth = width; } }
+void SetHealthImage(const uint32_t* px) { if (px) { memcpy(g_hpPx, px, sizeof g_hpPx); g_hpDirty = true; g_hpHave = true; } }
+void SetHealthLayer(const XrPosef& pose, float width) { if (g_hp.sc && g_hpTex && g_hpHave) { g_hpOn = true; g_hpPose = pose; g_hpWidth = width; } }
 void SetAmmoImage(const uint32_t* px) { if (px) { memcpy(g_ammoPx, px, sizeof g_ammoPx); g_ammoDirty = true; g_ammoHave = true; } }
 void SetMenu(const uint32_t* px, const XrPosef& pose, float width) {
     if (!g_menu.sc || !g_menuTex) return;
@@ -842,6 +978,7 @@ static bool WaitBegin(XrFrameState& fs) {
 }
 
 bool BeginFrame(FrameViews& out) {
+    HandoverDone();   // the game's device must hold the shared textures before it writes them this frame
     out = FrameViews{};
     if (!SessionRunning() || g_frameBegun) return false;
     XrFrameState fs{ XR_TYPE_FRAME_STATE };
@@ -1028,11 +1165,17 @@ static void DrawArc(ID3D11Texture2D* tex, int e, const XrRect2Di& rect) {
     g_ctx11->Draw(nv, 0);
     ID3D11RenderTargetView* none = nullptr; g_ctx11->OMSetRenderTargets(1, &none, nullptr);
 }
-static EyeFilter g_eyeFilter = nullptr;
 void SetEyeFilter(EyeFilter f) { g_eyeFilter = f; }
 // the eye image, or what the filter (DLSS) made of it
-static bool g_copyBack = false; static ID3D11Query* g_copyQ = nullptr; static bool g_copyPending = false;
+static ID3D11Query* g_copyQ = nullptr; static bool g_copyPending = false;
 void SetCopyBack(bool on) { g_copyBack = on; }
+void SetPlainSharing(bool on) { g_plainSharing = on; }
+void SetFrameAheadLimit(bool on) { g_frameAheadLimit = on; }
+bool FrameAheadStats(double& avgMs, double& maxMs, int& frames, int& waits) {
+    if (!g_aheadN) return false;
+    avgMs = g_aheadMs / g_aheadN; maxMs = g_aheadMax; frames = g_aheadN; waits = g_aheadWaits;
+    g_aheadMs = g_aheadMax = 0; g_aheadN = g_aheadWaits = 0; return true;
+}
 ID3D10Texture2D* EyeTexture10(int e) { return (e == 0 || e == 1) ? g_shared[e].tex10 : nullptr; }
 // the D3D10 device may read the eye textures again once the D3D11 copy-backs of the last frame are done
 void WaitEyeCopies() {
@@ -1127,8 +1270,8 @@ void EndFrame(const FrameViews& fv, bool submittedEyes) {
     XrCompositionLayerProjection layer{ XR_TYPE_COMPOSITION_LAYER_PROJECTION };
     XrCompositionLayerQuad hq{ XR_TYPE_COMPOSITION_LAYER_QUAD };
     XrCompositionLayerQuad rq{ XR_TYPE_COMPOSITION_LAYER_QUAD };
-    XrCompositionLayerQuad dq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, mq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, bq{ XR_TYPE_COMPOSITION_LAYER_QUAD };
-    const XrCompositionLayerBaseHeader* layers[6] = { (XrCompositionLayerBaseHeader*)&layer, nullptr, nullptr, nullptr, nullptr, nullptr };
+    XrCompositionLayerQuad dq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, mq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, bq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, wq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, gq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, cq{ XR_TYPE_COMPOSITION_LAYER_QUAD }, hq2{ XR_TYPE_COMPOSITION_LAYER_QUAD };
+    const XrCompositionLayerBaseHeader* layers[11] = { (XrCompositionLayerBaseHeader*)&layer, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
     uint32_t layerCount = 0;
     if (submittedEyes && fv.valid && fv.shouldRender) {
         if (g_hudOn && g_hudBandOn && g_hudDrop > 0) HudBandScan();
@@ -1191,6 +1334,46 @@ void EndFrame(const FrameViews& fv, bool submittedEyes) {
                 dq.pose = g_dotPose; dq.size = { g_dotSize, g_dotSize };
                 layers[layerCount++] = (XrCompositionLayerBaseHeader*)&dq;
             }
+            if (g_wammoOn && g_wammo.sc && g_wammoTex) {   // v234: ammo panel beside the weapon
+                if (g_wammoDirty) { g_ctx11->UpdateSubresource(g_wammoTex, 0, nullptr, g_wammoPx, WAmmoW * 4, 0); g_wammoDirty = false; }
+                if (BlitStatic(g_wammo, g_wammoTex)) {
+                    wq.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                    wq.space = g_local; wq.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+                    wq.subImage.swapchain = g_wammo.sc; wq.subImage.imageRect.extent = { g_wammo.w, g_wammo.h };
+                    wq.pose = g_wammoPose; wq.size = { g_wammoWidth, g_wammoWidth * (float)WAmmoH / (float)WAmmoW };
+                    layers[layerCount++] = (XrCompositionLayerBaseHeader*)&wq;
+                }
+            }
+            if (g_grenOn && g_gren.sc && g_grenTex) {   // v234: grenade counter by the left hand
+                if (g_grenDirty) { g_ctx11->UpdateSubresource(g_grenTex, 0, nullptr, g_grenPx, GrenW * 4, 0); g_grenDirty = false; }
+                if (BlitStatic(g_gren, g_grenTex)) {
+                    gq.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                    gq.space = g_local; gq.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+                    gq.subImage.swapchain = g_gren.sc; gq.subImage.imageRect.extent = { g_gren.w, g_gren.h };
+                    gq.pose = g_grenPose; gq.size = { g_grenWidth, g_grenWidth * (float)GrenH / (float)GrenW };
+                    layers[layerCount++] = (XrCompositionLayerBaseHeader*)&gq;
+                }
+            }
+            if (g_hpOn && g_hp.sc && g_hpTex) {   // v234: health + syrettes under the GPS
+                if (g_hpDirty) { g_ctx11->UpdateSubresource(g_hpTex, 0, nullptr, g_hpPx, HealthW * 4, 0); g_hpDirty = false; }
+                if (BlitStatic(g_hp, g_hpTex)) {
+                    hq2.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                    hq2.space = g_local; hq2.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+                    hq2.subImage.swapchain = g_hp.sc; hq2.subImage.imageRect.extent = { g_hp.w, g_hp.h };
+                    hq2.pose = g_hpPose; hq2.size = { g_hpWidth, g_hpWidth * (float)HealthH / (float)HealthW };
+                    layers[layerCount++] = (XrCompositionLayerBaseHeader*)&hq2;
+                }
+            }
+            if (g_clkOn && g_clk.sc && g_clkTex) {   // v234: clock under the map
+                if (g_clkDirty) { g_ctx11->UpdateSubresource(g_clkTex, 0, nullptr, g_clkPx, ClockW * 4, 0); g_clkDirty = false; }
+                if (BlitStatic(g_clk, g_clkTex)) {
+                    cq.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                    cq.space = g_local; cq.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+                    cq.subImage.swapchain = g_clk.sc; cq.subImage.imageRect.extent = { g_clk.w, g_clk.h };
+                    cq.pose = g_clkPose; cq.size = { g_clkWidth, g_clkWidth * (float)ClockH / (float)ClockW };
+                    layers[layerCount++] = (XrCompositionLayerBaseHeader*)&cq;
+                }
+            }
             if (g_menuOn && g_menu.sc && g_menuTex) {
                 if (g_menuDirty) { g_ctx11->UpdateSubresource(g_menuTex, 0, nullptr, g_menuPx, MenuW * 4, 0); g_menuDirty = false; }
                 if (BlitStatic(g_menu, g_menuTex)) {
@@ -1203,12 +1386,12 @@ void EndFrame(const FrameViews& fv, bool submittedEyes) {
             }
         }
     }
-    g_hudOn = false; g_retOn = false; g_dotOn = false; g_menuOn = false; g_arcFrame = false;
+    g_hudOn = false; g_retOn = false; g_dotOn = false; g_menuOn = false; g_wammoOn = false; g_grenOn = false; g_clkOn = false; g_hpOn = false; g_arcFrame = false;
     g_ctx11->Flush();
     XrFrameEndInfo ei{ XR_TYPE_FRAME_END_INFO };
     ei.displayTime = fv.displayTime; ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     ei.layerCount = layerCount; ei.layers = layers;
-    Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame");
+    HandoverDone(); Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame");
     g_frameBegun = false;
 }
 
@@ -1234,7 +1417,7 @@ void EndFrameScreen(const FrameViews& fv, ID3D10Texture2D* src, const XrPosef& p
     XrFrameEndInfo ei{ XR_TYPE_FRAME_END_INFO };
     ei.displayTime = fv.displayTime; ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     ei.layerCount = layerCount; ei.layers = layers;
-    Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame(scope)");
+    HandoverDone(); Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame(scope)");
     g_frameBegun = false;
 }
 
@@ -1305,7 +1488,7 @@ void EndFrameScope(const FrameViews& fv, ID3D10Texture2D* src, const XrPosef& po
     XrFrameEndInfo ei{ XR_TYPE_FRAME_END_INFO };
     ei.displayTime = fv.displayTime; ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     ei.layerCount = n; ei.layers = layers;
-    Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame(scope)");
+    HandoverDone(); Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame(scope)");
     g_frameBegun = false;
 }
 
@@ -1334,7 +1517,7 @@ void SubmitScreen(ID3D10Texture2D* src, const XrPosef* pose, float width) {
     XrFrameEndInfo ei{ XR_TYPE_FRAME_END_INFO };
     ei.displayTime = fs.predictedDisplayTime; ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     ei.layerCount = layerCount; ei.layers = layers;
-    Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame(screen)");
+    HandoverDone(); Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame(screen)");
     g_frameBegun = false;
 }
 
@@ -1344,3 +1527,32 @@ void Shutdown() {
 }
 
 } // namespace xr
+
+namespace xr {
+void SetGpuHandover(bool on) { g_gpuHandover = on; LOG("XR: end-of-frame handover: %s", on ? "GPU (render thread does not wait)" : "render thread waits for the GPU"); }
+bool GpuHandover() { return g_gpuHandover && g_kmOk; }
+bool GpuHandoverAvailable() { return g_kmOk; }
+bool HandoverStats(double& avgMs, double& maxMs, int& frames, bool& gpu) {
+    if (!g_hoN) return false;
+    avgMs = g_hoMs / g_hoN; maxMs = g_hoMax; frames = g_hoN; gpu = g_hoLastGpu;
+    g_hoMs = g_hoMax = 0; g_hoN = 0; return true;
+}
+}
+
+namespace xr {
+bool CreateHandoverTexture(UINT w, UINT h, DXGI_FORMAT fmt, ID3D10Texture2D** t10, ID3D11Texture2D** t11) {
+    *t10 = nullptr; *t11 = nullptr;
+    if (!g_dev10 || !g_dev11) return false;
+    for (Shared& s : g_extra) if (!s.tex10 && !s.tex11) {
+        const char* step = ""; HRESULT hr = S_OK;
+        if (!CreateSharedKM10(s, w, h, fmt, &step, &hr)) { LOG("XR: hand-over texture %ux%u fmt %d failed (%s hr=%08lx)", w, h, (int)fmt, step, (unsigned long)hr); return false; }
+        s.tex10->AddRef(); s.tex11->AddRef(); *t10 = s.tex10; *t11 = s.tex11;
+        return true;
+    }
+    LOG("XR: no free hand-over texture slot"); return false;
+}
+void ReleaseHandoverTexture(ID3D10Texture2D* t10) {
+    if (!t10) return;
+    for (Shared& s : g_extra) if (s.tex10 == t10) { ReleaseShared(s); return; }
+}
+}
