@@ -285,7 +285,7 @@ static M4 g_prevFinalRh; static bool g_havePrevFinal = false;
 // v234 test 75: weapon follows the controller. Per held weapon: its barrel and top axes (weapon entity rows), found from
 // the game's own pose of it (the axis nearest the camera's forward / up, never the axis the model is mirrored across -
 // the crossbow's limbs), its offset in the hand, and where the game's camera sits relative to it (the sight line).
-static bool g_wfActive = false; static M4 g_wfOff; static float g_wfCam[3], g_wfFwd[3], g_wfUp[3];
+static bool g_wfActive = false; static M4 g_wfOff; static float g_wfCam[3], g_wfFwd[3], g_wfUp[3], g_wfFwdL[3], g_wfUpL[3];   // ...L: in the gun's frame (test 85)
 // v234 test 80: sight calibration (Ctrl+F1) - with the sights lined up on something far away, the eye behind them is on
 // the gun's sight line; its place relative to the gun is saved per gun type ([Sights] in fc2vr.ini) and the dot and shots
 // start from it
@@ -1306,6 +1306,12 @@ static void Apply(uint8_t* skel) {
                     M4 inv; if (Inv(Bw[rh], inv)) {
                         Map = Mul(inv, H);
                         g_wfActive = true; g_wfOff = Ooff; memcpy(g_wfCam, wf.cam, 12); memcpy(g_wfFwd, fw, 12); memcpy(g_wfUp, uc, 12);
+                        {   // v234 test 85: the dot's line held in the gun's own frame, so the two-handed grip (which turns the gun
+                            // toward the left hand afterwards) carries the dot with the gun
+                            M4 one = Mul(Ooff, Mul(Bw[rh], Map)), io;
+                            if (Inv(one, io)) { XformDir(io, fw, g_wfFwdL); XformDir(io, uc, g_wfUpL); }
+                            else { g_wfFwdL[0] = 1; g_wfFwdL[1] = g_wfFwdL[2] = 0; g_wfUpL[0] = g_wfUpL[1] = 0; g_wfUpL[2] = 1; }
+                        }
                         g_wfAds = wf.ads && wf.adsCam[0] < 1e8f && HeldMelee() == 0;
                         if (g_wfAds) { memcpy(g_wfCam, wf.adsCam, 12); memcpy(g_wfAdsDir, wf.adsDir, 12); memcpy(g_wfAdsUp, wf.adsUp, 12); }
                         if (HeldMelee() == 0) {
@@ -1408,7 +1414,7 @@ static void Apply(uint8_t* skel) {
     // from the game's camera now, which sways while sprinting and would make the aiming dot and shots sway with it)
     { float so[3], sf[3], su[3]; XformPt(Map, co, so); XformDir(Map, cf, sf); XformDir(Map, cu, su);
       if (g_wfActive) {   // v234 test 75: along the controller, from where the game's camera sits relative to the weapon
-          M4 Wf = Mul(g_wfOff, Mul(Bw[rh], Map)); XformPt(Wf, g_wfCam, so); memcpy(sf, g_wfFwd, 12); memcpy(su, g_wfUp, 12);
+          M4 Wf = Mul(g_wfOff, Mul(Bw[rh], Map)); XformPt(Wf, g_wfCam, so); XformDir(Wf, g_wfFwdL, sf); XformDir(Wf, g_wfUpL, su); Normalize(sf); Normalize(su);
           {   // v234 test 83: weapon alignment (the F1 menu's tick box). Ticked: 1 s with the sights lined up - the eye behind
               // them becomes the gun's sight line start (test 80) - then the right stick turns the gun onto the dot (test 82).
               // Unticked (or another gun drawn): saved per gun type ([Sights] in fc2vr.ini).
