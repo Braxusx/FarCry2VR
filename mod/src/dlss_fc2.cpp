@@ -152,7 +152,7 @@ bool Ensure10(ID3D10Device* dev, Eye10& e, ID3D10Texture2D* depth) {
     D3D10_SHADER_RESOURCE_VIEW_DESC sv = {}; sv.Format = sf; sv.ViewDimension = D3D10_SRV_DIMENSION_TEXTURE2D; sv.Texture2D.MipLevels = 1;
     if (FAILED(dev->CreateShaderResourceView(e.depthCopy, &sv, &e.depthSrv))) { LOG("dlss: depth SRV failed"); return false; }
     static const DXGI_FORMAT fm[3] = { DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R8_UNORM };
-    {   // v234 test 66: keyed-mutex hand-over textures from the XR module, so DLSS frames need no CPU wait for the GPU
+    if (g_c.guideHandover) {   // v234 test 66: keyed-mutex hand-over textures from the XR module, so DLSS frames need no CPU wait for the GPU
         bool ok = true;
         for (int i = 0; i < 3 && ok; ++i) ok = xr::CreateHandoverTexture(dd.Width, dd.Height, fm[i], &e.out[i], &e.out11[i]) && SUCCEEDED(dev->CreateRenderTargetView(e.out[i], nullptr, &e.rtv[i]));
         if (ok) { e.handover = true; e.w = dd.Width; e.h = dd.Height; e.depthFmt = dd.Format; e.reset = true; LOG("dlss: guides are hand-over textures (no CPU wait)"); return true; }

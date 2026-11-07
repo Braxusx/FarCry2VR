@@ -29,6 +29,7 @@ struct Config {
     int quality = 0;         // DlssQuality: 0 DLAA (native), 1 Ultra Quality, 2 Quality, 3 Balanced, 4 Performance, 5 Ultra Performance
     int jitter = 1;          // DlssJitter
     int phases = 16;         // DlssJitterPhases
+    int guideHandover = 1;   // DlssGuideHandover: v234 test 67 - 0 = plain shared guides (CPU wait), for A/B
     int mask = 1;            // DlssMask: the near pass (arms, weapon) takes the current colour
     float sharpness = 0.0f;  // DlssSharpness (deprecated in DLSS 3+, usually ignored)
     int autoExposure = 0;    // DlssAutoExposure: 1 = NGX computes an exposure (for HDR input; the eye image is LDR)
