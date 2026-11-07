@@ -293,7 +293,7 @@ static volatile bool g_calReq = false; static float g_wfDe[3] = { 1, 0, 0 };
 struct SightCal { uint32_t key; float p[3]; bool have; float adj[2]; };   // adj: the dot turned right / up (deg)
 static SightCal g_sightCal[32]; static int g_nSightCal = 0;
 static char g_ini[MAX_PATH];
-static float g_wfAdj[2] = { 0, 0 };
+static float g_wfAdj[2] = { 0, 0 }; static volatile bool g_calAdjOn = false; static float g_calAdjLive[2] = { 0, 0 };   // v234 test 82: the gun turned right / up (deg)
 static bool SightCalGet(uint32_t key, float out[3], float adj[2] = nullptr) {
     if (!key) return false;
     for (int i = 0; i < g_nSightCal; ++i) if (g_sightCal[i].key == key) { if (g_sightCal[i].have) { memcpy(out, g_sightCal[i].p, 12); if (adj) memcpy(adj, g_sightCal[i].adj, 8); } return g_sightCal[i].have; }
@@ -303,7 +303,7 @@ static bool SightCalGet(uint32_t key, float out[3], float adj[2] = nullptr) {
     if (g_nSightCal < 32) g_sightCal[g_nSightCal++] = c;
     if (!std::isfinite(c.adj[0]) || fabsf(c.adj[0]) > 10) c.adj[0] = 0; if (!std::isfinite(c.adj[1]) || fabsf(c.adj[1]) > 10) c.adj[1] = 0;
     if (g_nSightCal <= 32 && g_nSightCal > 0) g_sightCal[g_nSightCal - 1].adj[0] = c.adj[0], g_sightCal[g_nSightCal - 1].adj[1] = c.adj[1];
-    if (c.have) { memcpy(out, c.p, 12); if (adj) memcpy(adj, c.adj, 8); LOG("arms: gun %08x sight line from its calibration %.3f %.3f %.3f, dot turned %.2f right %.2f up", key, c.p[0], c.p[1], c.p[2], c.adj[0], c.adj[1]); }
+    if (c.have) { memcpy(out, c.p, 12); if (adj) memcpy(adj, c.adj, 8); LOG("arms: gun %08x sight line from its calibration %.3f %.3f %.3f, gun turned %.2f right %.2f up", key, c.p[0], c.p[1], c.p[2], c.adj[0], c.adj[1]); }
     return c.have;
 }
 static void SightCalPut(uint32_t key, const float p[3], const float adj[2]) {
@@ -1272,6 +1272,20 @@ static void Apply(uint8_t* skel) {
                     const float hs = Dot3(r01, rows[2]) < 0 ? -1.0f : 1.0f;   // a mirrored model stays mirrored
                     float cw[3] = { (fw[1] * uc[2] - fw[2] * uc[1]) * hs, (fw[2] * uc[0] - fw[0] * uc[2]) * hs, (fw[0] * uc[1] - fw[1] * uc[0]) * hs };
                     for (int i = 0; i < 3; ++i) for (int k = 0; k < 3; ++k) R[i][k] = de[i] * fw[k] + uw[i] * uc[k] + sw[i] * cw[k];
+                    // v234 test 82: the calibrated turn of the gun on the controller (right / up, deg) - the dot stays on the
+                    // controller line; the gun's sights are brought onto it
+                    float ga[2] = { 0, 0 }; { float cal[3]; if (g_calAdjOn) memcpy(ga, g_calAdjLive, 8); else SightCalGet(g_typeKey, cal, ga); }
+                    if (ga[0] != 0 || ga[1] != 0) {
+                        float rt[3] = { fw[1] * uc[2] - fw[2] * uc[1], fw[2] * uc[0] - fw[0] * uc[2], fw[0] * uc[1] - fw[1] * uc[0] }; Normalize(rt);
+                        const float ty = tanf(ga[0] * 0.0174533f), tp = tanf(ga[1] * 0.0174533f);
+                        float f2[3]; for (int k = 0; k < 3; ++k) f2[k] = fw[k] + rt[k] * ty + uc[k] * tp; Normalize(f2);
+                        float ax[3] = { fw[1] * f2[2] - fw[2] * f2[1], fw[2] * f2[0] - fw[0] * f2[2], fw[0] * f2[1] - fw[1] * f2[0] };
+                        const float sn = sqrtf(Dot3(ax, ax)), cs = Dot3(fw, f2);
+                        if (sn > 1e-6f) { for (int k = 0; k < 3; ++k) ax[k] /= sn;
+                            for (int i = 0; i < 3; ++i) { float v[3] = { R[i][0], R[i][1], R[i][2] }, kv = Dot3(ax, v);
+                                float c3[3] = { ax[1] * v[2] - ax[2] * v[1], ax[2] * v[0] - ax[0] * v[2], ax[0] * v[1] - ax[1] * v[0] };
+                                for (int k = 0; k < 3; ++k) R[i][k] = v[k] * cs + c3[k] * sn + ax[k] * kv * (1.0f - cs); } }
+                    }
                 }
                 if (HeldMelee() == 1) {   // v234 test 76: the machete stands upright, leaning a little right (turned 120 deg clockwise seen from behind)
                     M4 Rm = RotMat(fw, 120.0f * 0.0174533f);
@@ -1392,20 +1406,21 @@ static void Apply(uint8_t* skel) {
               static bool adjOn = false; static float adjP[3], adj[2]; static ULONGLONG lastA = 0;   // v234 test 81: dot nudge after the capture
               const ULONGLONG tn = GetTickCount64();
               if (adjOn && (g_calReq || key != g_typeKey || HeldMelee() != 0)) {   // Ctrl+F1 again (or another weapon): save
-                  g_calReq = false; adjOn = false; controls::SetMenuMode(false);
+                  g_calReq = false; adjOn = false; controls::SetMenuMode(false); g_calAdjOn = false;
                   SightCalPut(key, adjP, adj); xr::Haptic(1, 0.5f, 0.06f);
-                  LOG("arms: gun %08x sight line saved: %.3f %.3f %.3f, dot turned %.2f deg right %.2f deg up", key, adjP[0], adjP[1], adjP[2], adj[0], adj[1]);
+                  LOG("arms: gun %08x sight line saved: %.3f %.3f %.3f, gun turned %.2f deg right %.2f deg up", key, adjP[0], adjP[1], adjP[2], adj[0], adj[1]);
               }
               if (adjOn) {   // the right stick moves the dot (up to 3 deg/s; a light push for fine steps)
                   float dt = lastA ? (float)(tn - lastA) * 0.001f : 0; lastA = tn; if (dt > 0.1f) dt = 0.1f;
-                  xr::HandState hs[2]; XrPosef hp; bool hv = false;
-                  if (xr::InputSnapshot(hs, hp, hv)) for (int a = 0; a < 2; ++a) {
+                  xr::HandState hs[2]; XrPosef hp; bool hv = false; float dbgSx = -9, dbgSy = -9;
+                  if (xr::InputSnapshot(hs, hp, hv)) { dbgSx = hs[1].stick.x; dbgSy = hs[1].stick.y; }
+                  if (dbgSx > -2) for (int a = 0; a < 2; ++a) {
                       float v = a ? hs[1].stick.y : hs[1].stick.x; if (fabsf(v) < 0.15f) continue;
                       float sg = v > 0 ? 1.0f : -1.0f; v = (fabsf(v) - 0.15f) / 0.85f;
                       adj[a] += sg * v * v * 3.0f * dt; if (adj[a] > 8) adj[a] = 8; if (adj[a] < -8) adj[a] = -8;
                   }
-                  memcpy(g_wfAdj, adj, 8);
-                  static ULONGLONG lastL = 0; if (tn - lastL > 1000) { lastL = tn; LOG("arms: sight nudge gun %08x - dot %.2f deg right %.2f deg up", key, adj[0], adj[1]); }
+                  memcpy(g_calAdjLive, adj, 8);
+                  static ULONGLONG lastL = 0; if (tn - lastL > 1000) { lastL = tn; LOG("arms: gun turn %08x - %.2f deg right %.2f deg up (stick %.2f %.2f)", key, adj[0], adj[1], dbgSx, dbgSy); }
               }
               if (g_calReq) { g_calReq = false;
                   if (HeldMelee() != 0 || !g_typeKey || !f.headValid) { LOG("arms: sight calibration - hold a gun first"); xr::Haptic(1, 0.6f, 0.4f); }
@@ -1427,20 +1442,14 @@ static void Apply(uint8_t* skel) {
                       LOG("arms: sight calibration for gun %08x - left eye %.3f %.3f %.3f, right eye %.3f %.3f %.3f (gun frame); %s eye %.1f cm beside the gun's centre",
                           key, pe[0][0], pe[0][1], pe[0][2], pe[1][0], pe[1][1], pe[1][2], be ? "right" : "left", best * 100.0f);
                       if (be >= 0 && best < 0.15f && Dot3(pe[be], pe[be]) < 0.8f * 0.8f) {
-                          memcpy(adjP, pe[be], 12); memcpy(adj, g_wfAdj, 8); adjOn = true; lastA = 0; controls::SetMenuMode(true);
+                          memcpy(adjP, pe[be], 12); memcpy(adj, g_wfAdj, 8); memcpy(g_calAdjLive, adj, 8); g_calAdjOn = true; adjOn = true; lastA = 0; controls::SetMenuMode(true);
                           SightCalPut(key, adjP, adj); memcpy(g_wfCam, pe[be], 12); XformPt(Wf, g_wfCam, so);
-                          xr::Haptic(1, 0.5f, 0.06f); LOG("arms: gun %08x sight line captured: %.3f %.3f %.3f - right stick moves the dot, Ctrl+F1 saves", key, pe[be][0], pe[be][1], pe[be][2]); }
+                          xr::Haptic(1, 0.5f, 0.06f); LOG("arms: gun %08x sight line captured: %.3f %.3f %.3f - right stick turns the gun onto the dot, Ctrl+F1 saves", key, pe[be][0], pe[be][1], pe[be][2]); }
                       else { LOG("arms: sight calibration rejected - neither eye was behind the sights"); xr::Haptic(1, 0.8f, 0.5f); }
                   }
               }
           }
           // v234 test 79: the gun is turned so its own sight line runs along the controller, so the dot follows the controller
-          if (HeldMelee() == 0 && (g_wfAdj[0] != 0 || g_wfAdj[1] != 0)) {   // v234 test 81: the calibrated nudge (right / up)
-              float r[3] = { sf[1] * su[2] - sf[2] * su[1], sf[2] * su[0] - sf[0] * su[2], sf[0] * su[1] - sf[1] * su[0] }; Normalize(r);
-              const float ty = tanf(g_wfAdj[0] * 0.0174533f), tp = tanf(g_wfAdj[1] * 0.0174533f);
-              for (int k = 0; k < 3; ++k) sf[k] += r[k] * ty + su[k] * tp;
-              Normalize(sf);
-          }
       } else if (g_calReq) { g_calReq = false; LOG("arms: sight calibration - not available now (weapon follow off: weapon %p, map %d, normal controls %d)", g_curWeapon, (int)f.map, (int)controls::NormalControls()); xr::Haptic(1, 0.6f, 0.4f);
       } else if (g_c.steadyHands && g_relHave && !f.map) {
           M4 ir; if (Inv(g_relR, ir)) {
