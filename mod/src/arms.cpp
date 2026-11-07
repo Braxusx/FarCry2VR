@@ -286,6 +286,7 @@ static M4 g_prevFinalRh; static bool g_havePrevFinal = false;
 // the game's own pose of it (the axis nearest the camera's forward / up, never the axis the model is mirrored across -
 // the crossbow's limbs), its offset in the hand, and where the game's camera sits relative to it (the sight line).
 static bool g_wfActive = false; static M4 g_wfOff; static float g_wfCam[3], g_wfFwd[3], g_wfUp[3];
+static bool g_wfAds = false; static float g_wfAdsDir[3], g_wfAdsUp[3];   // v234 test 78: the sight line measured in the game's aim pose
 static int WeaponMirrorAxis(void* sk) {   // the weapon-model axis its bones are mirrored across (-1 = none)
     int nb = (sk && !IsBadReadPtr((uint8_t*)sk + 0x2C, 4)) ? *(int*)((uint8_t*)sk + 0x2C) : 0;
     Bone* bb = (nb > 1 && nb <= 64) ? *(Bone**)((uint8_t*)sk + 0x20) : nullptr;
@@ -1135,11 +1136,12 @@ static void Apply(uint8_t* skel) {
         if (g_c.steadyHands && g_relHave && !f.map) { M4 inv; if (Inv(Bw[rh], inv)) Map = Mul(Mul(inv, relUse), Am); }
         g_wfActive = false;
         if (g_c.weaponFollow && w && !f.map && controls::NormalControls()) {
-            struct WF { void* w; int mirror, bar, up; float sb, su; int cb, cu; float csb, csu; ULONGLONG since; bool fixed; float cam[3]; float bestB; int kb, ku; float ksb, ksu; float kcam[3]; uint32_t key; };
+            struct WF { void* w; int mirror, bar, up; float sb, su; int cb, cu; float csb, csu; ULONGLONG since; bool fixed; float cam[3]; float bestB; int kb, ku; float ksb, ksu; float kcam[3]; uint32_t key;
+                       bool ads; float adsCam[3], adsDir[3], adsUp[3], prevCam[3], prevDir[3]; int adsStable; ULONGLONG adsSince; };
             static WF wf{};
             // v234 test 76: per weapon type the axes are remembered once found (a redraw uses them at once); a weapon
             // type not seen yet uses barrel +X / top +Z (the Dunia weapon models) until its own are found
-            struct WfKnown { uint32_t key; int bar, up; float sb, su; float cam[3]; };
+            struct WfKnown { uint32_t key; int bar, up; float sb, su; float cam[3]; bool ads; float adsCam[3], adsDir[3], adsUp[3]; };
             static WfKnown known[24]; static int nKnown = 0;
             if (wf.w != w) {
                 wf = WF{}; wf.w = w; wf.mirror = WeaponMirrorAxis(g_wSkel); wf.cb = wf.cu = -1; wf.since = t; wf.kb = -1;
@@ -1149,7 +1151,8 @@ static void Apply(uint8_t* skel) {
             else { wf.bar = 0; wf.up = 2; wf.sb = 1; wf.su = 1; }                      // guns: barrel +X, top +Z
             if (!wf.fixed && g_typeKey && wf.key != g_typeKey) {
                 wf.key = g_typeKey;
-                for (int i = 0; i < nKnown; ++i) if (known[i].key == g_typeKey) { wf.fixed = true; wf.bar = known[i].bar; wf.up = known[i].up; wf.sb = known[i].sb; wf.su = known[i].su; memcpy(wf.cam, known[i].cam, 12); break; }
+                for (int i = 0; i < nKnown; ++i) if (known[i].key == g_typeKey) { wf.fixed = true; wf.bar = known[i].bar; wf.up = known[i].up; wf.sb = known[i].sb; wf.su = known[i].su; memcpy(wf.cam, known[i].cam, 12);
+                    wf.ads = known[i].ads; memcpy(wf.adsCam, known[i].adsCam, 12); memcpy(wf.adsDir, known[i].adsDir, 12); memcpy(wf.adsUp, known[i].adsUp, 12); break; }
             }
             // v234 test 77: the weapon's offset on the hand straight from its attachment node (child world = offset *
             // hand bone * pawn world); test 75/76 derived it from last frame's weapon and our re-posed hand, which mixed
@@ -1188,12 +1191,35 @@ static void Apply(uint8_t* skel) {
                         wf.fixed = true; wf.bar = cb; wf.up = cu2; wf.sb = sgb; wf.su = sgu;
                         if (g_typeKey) { int slot = -1; for (int i = 0; i < nKnown; ++i) if (known[i].key == g_typeKey) slot = i;
                                          if (slot < 0) slot = nKnown < 24 ? nKnown++ : 23;
-                                         known[slot] = { g_typeKey, cb, cu2, sgb, sgu, { camNow[0], camNow[1], camNow[2] } }; }
+                                         known[slot] = { g_typeKey, cb, cu2, sgb, sgu, { camNow[0], camNow[1], camNow[2] }, false, {}, {}, {} }; }
                         LOG("arms: weapon %p follows the controller - barrel %c%c, top %c%c (mirror axis %c; game pose %.0f deg off the view), sight %.2f %.2f %.2f",
                             w, sgb > 0 ? '+' : '-', "XYZ"[cb], sgu > 0 ? '+' : '-', "XYZ"[cu2], wf.mirror >= 0 ? "XYZ"[wf.mirror] : '-', acosf(fminf(1.0f, bb)) * 57.2958f, wf.cam[0], wf.cam[1], wf.cam[2]);
                     }
                 }
             }
+            // v234 test 78: the game's own aim pose puts its camera exactly on the gun's sights, so once the sights are up
+            // and the pose has stopped moving (0.6 s in, 20 steady frames) the camera's place and direction relative to
+            // the weapon are the gun's real sight line - used for the aiming dot and shots from then on, per weapon type
+            if (onHand && HeldMelee() == 0 && !wf.ads && controls::SightsUp()) {
+                if (!wf.adsSince) { wf.adsSince = t; wf.adsStable = 0; }
+                M4 iw; if (t - wf.adsSince > 600 && Inv(wAnim, iw)) {
+                    float pc[3], pd[3], pu[3]; XformPt(iw, co, pc); XformDir(iw, cf, pd); XformDir(iw, cu, pu); Normalize(pd); Normalize(pu);
+                    float dd[3] = { pc[0] - wf.prevCam[0], pc[1] - wf.prevCam[1], pc[2] - wf.prevCam[2] };
+                    const bool steady = Dot3(dd, dd) < 0.003f * 0.003f && Dot3(pd, wf.prevDir) > 0.99998f;
+                    wf.adsStable = steady ? wf.adsStable + 1 : 0; memcpy(wf.prevCam, pc, 12); memcpy(wf.prevDir, pd, 12);
+                    if (wf.adsStable >= 20) {
+                        const bool sane = pd[0] > 0.94f && fabsf(pc[1]) < 0.10f && pc[2] > -0.05f && pc[2] < 0.30f;
+                        LOG("arms: weapon %p sights measured in the game's aim pose - eye %.3f %.3f %.3f, line %.4f %.4f %.4f (%.2f deg off the barrel)%s",
+                            w, pc[0], pc[1], pc[2], pd[0], pd[1], pd[2], acosf(fminf(1.0f, pd[0])) * 57.2958f, sane ? "" : " - not plausible, ignored");
+                        if (sane) {
+                            wf.ads = true; memcpy(wf.adsCam, pc, 12); memcpy(wf.adsDir, pd, 12); memcpy(wf.adsUp, pu, 12);
+                            if (g_typeKey) { int slot = -1; for (int i = 0; i < nKnown; ++i) if (known[i].key == g_typeKey) slot = i;
+                                if (slot < 0) { slot = nKnown < 24 ? nKnown++ : 23; known[slot] = { g_typeKey, wf.bar, wf.up, wf.sb, wf.su, { wf.cam[0], wf.cam[1], wf.cam[2] }, false, {}, {}, {} }; }
+                                known[slot].ads = true; memcpy(known[slot].adsCam, pc, 12); memcpy(known[slot].adsDir, pd, 12); memcpy(known[slot].adsUp, pu, 12); }
+                        } else wf.adsSince = t + 2000;   // try again a little later
+                    }
+                }
+            } else if (!controls::SightsUp()) wf.adsSince = 0;
             const int bar = wf.bar, up = wf.up; const float sb = wf.sb, su = wf.su;   // until found: +X / +Z
             if (bar >= 0 && up >= 0 && bar != up) {
                 float fw[3] = { -ab[0], -ab[1], -ab[2] }, uc[3] = { au[0], au[1], au[2] }; Normalize(fw);
@@ -1216,6 +1242,8 @@ static void Apply(uint8_t* skel) {
                     M4 inv; if (Inv(Bw[rh], inv)) {
                         Map = Mul(inv, H);
                         g_wfActive = true; g_wfOff = Ooff; memcpy(g_wfCam, wf.cam, 12); memcpy(g_wfFwd, fw, 12); memcpy(g_wfUp, uc, 12);
+                        g_wfAds = wf.ads && HeldMelee() == 0;
+                        if (g_wfAds) { memcpy(g_wfCam, wf.adsCam, 12); memcpy(g_wfAdsDir, wf.adsDir, 12); memcpy(g_wfAdsUp, wf.adsUp, 12); }
                     }
                 }
             }
@@ -1311,6 +1339,7 @@ static void Apply(uint8_t* skel) {
     { float so[3], sf[3], su[3]; XformPt(Map, co, so); XformDir(Map, cf, sf); XformDir(Map, cu, su);
       if (g_wfActive) {   // v234 test 75: along the controller, from where the game's camera sits relative to the weapon
           M4 Wf = Mul(g_wfOff, Mul(Bw[rh], Map)); XformPt(Wf, g_wfCam, so); memcpy(sf, g_wfFwd, 12); memcpy(su, g_wfUp, 12);
+          if (g_wfAds) { XformDir(Wf, g_wfAdsDir, sf); XformDir(Wf, g_wfAdsUp, su); }   // v234 test 78: the gun's own sight line
       } else if (g_c.steadyHands && g_relHave && !f.map) {
           M4 ir; if (Inv(g_relR, ir)) {
               M4 V = Mul(Mul(ir, Bw[rh]), Map);   // the capture-time camera, re-posed with the weapon
