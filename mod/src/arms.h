@@ -195,7 +195,8 @@ void SetFreeHands(float angle, float yaw, float roll);
 void GetFreeHands(float& angle, float& yaw, float& roll);
 void SetPhoneHands(float angle, float yaw, float roll);
 void GetPhoneHands(float& angle, float& yaw, float& roll);
-void RequestSightCalibration();   // v234 test 80: Ctrl+F1 - the eye looking down the sights becomes the held gun's sight line
+void SetAlignMode(bool on);   // v234 test 83: the weapon alignment menu's tick box
+int AlignStatus(uint32_t* key, float adj[2]);   // 0 no gun, 1 measuring the eye, 2 the right stick turns the gun, 3 a gun held (box unticked)
 int HeldMelee();        // v234 test 70: 1 the held weapon is the machete, 0 another weapon, -1 unknown
 void* CurrentWeapon();   // the player's current weapon object (identity only)                     // called (game thread) when a hand uses the interaction target
 // the weapon's sight line (ref frame: origin, unit direction); false if not updated recently

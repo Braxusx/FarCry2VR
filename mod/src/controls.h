@@ -43,6 +43,7 @@ bool FlashlightOn();
 bool TakeRecenterRequest();      // v222: the left stick was held in (once per hold)             // v220: the flashlight is switched on
 bool MonocularAtFace();           // ... and held at the eye: scope view, the trigger tags       // the right controller's trigger (0..1), last frame
 void SetMenuMode(bool on);
+void SetRightClickBlocked(bool on);
 bool MapOpen();
 void SetSightsAllowed(bool a);
 int TakeSnap();                  // snap turns requested since the last call (+1 right, -1 left each)

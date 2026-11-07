@@ -2720,7 +2720,6 @@ static void Hotkeys(const XrPosef* head) {
         if (k && !p) { g_camBodyClock = g_camBodyClock == 2 ? 1 : g_camBodyClock == 1 ? 0 : 2; LOG("camera body clock %d (Ctrl+F10)", g_camBodyClock);
             ShowToast(g_camBodyClock == 2 ? "View: 2 drawn body update (new)" : g_camBodyClock == 1 ? "View: 1 latest body update (1.0.3)" : "View: 0 game camera"); }
         p = k; }
-    { static bool p1 = false; bool k1 = (GetAsyncKeyState(VK_F1) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k1 && !p1) { LOG("sight calibration requested (Ctrl+F1)"); arms::RequestSightCalibration(); ShowToast("Sight calibration: hold still 1 s"); } p1 = k1; }
     { static bool p6 = false; bool k6 = (DevKey(VK_F6) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k6 && !p6) { g_handSmooth = !g_handSmooth; LOG("hand smoothing %d (Ctrl+F6)", g_handSmooth); ShowToast(g_handSmooth ? "Hand stabiliser: ON" : "Hand stabiliser: OFF"); } p6 = k6; }
     { static bool p5 = false; bool k5 = (DevKey(VK_F5) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k5 && !p5) { bool on = arms::LocalFrameToggle(); LOG("arm local frame %d (Ctrl+F5)", on); ShowToast(on ? "Arm precision fix: ON" : "Arm precision fix: OFF"); } p5 = k5; }
     {   // v232 test keys (jitter A/B): Insert = DLSS on/off, Page Down = DLSS debug mode (1 = no sub-pixel jitter)
@@ -3491,6 +3490,89 @@ static void TurnMenu() {
     }
     prevH = h; prevL = kl; prevR = kr;
 }
+// v234 test 83: F1 weapon alignment menu - a tick box that hands the right stick to turning the held gun onto the dot
+static int g_alignKeyVk = VK_F1;
+static void DrawAlignMenu(bool ticked, int st, uint32_t key, const float adj[2]) {
+    static HDC dc = nullptr; static HBITMAP bmp = nullptr; static uint32_t* bits = nullptr; static HFONT big = nullptr, mid = nullptr, small_ = nullptr;
+    const int W = xr::MenuW, H = xr::MenuH;
+    if (!dc) {
+        dc = CreateCompatibleDC(nullptr);
+        BITMAPINFO bi{}; bi.bmiHeader.biSize = sizeof bi.bmiHeader; bi.bmiHeader.biWidth = W; bi.bmiHeader.biHeight = -H; bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
+        bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, (void**)&bits, nullptr, 0); SelectObject(dc, bmp);
+        big = CreateFontA(27, 0, 0, 0, FW_BOLD, 0, 0, 0, ANSI_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, "Arial");
+        mid = CreateFontA(21, 0, 0, 0, FW_BOLD, 0, 0, 0, ANSI_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, "Arial");
+        small_ = CreateFontA(17, 0, 0, 0, FW_NORMAL, 0, 0, 0, ANSI_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, "Arial");
+        SetBkMode(dc, TRANSPARENT);
+    }
+    if (!bits) return;
+    RECT all{ 0, 0, W, H }; HBRUSH bg = CreateSolidBrush(RGB(24, 24, 24)); FillRect(dc, &all, bg); DeleteObject(bg);
+    SelectObject(dc, big); SetTextColor(dc, RGB(235, 225, 190));
+    { RECT r{ 16, 10, W - 16, 42 }; DrawTextA(dc, "Weapon alignment", -1, &r, DT_CENTER | DT_SINGLELINE); }
+    {   // the tick box
+        RECT hl{ 10, 50, W - 10, 90 }; HBRUSH br = CreateSolidBrush(RGB(60, 52, 36)); FillRect(dc, &hl, br); DeleteObject(br);
+        RECT bx{ 22, 56, 50, 84 }; HBRUSH wb = CreateSolidBrush(RGB(220, 220, 220)); FrameRect(dc, &bx, wb); RECT bx2{ 23, 57, 49, 83 }; FrameRect(dc, &bx2, wb); DeleteObject(wb);
+        if (ticked) { RECT in{ 28, 62, 44, 78 }; HBRUSH tb = CreateSolidBrush(RGB(240, 200, 90)); FillRect(dc, &in, tb); DeleteObject(tb); }
+        SelectObject(dc, mid); SetTextColor(dc, RGB(255, 240, 200));
+        RECT r{ 62, 58, W - 16, 86 }; DrawTextA(dc, "Turn the held gun with the right stick", -1, &r, DT_LEFT | DT_SINGLELINE);
+    }
+    {   // status
+        char t[128];
+        if (st == 0) snprintf(t, sizeof t, ticked ? "Draw a gun to align it" : "No gun in hand");
+        else if (st == 1) snprintf(t, sizeof t, "Hold still - reading your aiming eye...");
+        else snprintf(t, sizeof t, "Gun %08X:  %.1f\xB0 %s,  %.1f\xB0 %s%s", key, fabsf(adj[0]), adj[0] >= 0 ? "right" : "left", fabsf(adj[1]), adj[1] >= 0 ? "up" : "down", st == 2 ? "" : "  (saved)");
+        SelectObject(dc, mid); SetTextColor(dc, st == 2 ? RGB(140, 230, 140) : st == 1 ? RGB(240, 200, 90) : RGB(200, 200, 200));
+        RECT r{ 22, 98, W - 16, 124 }; DrawTextA(dc, t, -1, &r, DT_LEFT | DT_SINGLELINE);
+    }
+    SelectObject(dc, small_); SetTextColor(dc, RGB(185, 185, 185));
+    RECT r{ 22, 134, W - 18, H - 8 };
+    DrawTextA(dc,
+        "1. Hold the gun and line its sights up on something far away.\n"
+        "2. Tick the box (right stick click or Enter) and hold still for a second.\n"
+        "3. Push the right stick to turn the gun until its sights sit on the dot. A light push makes fine steps.\n"
+        "4. Untick the box to save. Each gun keeps its own setting; draw another gun to align it next.\n"
+        "F1 closes this menu. The right stick works normally again once the box is unticked.",
+        -1, &r, DT_LEFT | DT_WORDBREAK);
+    GdiFlush();
+    static uint32_t out[xr::MenuW * xr::MenuH];
+    for (int i = 0; i < W * H; ++i) { uint32_t p = bits[i]; out[i] = 0xF0000000u | ((p & 0xFF) << 16) | (p & 0xFF00) | ((p >> 16) & 0xFF); }
+    xr::SetMenu(out, g_menuPoseX, 0.6f);
+}
+static bool AlignMenu(const xr::FrameViews& fv) {   // true while the menu is up
+    static bool open = false, ticked = false, prevKey = false, prevEnter = false, prevClick = false; static double lastDraw = 0;
+    static int lastSt = -1; static float lastAdj[2] = { 99, 99 };
+    static bool keyRead = false; if (!keyRead) { keyRead = true; int vk = (int)IniF("WeaponAlignKey", (float)VK_F1); if (vk > 0 && vk < 256) g_alignKeyVk = vk; LOG("weapon alignment menu key 0x%02X (WeaponAlignKey)", g_alignKeyVk); }
+    const bool k = (GetAsyncKeyState(g_alignKeyVk) & 0x8000) != 0 && !(GetAsyncKeyState(VK_CONTROL) & 0x8000);
+    bool redraw = false;
+    if (k && !prevKey) {
+        open = !open;
+        if (open) {
+            const XrPosef& h = fv.views[0].pose;
+            V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
+            V3 fwd = QRot(h.orientation, { 0, 0, -1 }); fwd.y = 0; fwd = Norm(fwd);
+            V3 zq = fwd * -1.0f, xq = Norm(Cross(V3{ 0, 1, 0 }, zq)), yq = Cross(zq, xq);
+            g_menuPoseX.orientation = QuatFromBasis(xq, yq, zq);
+            V3 right = xq; V3 p = mid + fwd * 0.75f + right * 0.28f + V3{ 0, 0.05f, 0 }; g_menuPoseX.position = { p.x, p.y, p.z };   // up and to the right: the gun stays in view
+            controls::SetRightClickBlocked(true); redraw = true; LOG("weapon alignment menu open");
+        } else {
+            if (ticked) { ticked = false; arms::SetAlignMode(false); controls::SetMenuMode(false); }
+            controls::SetRightClickBlocked(false); LOG("weapon alignment menu closed");
+        }
+    }
+    prevKey = k;
+    if (!open) return false;
+    const bool enter = (GetAsyncKeyState(VK_RETURN) & 0x8000) != 0;
+    const bool click = xr::Hand(1).stickClick;
+    if ((enter && !prevEnter) || (click && !prevClick)) {
+        ticked = !ticked; arms::SetAlignMode(ticked); controls::SetMenuMode(ticked); xr::Haptic(1, 0.25f, 0.03f); redraw = true;
+    }
+    prevEnter = enter; prevClick = click;
+    uint32_t key = 0; float adj[2] = { 0, 0 }; const int st = arms::AlignStatus(&key, adj);
+    if (st != lastSt || fabsf(adj[0] - lastAdj[0]) > 0.05f || fabsf(adj[1] - lastAdj[1]) > 0.05f) redraw = true;
+    const double now = NowMs();
+    if (redraw && now - lastDraw > 50) { DrawAlignMenu(ticked, st, key, adj); lastDraw = now; lastSt = st; lastAdj[0] = adj[0]; lastAdj[1] = adj[1]; }
+    else xr::SetMenu(nullptr, g_menuPoseX, 0.6f);
+    return true;
+}
 // v232 micro-stabilisation: a One Euro filter on the controller poses the arms and the weapon are built from.
 // Standing still the hand's tremor and tracking noise pass through (~0.2-0.4 mm per frame); slow movement is
 // filtered at HandSmoothCutoff Hz, fast movement opens the filter (HandSmoothBeta) so it never lags a swing.
@@ -3536,6 +3618,7 @@ static xr::HandState SmoothHand(int side, XrTime t) {
 static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFrame& frame) {
     const float s = frame.worldScale;
     TurnMenu();
+    if (!AlignMenu(fv)) ToastTick(fv);   // v234 test 83: F1 weapon alignment; toasts again (they went with the End menu)
     // v234 test 75: the End-key hand angle menu is gone (fixed hand angles; weapons follow the controller)
     {   // controller pose for the arms/weapon and shots (game thread reads it)
         arms::Frame af; xr::HandState rh = SmoothHand(1, fv.displayTime);
@@ -5012,7 +5095,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 82: the calibration stick turns the gun onto the dot (the dot stays on the controller line); v234 test 81: after the Ctrl+F1 capture the right stick nudges the dot, Ctrl+F1 again saves; eye picked by the gun's centre plane; v234 test 80: Ctrl+F1 sight calibration - the eye looking down the sights becomes the gun's sight line, saved per gun; v234 test 79: each gun turned so its own sight line (~20 deg off its model axis) runs along the controller and the dot; v234 test 78: aiming dot on the gun's own sights, measured once per gun in the game's aim pose; v234 test 77: fixed weapon axes (guns +X/+Z, machete +X/-Y), weapon offset from its attachment node; v234 test 76: weapon axes settle after the draw and are remembered per type, sight line above the barrel, machete upright; v234 test 75: weapons follow the controller, fixed hand angles, no hand menu; v234 test 74: sun shadow zones snapped to whole shadow-map pixels (ShadowSnap=1); v234 test 73: weapon barrel brought onto the view in its hold (crossbow); v234 test 72: weapon holds only taken with the weapon settled on the hand, no reload; v234 test 71: CPU placement (CpuPlacement, CpuPriority); v234 test 70: machete taken from the held weapon, not the slot guess; v234 test 69: at most one frame ahead of the GPU (FrameAheadLimit=1); v234 test 68: DLSS hand-over guides made on the D3D10 device; v234 test 67: DlssGuideHandover A/B; v234 test 66: DLSS guides handed over with keyed mutexes (no CPU wait with DLSS); v234 test 65: merged main (PR #8 headset body yaw, grass fix, shoulder fix); v234 test 64: GPU handover with DLSS off even when the DLSS module is loaded; v234 test 63: keyed mutex on every shared texture (right-eye twitch fix); v234 test 62: fast map check (FastMapCheck=1); v234 test 61: counters on the runtime implementations, profiler names system functions; v234 test 60: Profile=1 work breakdown (shadows, draws, state calls); v234 test 59: flat CPU-busy measurement, dxvk.conf; v234 test 58: Dxvk ini read before the device patch; v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (v234 test 83: F1 weapon alignment menu (tick box: the right stick turns the held gun onto the dot, untick saves), toasts shown again; v234 test 82: the calibration stick turns the gun onto the dot (the dot stays on the controller line); v234 test 81: after the Ctrl+F1 capture the right stick nudges the dot, Ctrl+F1 again saves; eye picked by the gun's centre plane; v234 test 80: Ctrl+F1 sight calibration - the eye looking down the sights becomes the gun's sight line, saved per gun; v234 test 79: each gun turned so its own sight line (~20 deg off its model axis) runs along the controller and the dot; v234 test 78: aiming dot on the gun's own sights, measured once per gun in the game's aim pose; v234 test 77: fixed weapon axes (guns +X/+Z, machete +X/-Y), weapon offset from its attachment node; v234 test 76: weapon axes settle after the draw and are remembered per type, sight line above the barrel, machete upright; v234 test 75: weapons follow the controller, fixed hand angles, no hand menu; v234 test 74: sun shadow zones snapped to whole shadow-map pixels (ShadowSnap=1); v234 test 73: weapon barrel brought onto the view in its hold (crossbow); v234 test 72: weapon holds only taken with the weapon settled on the hand, no reload; v234 test 71: CPU placement (CpuPlacement, CpuPriority); v234 test 70: machete taken from the held weapon, not the slot guess; v234 test 69: at most one frame ahead of the GPU (FrameAheadLimit=1); v234 test 68: DLSS hand-over guides made on the D3D10 device; v234 test 67: DlssGuideHandover A/B; v234 test 66: DLSS guides handed over with keyed mutexes (no CPU wait with DLSS); v234 test 65: merged main (PR #8 headset body yaw, grass fix, shoulder fix); v234 test 64: GPU handover with DLSS off even when the DLSS module is loaded; v234 test 63: keyed mutex on every shared texture (right-eye twitch fix); v234 test 62: fast map check (FastMapCheck=1); v234 test 61: counters on the runtime implementations, profiler names system functions; v234 test 60: Profile=1 work breakdown (shadows, draws, state calls); v234 test 59: flat CPU-busy measurement, dxvk.conf; v234 test 58: Dxvk ini read before the device patch; v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

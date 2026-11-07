@@ -178,7 +178,7 @@ void SetRightHandFree(bool f) { g_rightFree = f; }
 static volatile bool g_handsAway = false; static volatile LONG g_mapLiftReq = 0;
 void SetHandsAway(bool a) { g_handsAway = a; }
 int TakeMapLift() { return (int)InterlockedExchange(&g_mapLiftReq, 0); }
-static volatile bool g_menuMode = false;
+static volatile bool g_menuMode = false; static volatile bool g_rClickBlocked = false;
 static volatile LONG g_snapReq = 0; static volatile float g_snapStick = 0; static volatile DWORD g_watchTick = 0;
 int TakeSnap() { return (int)InterlockedExchange(&g_snapReq, 0); }
 void SetSnapStick(float x) { g_snapStick = x; }
@@ -192,6 +192,7 @@ float TurnExtra() { return g_turnExtra; }
 void SetWatchActive() { g_watchTick = GetTickCount(); }
 bool WatchActive() { return GetTickCount() - g_watchTick < 250; }
 void SetMenuMode(bool on) { g_menuMode = on; }
+void SetRightClickBlocked(bool on) { g_rClickBlocked = on; }   // v234 test 83: the alignment menu ticks with the right stick click
 struct MappingHistory {
     ULONGLONG recenterAt = 0, gadgetAt = 0, mapPress = 0, notMapSince = 0;
     bool recenterFired = false, driverMap = false, gadgetHeld = false, gadgetDelayed = false, mapPrev = false;
@@ -233,6 +234,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     memset(&g, 0, sizeof g);
     xr::HandState hm[2];
     if (g_menuMode) { hm[0] = h[0]; hm[1] = h[1]; for (auto& x : hm) { x.stick.x = x.stick.y = 0; x.stickClick = false; } h = hm; }   // the sticks drive the mod's menu
+    else if (g_rClickBlocked) { hm[0] = h[0]; hm[1] = h[1]; hm[1].stickClick = false; h = hm; }
     ULONGLONG now = GetTickCount64();
     const xr::HandState& L = h[0]; const xr::HandState& R = h[1];
     // v222 recenter: the left stick held in for RecenterHoldMs (the click still sprints as usual)

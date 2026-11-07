@@ -289,7 +289,7 @@ static bool g_wfActive = false; static M4 g_wfOff; static float g_wfCam[3], g_wf
 // v234 test 80: sight calibration (Ctrl+F1) - with the sights lined up on something far away, the eye behind them is on
 // the gun's sight line; its place relative to the gun is saved per gun type ([Sights] in fc2vr.ini) and the dot and shots
 // start from it
-static volatile bool g_calReq = false; static float g_wfDe[3] = { 1, 0, 0 };
+static float g_wfDe[3] = { 1, 0, 0 };
 struct SightCal { uint32_t key; float p[3]; bool have; float adj[2]; };   // adj: the dot turned right / up (deg)
 static SightCal g_sightCal[32]; static int g_nSightCal = 0;
 static char g_ini[MAX_PATH];
@@ -312,7 +312,15 @@ static void SightCalPut(uint32_t key, const float p[3], const float adj[2]) {
     g_sightCal[s] = { key, { p[0], p[1], p[2] }, true, { adj[0], adj[1] } };
     if (g_ini[0]) { char k[16], v[96]; snprintf(k, sizeof k, "S%08X", key); snprintf(v, sizeof v, "%.4f %.4f %.4f %.2f %.2f", p[0], p[1], p[2], adj[0], adj[1]); WritePrivateProfileStringA("Sights", k, v, g_ini); }
 }
-void RequestSightCalibration() { g_calReq = true; }
+static volatile bool g_alignWant = false; static volatile int g_alignState = 0; static volatile uint32_t g_alignKey = 0; static float g_alignAdj[2];
+void SetAlignMode(bool on) { g_alignWant = on; if (on) g_alignState = 0; LOG("arms: weapon alignment %s", on ? "ticked" : "unticked"); }
+int AlignStatus(uint32_t* key, float adj[2]) {
+    const int st = g_alignWant ? g_alignState : 0;
+    if (key) *key = st ? g_alignKey : g_typeKey;
+    if (adj) { if (st == 2) memcpy(adj, g_alignAdj, 8); else { adj[0] = adj[1] = 0; float c[3]; SightCalGet(g_typeKey, c, adj); } }
+    if (st) return st;
+    return (HeldMelee() == 0 && g_typeKey) ? 3 : 0;
+}
 static bool g_wfAds = false; static float g_wfAdsDir[3], g_wfAdsUp[3];   // v234 test 78: the sight line measured in the game's aim pose
 static int WeaponMirrorAxis(void* sk) {   // the weapon-model axis its bones are mirrored across (-1 = none)
     int nb = (sk && !IsBadReadPtr((uint8_t*)sk + 0x2C, 4)) ? *(int*)((uint8_t*)sk + 0x2C) : 0;
@@ -1401,56 +1409,56 @@ static void Apply(uint8_t* skel) {
     { float so[3], sf[3], su[3]; XformPt(Map, co, so); XformDir(Map, cf, sf); XformDir(Map, cu, su);
       if (g_wfActive) {   // v234 test 75: along the controller, from where the game's camera sits relative to the weapon
           M4 Wf = Mul(g_wfOff, Mul(Bw[rh], Map)); XformPt(Wf, g_wfCam, so); memcpy(sf, g_wfFwd, 12); memcpy(su, g_wfUp, 12);
-          {   // v234 test 80: sight calibration - average both eyes relative to the gun over 1 s; the one on the sight line wins
+          {   // v234 test 83: weapon alignment (the F1 menu's tick box). Ticked: 1 s with the sights lined up - the eye behind
+              // them becomes the gun's sight line start (test 80) - then the right stick turns the gun onto the dot (test 82).
+              // Unticked (or another gun drawn): saved per gun type ([Sights] in fc2vr.ini).
               static bool on = false; static ULONGLONG t0 = 0; static double acc[2][3]; static int n = 0; static uint32_t key = 0;
-              static bool adjOn = false; static float adjP[3], adj[2]; static ULONGLONG lastA = 0;   // v234 test 81: dot nudge after the capture
+              static bool adjOn = false; static float adjP[3], adj[2]; static ULONGLONG lastA = 0;
               const ULONGLONG tn = GetTickCount64();
-              if (adjOn && (g_calReq || key != g_typeKey || HeldMelee() != 0)) {   // Ctrl+F1 again (or another weapon): save
-                  g_calReq = false; adjOn = false; controls::SetMenuMode(false); g_calAdjOn = false;
-                  SightCalPut(key, adjP, adj); xr::Haptic(1, 0.5f, 0.06f);
-                  LOG("arms: gun %08x sight line saved: %.3f %.3f %.3f, gun turned %.2f deg right %.2f deg up", key, adjP[0], adjP[1], adjP[2], adj[0], adj[1]);
+              const bool gun = HeldMelee() == 0 && g_typeKey;
+              if ((on || adjOn) && (!g_alignWant || key != g_typeKey || !gun)) {   // untick or another weapon: save
+                  if (adjOn) { SightCalPut(key, adjP, adj); xr::Haptic(1, 0.5f, 0.06f);
+                      LOG("arms: gun %08x alignment saved: sight line %.3f %.3f %.3f, gun turned %.2f deg right %.2f deg up", key, adjP[0], adjP[1], adjP[2], adj[0], adj[1]); }
+                  on = adjOn = false; g_calAdjOn = false; g_alignState = 0;
               }
-              if (adjOn) {   // the right stick moves the dot (up to 3 deg/s; a light push for fine steps)
+              if (g_alignWant && !on && !adjOn) {
+                  if (gun && f.headValid) { on = true; t0 = tn; n = 0; key = g_typeKey; memset(acc, 0, sizeof acc); g_alignKey = key; g_alignState = 1; xr::Haptic(1, 0.3f, 0.05f); }
+                  else g_alignState = 0;
+              }
+              if (adjOn) {   // the right stick turns the gun (up to 3 deg/s; a light push for fine steps)
                   float dt = lastA ? (float)(tn - lastA) * 0.001f : 0; lastA = tn; if (dt > 0.1f) dt = 0.1f;
-                  xr::HandState hs[2]; XrPosef hp; bool hv = false; float dbgSx = -9, dbgSy = -9;
-                  if (xr::InputSnapshot(hs, hp, hv)) { dbgSx = hs[1].stick.x; dbgSy = hs[1].stick.y; }
-                  if (dbgSx > -2) for (int a = 0; a < 2; ++a) {
-                      float v = a ? hs[1].stick.y : hs[1].stick.x; if (fabsf(v) < 0.15f) continue;
+                  xr::HandState hs[2]; XrPosef hp; bool hv = false;
+                  if (xr::InputSnapshot(hs, hp, hv)) for (int a2 = 0; a2 < 2; ++a2) {
+                      float v = a2 ? hs[1].stick.y : hs[1].stick.x; if (fabsf(v) < 0.15f) continue;
                       float sg = v > 0 ? 1.0f : -1.0f; v = (fabsf(v) - 0.15f) / 0.85f;
-                      adj[a] += sg * v * v * 3.0f * dt; if (adj[a] > 8) adj[a] = 8; if (adj[a] < -8) adj[a] = -8;
+                      adj[a2] += sg * v * v * 3.0f * dt; if (adj[a2] > 10) adj[a2] = 10; if (adj[a2] < -10) adj[a2] = -10;
                   }
-                  memcpy(g_calAdjLive, adj, 8);
-                  static ULONGLONG lastL = 0; if (tn - lastL > 1000) { lastL = tn; LOG("arms: gun turn %08x - %.2f deg right %.2f deg up (stick %.2f %.2f)", key, adj[0], adj[1], dbgSx, dbgSy); }
+                  memcpy(g_calAdjLive, adj, 8); memcpy(g_alignAdj, adj, 8);
               }
-              if (g_calReq) { g_calReq = false;
-                  if (HeldMelee() != 0 || !g_typeKey || !f.headValid) { LOG("arms: sight calibration - hold a gun first"); xr::Haptic(1, 0.6f, 0.4f); }
-                  else { on = true; t0 = tn; n = 0; key = g_typeKey; memset(acc, 0, sizeof acc); xr::Haptic(1, 0.3f, 0.05f); } }
               M4 iwf;
-              if (on && (key != g_typeKey || HeldMelee() != 0)) { on = false; LOG("arms: sight calibration cancelled - weapon changed"); }
-              else if (on && f.headValid && Inv(Wf, iwf)) {
+              if (on && f.headValid && Inv(Wf, iwf)) {
                   for (int e = 0; e < 2; ++e) { float ew[3], el[3]; toWorld(e ? f.eyeR : f.eyeL, ew, true); XformPt(iwf, ew, el); for (int k = 0; k < 3; ++k) acc[e][k] += el[k]; }
                   ++n;
                   if (tn - t0 > 1000 && n > 10) {
                       on = false; float best = 1e9f; int be = -1; float pe[2][3];
                       for (int e = 0; e < 2; ++e) {
                           for (int k = 0; k < 3; ++k) pe[e][k] = (float)(acc[e][k] / n);
-                          // v234 test 81: the eye nearer the gun's centre plane (the sights sit on it), not the one nearer the old line
+                          // the eye nearer the gun's centre plane (the sights sit on it)
                           float uw[3] = { -g_wfDe[0] * g_wfDe[2], -g_wfDe[1] * g_wfDe[2], 1.0f - g_wfDe[2] * g_wfDe[2] }; Normalize(uw);
                           float sw[3] = { g_wfDe[1] * uw[2] - g_wfDe[2] * uw[1], g_wfDe[2] * uw[0] - g_wfDe[0] * uw[2], g_wfDe[0] * uw[1] - g_wfDe[1] * uw[0] };
                           float dl = fabsf(Dot3(pe[e], sw)); if (dl < best) { best = dl; be = e; }
                       }
-                      LOG("arms: sight calibration for gun %08x - left eye %.3f %.3f %.3f, right eye %.3f %.3f %.3f (gun frame); %s eye %.1f cm beside the gun's centre",
+                      LOG("arms: alignment eye capture for gun %08x - left eye %.3f %.3f %.3f, right eye %.3f %.3f %.3f (gun frame); %s eye %.1f cm beside the gun's centre",
                           key, pe[0][0], pe[0][1], pe[0][2], pe[1][0], pe[1][1], pe[1][2], be ? "right" : "left", best * 100.0f);
-                      if (be >= 0 && best < 0.15f && Dot3(pe[be], pe[be]) < 0.8f * 0.8f) {
-                          memcpy(adjP, pe[be], 12); memcpy(adj, g_wfAdj, 8); memcpy(g_calAdjLive, adj, 8); g_calAdjOn = true; adjOn = true; lastA = 0; controls::SetMenuMode(true);
-                          SightCalPut(key, adjP, adj); memcpy(g_wfCam, pe[be], 12); XformPt(Wf, g_wfCam, so);
-                          xr::Haptic(1, 0.5f, 0.06f); LOG("arms: gun %08x sight line captured: %.3f %.3f %.3f - right stick turns the gun onto the dot, Ctrl+F1 saves", key, pe[be][0], pe[be][1], pe[be][2]); }
-                      else { LOG("arms: sight calibration rejected - neither eye was behind the sights"); xr::Haptic(1, 0.8f, 0.5f); }
+                      if (be >= 0 && best < 0.15f && Dot3(pe[be], pe[be]) < 0.8f * 0.8f) { memcpy(adjP, pe[be], 12); memcpy(g_wfCam, pe[be], 12); XformPt(Wf, g_wfCam, so); }
+                      else { memcpy(adjP, g_wfCam, 12); LOG("arms: alignment - neither eye was behind the sights, the sight line start is kept"); }
+                      memcpy(adj, g_wfAdj, 8); memcpy(g_calAdjLive, adj, 8); memcpy(g_alignAdj, adj, 8); g_calAdjOn = true; adjOn = true; lastA = 0; g_alignState = 2;
+                      xr::Haptic(1, 0.5f, 0.06f); LOG("arms: gun %08x alignment - right stick turns the gun onto the dot", key);
                   }
               }
           }
           // v234 test 79: the gun is turned so its own sight line runs along the controller, so the dot follows the controller
-      } else if (g_calReq) { g_calReq = false; LOG("arms: sight calibration - not available now (weapon follow off: weapon %p, map %d, normal controls %d)", g_curWeapon, (int)f.map, (int)controls::NormalControls()); xr::Haptic(1, 0.6f, 0.4f);
+      } else if (g_alignWant) { g_alignState = 0;
       } else if (g_c.steadyHands && g_relHave && !f.map) {
           M4 ir; if (Inv(g_relR, ir)) {
               M4 V = Mul(Mul(ir, Bw[rh]), Map);   // the capture-time camera, re-posed with the weapon
