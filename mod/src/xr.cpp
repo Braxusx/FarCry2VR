@@ -274,6 +274,22 @@ static bool CreateShared(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt) {
 // v234 test 66: extra keyed-mutex textures other modules hand from the game's device to ours each frame (the DLSS
 // guides: depth, motion vectors, near-pass mask per eye); they join the same hand-over as g_shared
 static Shared g_extra[8];
+// v234 test 68: the same, but made on the game's D3D10 device and opened on ours (the way the plain DLSS guides were
+// always made); test 66/67 made them on D3D11, and the hands and weapon trembled under DLSS with those
+static bool CreateSharedKM10(Shared& s, UINT w, UINT h, DXGI_FORMAT fmt, const char** stepOut, HRESULT* hrOut) {
+    const char* step = "D3D10 CreateTexture2D"; HANDLE sh = nullptr;
+    D3D10_TEXTURE2D_DESC td{}; td.Width = w; td.Height = h; td.MipLevels = td.ArraySize = 1; td.Format = fmt;
+    td.SampleDesc.Count = 1; td.Usage = D3D10_USAGE_DEFAULT; td.BindFlags = D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE;
+    td.MiscFlags = D3D10_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    HRESULT hr = g_dev10->CreateTexture2D(&td, nullptr, &s.tex10);
+    if (SUCCEEDED(hr)) { step = "GetSharedHandle"; IDXGIResource* r = nullptr; s.tex10->QueryInterface(__uuidof(IDXGIResource), (void**)&r); hr = r ? r->GetSharedHandle(&sh) : E_NOINTERFACE; if (r) r->Release(); }
+    if (SUCCEEDED(hr) && sh) { step = "D3D11 OpenSharedResource"; hr = g_dev11->OpenSharedResource(sh, __uuidof(ID3D11Texture2D), (void**)&s.tex11); }
+    if (SUCCEEDED(hr) && s.tex11) { step = "keyed mutex"; hr = s.tex10->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&s.km10); }
+    if (SUCCEEDED(hr) && s.km10) hr = s.tex11->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&s.km11);
+    if (SUCCEEDED(hr) && s.km11) { step = "first AcquireSync"; hr = s.km10->AcquireSync(0, 100); }
+    if (hr == S_OK) { s.held10 = true; return true; }
+    *stepOut = step; *hrOut = hr; ReleaseShared(s); return false;
+}
 
 // Make the D3D10 copies visible to D3D11: flush the game device and wait for its GPU work to finish.
 static void Sync10Wait() {
@@ -1502,7 +1518,7 @@ bool CreateHandoverTexture(UINT w, UINT h, DXGI_FORMAT fmt, ID3D10Texture2D** t1
     if (!g_dev10 || !g_dev11) return false;
     for (Shared& s : g_extra) if (!s.tex10 && !s.tex11) {
         const char* step = ""; HRESULT hr = S_OK;
-        if (!CreateSharedKM(s, w, h, fmt, &step, &hr)) { LOG("XR: hand-over texture %ux%u fmt %d failed (%s hr=%08lx)", w, h, (int)fmt, step, (unsigned long)hr); return false; }
+        if (!CreateSharedKM10(s, w, h, fmt, &step, &hr)) { LOG("XR: hand-over texture %ux%u fmt %d failed (%s hr=%08lx)", w, h, (int)fmt, step, (unsigned long)hr); return false; }
         s.tex10->AddRef(); s.tex11->AddRef(); *t10 = s.tex10; *t11 = s.tex11;
         return true;
     }
