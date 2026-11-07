@@ -2720,7 +2720,7 @@ static void Hotkeys(const XrPosef* head) {
         if (k && !p) { g_camBodyClock = g_camBodyClock == 2 ? 1 : g_camBodyClock == 1 ? 0 : 2; LOG("camera body clock %d (Ctrl+F10)", g_camBodyClock);
             ShowToast(g_camBodyClock == 2 ? "View: 2 drawn body update (new)" : g_camBodyClock == 1 ? "View: 1 latest body update (1.0.3)" : "View: 0 game camera"); }
         p = k; }
-    { static bool p1 = false; bool k1 = (GetAsyncKeyState(VK_F1) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k1 && !p1) { arms::RequestSightCalibration(); ShowToast("Sight calibration: hold still 1 s"); } p1 = k1; }
+    { static bool p1 = false; bool k1 = (GetAsyncKeyState(VK_F1) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k1 && !p1) { LOG("sight calibration requested (Ctrl+F1)"); arms::RequestSightCalibration(); ShowToast("Sight calibration: hold still 1 s"); } p1 = k1; }
     { static bool p6 = false; bool k6 = (DevKey(VK_F6) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k6 && !p6) { g_handSmooth = !g_handSmooth; LOG("hand smoothing %d (Ctrl+F6)", g_handSmooth); ShowToast(g_handSmooth ? "Hand stabiliser: ON" : "Hand stabiliser: OFF"); } p6 = k6; }
     { static bool p5 = false; bool k5 = (DevKey(VK_F5) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000); if (k5 && !p5) { bool on = arms::LocalFrameToggle(); LOG("arm local frame %d (Ctrl+F5)", on); ShowToast(on ? "Arm precision fix: ON" : "Arm precision fix: OFF"); } p5 = k5; }
     {   // v232 test keys (jitter A/B): Insert = DLSS on/off, Page Down = DLSS debug mode (1 = no sub-pixel jitter)

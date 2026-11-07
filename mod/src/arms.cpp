@@ -1412,6 +1412,7 @@ static void Apply(uint8_t* skel) {
               }
           }
           // v234 test 79: the gun is turned so its own sight line runs along the controller, so the dot follows the controller
+      } else if (g_calReq) { g_calReq = false; LOG("arms: sight calibration - not available now (weapon follow off: weapon %p, map %d, normal controls %d)", g_curWeapon, (int)f.map, (int)controls::NormalControls()); xr::Haptic(1, 0.6f, 0.4f);
       } else if (g_c.steadyHands && g_relHave && !f.map) {
           M4 ir; if (Inv(g_relR, ir)) {
               M4 V = Mul(Mul(ir, Bw[rh]), Map);   // the capture-time camera, re-posed with the weapon
