@@ -311,8 +311,28 @@ static double g_hoMs = 0, g_hoMax = 0; static int g_hoN = 0; static bool g_hoLas
 static EyeFilter g_eyeFilter = nullptr; static bool g_copyBack = false, g_plainSharing = false;
 // after our D3D11 work on the shared textures: give them back to D3D10
 template <class F> static void ForAllShared(F f) { for (Shared& s : g_shared) f(s); for (Shared& s : g_extra) f(s); }
+// v234 test 69: with the GPU hand-over the render thread can run a whole frame ahead of a busy GPU; then frames reach
+// the headset late, the runtime re-projects them for the head only, and what the controllers hold (arms, weapon)
+// trembles (Pala, DLAA, GPU near its limit). A query after our copies marks the end of each frame's GPU work; the next
+// frame's hand-over waits for the previous one, so at most one frame is in flight (FrameAheadLimit=0: no limit).
+static ID3D11Query* g_frameQ[2] = {}; static bool g_frameQPending[2] = {}; static int g_frameQi = 0; static bool g_frameAheadLimit = true;
+static double g_aheadMs = 0, g_aheadMax = 0; static int g_aheadN = 0, g_aheadWaits = 0;
+static void FrameQueryMark() {
+    if (!g_frameQ[g_frameQi]) { D3D11_QUERY_DESC qd{ D3D11_QUERY_EVENT, 0 }; if (FAILED(g_dev11->CreateQuery(&qd, &g_frameQ[g_frameQi]))) return; }
+    g_ctx11->End(g_frameQ[g_frameQi]); g_frameQPending[g_frameQi] = true; g_frameQi ^= 1;
+}
+static void FrameQueryWaitPrevious() {
+    const int p = g_frameQi ^ 1;   // the query issued at the end of the previous frame
+    if (!g_frameAheadLimit || !g_frameQ[p] || !g_frameQPending[p]) return;
+    double t0 = QpcMs(); BOOL done = FALSE; bool waited = false;
+    while (g_ctx11->GetData(g_frameQ[p], &done, sizeof done, 0) == S_FALSE) { waited = true; if (QpcMs() - t0 > 100) break; YieldProcessor(); }
+    g_frameQPending[p] = false;
+    double d = QpcMs() - t0; g_aheadMs += d; if (d > g_aheadMax) g_aheadMax = d; ++g_aheadN; if (waited) ++g_aheadWaits;
+}
 static void HandoverDone() {
-    ForAllShared([](Shared& s) { if (s.km11 && s.held11) { s.km11->ReleaseSync(0); s.held11 = false; } });
+    bool had = false;
+    ForAllShared([&had](Shared& s) { if (s.km11 && s.held11) { s.km11->ReleaseSync(0); s.held11 = false; had = true; } });
+    if (had) FrameQueryMark();
     ForAllShared([](Shared& s) { if (s.km10 && !s.held10) {
         if (s.km10->AcquireSync(0, 100) == S_OK) s.held10 = true;
         else LOG("XR: handover: D3D10 could not take a shared texture back");
@@ -323,7 +343,7 @@ static void Sync10() {
     double t0 = QpcMs();
     // DLSS / AFW move more textures between the devices (plain shared ones): those still need the GPU to be done
     const bool wait = !g_gpuHandover || !g_kmOk || g_plainSharing || g_copyBack;
-    if (wait) Sync10Wait(); else g_dev10->Flush();
+    if (wait) Sync10Wait(); else { g_dev10->Flush(); FrameQueryWaitPrevious(); }
     ForAllShared([](Shared& s) { if (s.km10 && s.held10) { s.km10->ReleaseSync(1); s.held10 = false; } });
     g_dev10->Flush();
     ForAllShared([](Shared& s) { if (s.km11 && !s.held11) {
@@ -644,6 +664,7 @@ static void Teardown() {
     InvalidateInput("teardown",true); g_referenceChanges.clear(); ++g_spaceGeneration;
     for (int i = 0; i < 5; ++i) ReleaseShared(g_shared[i]);
     for (Shared& e : g_extra) ReleaseShared(e);
+    for (auto& q : g_frameQ) SafeRelease(q); g_frameQPending[0] = g_frameQPending[1] = false;
     g_hud = Chain{}; g_ret = Chain{}; g_dot = Chain{}; SafeRelease(g_dotTex); g_menu = Chain{}; SafeRelease(g_menuTex); g_ammo = Chain{}; SafeRelease(g_ammoTex); g_wammo = Chain{}; SafeRelease(g_wammoTex); g_gren = Chain{}; SafeRelease(g_grenTex); g_clk = Chain{}; SafeRelease(g_clkTex); g_hp = Chain{}; SafeRelease(g_hpTex); g_vig = Chain{}; SafeRelease(g_vigTex); SafeRelease(g_vigPlainTex); SafeRelease(g_vigMonoTex[0]); SafeRelease(g_vigMonoTex[1]);
     g_eye[0] = Chain{}; g_eye[1] = Chain{}; g_screen = Chain{};
     if (g_inst && p_xrDestroyInstance) p_xrDestroyInstance(g_inst);   // also destroys session/space/swapchains
@@ -1149,6 +1170,12 @@ void SetEyeFilter(EyeFilter f) { g_eyeFilter = f; }
 static ID3D11Query* g_copyQ = nullptr; static bool g_copyPending = false;
 void SetCopyBack(bool on) { g_copyBack = on; }
 void SetPlainSharing(bool on) { g_plainSharing = on; }
+void SetFrameAheadLimit(bool on) { g_frameAheadLimit = on; }
+bool FrameAheadStats(double& avgMs, double& maxMs, int& frames, int& waits) {
+    if (!g_aheadN) return false;
+    avgMs = g_aheadMs / g_aheadN; maxMs = g_aheadMax; frames = g_aheadN; waits = g_aheadWaits;
+    g_aheadMs = g_aheadMax = 0; g_aheadN = g_aheadWaits = 0; return true;
+}
 ID3D10Texture2D* EyeTexture10(int e) { return (e == 0 || e == 1) ? g_shared[e].tex10 : nullptr; }
 // the D3D10 device may read the eye textures again once the D3D11 copy-backs of the last frame are done
 void WaitEyeCopies() {
