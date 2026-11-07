@@ -1005,7 +1005,7 @@ static void Apply(uint8_t* skel) {
         // or renewed only while that axis points along the view (the relaxed gun of a cease-fire town points up);
         // with the barrel along the view any turn of the hand is fine (e.g. a gun brought back rolled in the hand
         // after a phone call). Without a known barrel axis (empty hands, a new type) a renewal must stay within 20 deg.
-        float dAx[3] = { 0, 0, 0 }; bool haveAx = false;
+        float dAx[3] = { 0, 0, 0 }; bool haveAx = false; float wRows[3][3] = {};
         if (due && w) {
             uint8_t* went = nullptr;
             uint8_t* wh = !IsBadReadPtr((uint8_t*)w + 8, 4) ? *(uint8_t**)((uint8_t*)w + 8) : nullptr;   // component -> owner handle {id, id, ref, entity}
@@ -1013,6 +1013,7 @@ static void Apply(uint8_t* skel) {
             if (went && !IsBadReadPtr(went + 0x30, 64)) {
                 float rows[3][3];
                 for (int k = 0; k < 3; ++k) { for (int j = 0; j < 3; ++j) rows[k][j] = *(float*)(went + 0x30 + k * 16 + j * 4); Normalize(rows[k]); dAx[k] = Dot3(rows[k], cf); }
+                memcpy(wRows, rows, sizeof wRows);
                 haveAx = true;
             }
         }
@@ -1038,13 +1039,44 @@ static void Apply(uint8_t* skel) {
             int best = 0; for (int k = 1; k < 3; ++k) if (fabsf(dAx[k]) > fabsf(dAx[best])) best = k;
             if (fabsf(dAx[best]) > 0.85f) { g_curAxis = best; g_curSign = dAx[best] > 0 ? 1.0f : -1.0f; LOG("arms: weapon %p (type %08x) barrel axis %c%c", w, key, g_curSign > 0 ? '+' : '-', "XYZ"[best]); }
         }
+        // v234 test 73: the weapon's barrel is brought onto the view before the hold is kept, so it points where the
+        // controller points. The game holds some weapons canted (the crossbow ~50 deg inward of the view, so no axis
+        // was ever learned and the hand held it turned in). The barrel axis is the learned one, or the weapon axis
+        // nearest the view when it is within 60 deg (then learned); the hand turns about its own origin.
+        M4 barrelR; bool barrelTurn = false;
+        if (due && haveAx && w) {
+            int ax = g_curAxis; float sg = g_curSign;
+            if (ax < 0) { int b = 0; for (int k = 1; k < 3; ++k) if (fabsf(dAx[k]) > fabsf(dAx[b])) b = k;
+                          if (fabsf(dAx[b]) > 0.5f) { ax = b; sg = dAx[b] > 0 ? 1.0f : -1.0f; g_curAxis = ax; g_curSign = sg; LOG("arms: weapon %p (type %08x) barrel axis %c%c (%.0f deg off the view in the game's pose)", w, key, sg > 0 ? '+' : '-', "XYZ"[ax], acosf(fminf(1.0f, fabsf(dAx[b]))) * 57.2958f); } }
+            if (ax >= 0) {
+                float b[3] = { wRows[ax][0] * sg, wRows[ax][1] * sg, wRows[ax][2] * sg }, v[3] = { cf[0], cf[1], cf[2] };
+                Normalize(b); Normalize(v);
+                float c = fmaxf(-1.0f, fminf(1.0f, Dot3(b, v))), deg = acosf(c) * 57.2958f;
+                float axis[3] = { b[1] * v[2] - b[2] * v[1], b[2] * v[0] - b[0] * v[2], b[0] * v[1] - b[1] * v[0] }; float sn = sqrtf(Dot3(axis, axis));
+                if (deg > 3.0f && deg < 70.0f && sn > 1e-5f) {
+                    for (int k = 0; k < 3; ++k) axis[k] /= sn;
+                    M4 R = RotMat(axis, atan2f(sn, c)), hw = Bw[rh];
+                    for (int i = 0; i < 3; ++i) { float row[3] = { hw.m[i][0], hw.m[i][1], hw.m[i][2] }, o[3]; XformDir(R, row, o); hw.m[i][0] = o[0]; hw.m[i][1] = o[1]; hw.m[i][2] = o[2]; }
+                    relNow = Mul(hw, Cinv); barrelR = R; barrelTurn = true;
+                    LOG("arms: weapon %p barrel turned %.0f deg onto the view in its hold", w, deg);
+                }
+            }
+        }
         if (due) {
             if (manual) { recapUntil = 0; g_haveOff0 = false; xr::Haptic(1, 0.6f, 0.08f); LOG("arms: hold for weapon %p taken again on request", w); }
             if (g_relCached) LOG("arms: steady hold renewed for weapon %p (%.1f s after the change, %.1f deg from the remembered one)", w, (t - tChange) / 1000.0, rotAngle(g_relR, relNow));
             else LOG("arms: steady hold taken for weapon %p (type %08x, %.1f s after the change)", w, key, (t - tChange) / 1000.0);
             g_relCached = false;
             g_relR = relNow;
-            if (lhs >= 0 && lhs < n && g_armMask[lhs]) g_relL = Mul(Bw[lhs], Cinv);
+            if (lhs >= 0 && lhs < n && g_armMask[lhs]) {
+                M4 lw = Bw[lhs];
+                if (barrelTurn) {   // the left hand turns with the weapon, about the right hand
+                    for (int i = 0; i < 3; ++i) { float row[3] = { lw.m[i][0], lw.m[i][1], lw.m[i][2] }, o[3]; XformDir(barrelR, row, o); lw.m[i][0] = o[0]; lw.m[i][1] = o[1]; lw.m[i][2] = o[2]; }
+                    float d[3] = { lw.m[3][0] - Bw[rh].m[3][0], lw.m[3][1] - Bw[rh].m[3][1], lw.m[3][2] - Bw[rh].m[3][2] }, o[3]; XformDir(barrelR, d, o);
+                    for (int k = 0; k < 3; ++k) lw.m[3][k] = Bw[rh].m[3][k] + o[k];
+                }
+                g_relL = Mul(lw, Cinv);
+            }
             g_relHave = true;
             int slot = -1; for (int i = 0; i < nCache; ++i) if (cache[i].w == w) slot = i;
             if (slot < 0) slot = nCache < 16 ? nCache++ : (int)(t % 16);
