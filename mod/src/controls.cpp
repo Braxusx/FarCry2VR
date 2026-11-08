@@ -192,7 +192,8 @@ float TurnExtra() { return g_turnExtra; }
 void SetWatchActive() { g_watchTick = GetTickCount(); }
 bool WatchActive() { return GetTickCount() - g_watchTick < 250; }
 void SetMenuMode(bool on) { g_menuMode = on; }
-static volatile float g_mcYaw = 0, g_mcPitch = 0; static volatile DWORD g_mcTick = 0;
+static volatile float g_mcYaw = 0, g_mcPitch = 0; static volatile DWORD g_mcTick = 0; static volatile bool g_turretGrip = false;
+bool TurretGripped() { return g_mounted && g_turretGrip; }
 void SetMountedCamera(float yaw, float pitch) { g_mcYaw = yaw; g_mcPitch = pitch; g_mcTick = GetTickCount(); }
 void SetRightClickBlocked(bool on) { g_rClickBlocked = on; }   // v234 test 83: the alignment menu ticks with the right stick click
 struct MappingHistory {
@@ -361,6 +362,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
             mHand = want; ang(mHand ? R : L, c0y, c0p); g0y = g_mcYaw; g0p = g_mcPitch;
             LOG("controls: turret motion aim on (%s hand), gun heading %.1f pitch %.1f", mHand ? "right" : "left", g0y * 57.2958f, g0p * 57.2958f);
         }
+        g_turretGrip = mHand >= 0;
         if (mHand >= 0) {
             float cy, cp; ang(mHand ? R : L, cy, cp);
             auto wrap = [](float a) { while (a > 3.14159265f) a -= 6.2831853f; while (a < -3.14159265f) a += 6.2831853f; return a; };
@@ -415,7 +417,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         float dx = R.grip.position.x - head.position.x, dy = R.grip.position.y - head.position.y, dz = R.grip.position.z - head.position.z;
         float d = sqrtf(dx * dx + dy * dy + dz * dz);
         bool was = g_sightOn;
-        g_sightOn = (g_leftClaimed || !g_c.sightNeedsGrip) && d < (g_sightOn ? g_c.sightOff : g_c.sightOn);
+        g_sightOn = !g_mounted && (g_leftClaimed || !g_c.sightNeedsGrip) && d < (g_sightOn ? g_c.sightOff : g_c.sightOn);   // v234 test 91: never on a mounted gun (its zoom opened the scope window)
         if (g_sightOn != was) { xr::Haptic(1, 0.3f, 0.03f); LOG("controls: sights %s (hand %.2f m from head)", g_sightOn ? "up" : "down", d); }
     } else g_sightOn = false;
     if (g_sightOn && g_sightsAllowed) g.bLeftTrigger = 255;

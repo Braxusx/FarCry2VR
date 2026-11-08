@@ -926,6 +926,8 @@ static void Apply(uint8_t* skel) {
     auto toRef = [&](const float* w, float* out) {
         Put3(out, f.game.ReferencePosition(Read3(w)));
     };
+    // v234 test 91: gripping a mounted gun - the game's own pose keeps both hands on its handles (the controllers aim it)
+    if (controls::TurretGripped()) return;
     float ar[3], au[3], ab[3], ao[3], grip[3];
     toWorld(f.aimR, ar, false); toWorld(f.aimU, au, false); toWorld(f.aimB, ab, false); toWorld(f.aimO, ao, true); toWorld(f.gripO, grip, true);
     M4 C = FromRows(cr, cu, cb, co), Cinv; if (!Inv(C, Cinv)) return;

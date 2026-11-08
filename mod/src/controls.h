@@ -45,7 +45,8 @@ bool FlashlightOn();
 bool TakeRecenterRequest();      // v222: the left stick was held in (once per hold)             // v220: the flashlight is switched on
 bool MonocularAtFace();           // ... and held at the eye: scope view, the trigger tags       // the right controller's trigger (0..1), last frame
 void SetMenuMode(bool on);
-void SetMountedCamera(float yaw, float pitch);   // v234 test 88: the game camera's heading on a mounted gun (radians; render thread)
+void SetMountedCamera(float yaw, float pitch);
+bool TurretGripped();   // v234 test 91: a grip aims the mounted gun - the hands stay on its handles (the game's pose)   // v234 test 88: the game camera's heading on a mounted gun (radians; render thread)
 void SetRightClickBlocked(bool on);
 bool MapOpen();
 void SetSightsAllowed(bool a);
