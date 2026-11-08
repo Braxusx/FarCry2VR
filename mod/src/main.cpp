@@ -36,6 +36,7 @@ namespace sounddiag { void Tick(); }
 // ============================================================ logging
 static CRITICAL_SECTION g_logCs;
 static FILE* g_log = nullptr;
+volatile bool g_diagLog = false;
 static char g_dir[MAX_PATH] = "";
 
 void LogWrite(const char* fmt, ...) {
@@ -178,7 +179,7 @@ static void LoadConfig() {
     g_cfg.skipRedundantReset = (int)IniF("SkipRedundantReset", 1);
     g_treeCache = IniF("TreeCache", 0) != 0;     // experimental; unnecessary once DpiAware stops the resize loop
     g_cfg.profile = (int)IniF("Profile", 0);
-    g_cfg.devKeys = (int)IniF("DevKeys", 0);
+    g_cfg.devKeys = (int)IniF("DevKeys", 0); g_diagLog = IniF("DiagLog", 0) != 0;
     g_cfg.vehicleViewSmooth = IniF("VehicleViewSmoothing", 0.2f); g_cfg.vehicleViewPrev = (int)IniF("VehicleViewPrevious", 1);
     g_cfg.hudSnap = (int)IniF("HudSnap", 0);
     g_cfg.dpiAware = (int)IniF("DpiAware", 1);
@@ -510,7 +511,7 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
                     long d = seq - ls; ls = seq; ++upd[d <= 0 ? 0 : d == 1 ? 1 : 2];
                     if (input.nowMs - lt > 10000 && n > 100) {
                         double me = se / n, mw = sw / n;
-                        LOG("view clock 2: camera-player offset along the view - entity %.1f mm (std %.1f), drawn skeleton %.1f mm (std %.1f); skeleton updates per frame 0:%d 1:%d 2+:%d",
+                        DLOG("view clock 2: camera-player offset along the view - entity %.1f mm (std %.1f), drawn skeleton %.1f mm (std %.1f); skeleton updates per frame 0:%d 1:%d 2+:%d",
                             me * 1000, sqrt(fmax(0, se2 / n - me * me)) * 1000, mw * 1000, sqrt(fmax(0, sw2 / n - mw * mw)) * 1000, upd[0], upd[1], upd[2]);
                         lt = input.nowMs; se = se2 = sw = sw2 = 0; n = 0; upd[0] = upd[1] = upd[2] = 0;
                     }
@@ -552,7 +553,7 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
             else carry = { 0, 0, 0 };
         } else if (!input.eligible) frame.game.P = frame.raw.P + carry;
     }
-    if (sequence % 900 == 0) LOG("pose frame shared-camera-1 seq=%llu steadyEligible=%d rawP=%.3f,%.3f,%.3f effectiveP=%.3f,%.3f,%.3f rawF=%.4f,%.4f effectiveF=%.4f,%.4f",
+    if (sequence % 900 == 0) DLOG("pose frame shared-camera-1 seq=%llu steadyEligible=%d rawP=%.3f,%.3f,%.3f effectiveP=%.3f,%.3f,%.3f rawF=%.4f,%.4f effectiveF=%.4f,%.4f",
         (unsigned long long)frame.sequence, input.eligible, frame.raw.P.x, frame.raw.P.y, frame.raw.P.z,
         frame.game.P.x, frame.game.P.y, frame.game.P.z, frame.raw.F.x, frame.raw.F.y, frame.game.F.x, frame.game.F.y);
     return frame;
@@ -669,7 +670,7 @@ static void VbFrame() {
     ++g_vbFrameNo;
     g_vbStatBytes += g_vbBytesFrame; g_vbBytesFrame = 0;
     if (++g_vbStatFrames >= 720 && g_uiVB) {   // every ~10 s
-        LOG("UI: HUD vertex copy - %d buffers, %d frames, %.1f maps and %.1f KB copied per frame; HUD draws checked %d, moved %d, unreadable this frame %d, other buffers %d",
+        DLOG("UI: HUD vertex copy - %d buffers, %d frames, %.1f maps and %.1f KB copied per frame; HUD draws checked %d, moved %d, unreadable this frame %d, other buffers %d",
             g_vbN, g_vbStatFrames, g_vbStatMaps / (float)g_vbStatFrames, g_vbStatBytes / 1024.0 / g_vbStatFrames, g_vbStatDraws, g_vbStatMoved, g_vbStatStale, g_vbStatOther);
         g_vbStatFrames = 0; g_vbStatMaps = 0; g_vbStatBytes = 0; g_vbStatDraws = g_vbStatMoved = g_vbStatStale = g_vbStatOther = 0;
     }
@@ -1684,10 +1685,10 @@ static void ProfReport() {
         if (++reps >= 8 && acc.n) {
             double ho = 0, hoMax = 0; int hoN = 0; bool gpu = false; xr::HandoverStats(ho, hoMax, hoN, gpu);
             const double q = 1.0 / acc.n;
-            LOG("HANDOVER %s: frame %.2f ms, render thread busy %.2f ms (eye0 %.2f, eye1 %.2f, end %.2f), spare %.2f ms (xrWaitFrame) | handover wait %.2f ms (max %.2f)",
+            DLOG("HANDOVER %s: frame %.2f ms, render thread busy %.2f ms (eye0 %.2f, eye1 %.2f, end %.2f), spare %.2f ms (xrWaitFrame) | handover wait %.2f ms (max %.2f)",
                 gpu ? "GPU (no wait)" : "render thread waits", acc.frame * q, (acc.eye0 + acc.eye1 + acc.end) * q, acc.eye0 * q, acc.eye1 * q, acc.end * q, acc.wait * q, ho, hoMax);
             { double a = 0, am = 0; int af = 0, aw = 0;
-              if (xr::FrameAheadStats(a, am, af, aw)) LOG("FRAME AHEAD: waited for the previous frame's GPU work in %d of %d frames, avg %.2f ms (max %.2f)", aw, af, a, am); }
+              if (xr::FrameAheadStats(a, am, af, aw)) DLOG("FRAME AHEAD: waited for the previous frame's GPU work in %d of %d frames, avg %.2f ms (max %.2f)", aw, af, a, am); }
             PerfWorkReport(acc.n);
             acc = Prof{}; reps = 0;
         }
@@ -2712,11 +2713,11 @@ static void Hotkeys(const XrPosef* head) {
         LOG("vehicle view smoothing %.2f previous %d (Ctrl+F7)", g_cfg.vehicleViewSmooth, g_cfg.vehicleViewPrev);
         ShowToast(g_cfg.vehicleViewSmooth <= 0 ? "Vehicle view: 3 OFF (head bone)" : g_cfg.vehicleViewPrev ? "Vehicle view: 1 seat, drawn update" : "Vehicle view: 2 seat, latest update"); } p7 = k7; }
     {   // v234 test 54: Ctrl+F11 switches the end-of-frame handover (GPU / render thread waits) for a before/after measurement
-        static bool p = false; bool k = (GetAsyncKeyState(VK_F11) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000);
+        static bool p = false; bool k = (DevKey(VK_F11) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000);   // 1.0.4: dev key
         if (k && !p) { bool on = !xr::GpuHandover(); xr::SetGpuHandover(on); ShowToast(!xr::GpuHandoverAvailable() ? "Frame handover: GPU mode unavailable (see log)" : xr::GpuHandover() ? "Frame handover: GPU (new)" : "Frame handover: CPU waits (old)"); }
         p = k; }
     {   // v234 test: Ctrl+F10 cycles the view's body clock 2 (drawn update) -> 1 (latest update, 1.0.3) -> 0 (game camera)
-        static bool p = false; bool k = (GetAsyncKeyState(VK_F10) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000);
+        static bool p = false; bool k = (DevKey(VK_F10) & 0x8000) && (GetAsyncKeyState(VK_CONTROL) & 0x8000);   // 1.0.4: dev key
         if (k && !p) { g_camBodyClock = g_camBodyClock == 2 ? 1 : g_camBodyClock == 1 ? 0 : 2; LOG("camera body clock %d (Ctrl+F10)", g_camBodyClock);
             ShowToast(g_camBodyClock == 2 ? "View: 2 drawn body update (new)" : g_camBodyClock == 1 ? "View: 1 latest body update (1.0.3)" : "View: 0 game camera"); }
         p = k; }
@@ -3322,53 +3323,6 @@ static void DrawHealth(float ratio, int segs, int syr) {
     }
     xr::SetHealthImage(out);
 }
-// ---- End key: machete hand menu (pitch / yaw / roll sliders), shown as a panel in front of you.
-// Keyboard: Up/Down select, Left/Right adjust (Shift = 1 deg steps, else 5). Controllers: left stick up/down selects,
-// right stick left/right adjusts (faster the further you push). Changes show live; closing saves them to fc2vr.ini.
-static const char* kMenuPages[4] = { "Machete hand", "Map & GPS hands", "Free hands", "Phone hand (calls)" };
-static void DrawMenu(int page, int sel, const float v[3]) {
-    static HDC dc = nullptr; static HBITMAP bmp = nullptr; static uint32_t* bits = nullptr; static HFONT big = nullptr, small_ = nullptr;
-    const int W = xr::MenuW, H = xr::MenuH;
-    if (!dc) {
-        dc = CreateCompatibleDC(nullptr);
-        BITMAPINFO bi{}; bi.bmiHeader.biSize = sizeof bi.bmiHeader; bi.bmiHeader.biWidth = W; bi.bmiHeader.biHeight = -H; bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
-        bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, (void**)&bits, nullptr, 0); SelectObject(dc, bmp);
-        big = CreateFontA(28, 0, 0, 0, FW_BOLD, 0, 0, 0, ANSI_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, "Arial");
-        small_ = CreateFontA(19, 0, 0, 0, FW_NORMAL, 0, 0, 0, ANSI_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, "Arial");
-        SetBkMode(dc, TRANSPARENT);
-    }
-    if (!bits) return;
-    RECT all{ 0, 0, W, H }; HBRUSH bg = CreateSolidBrush(RGB(24, 24, 24)); FillRect(dc, &all, bg); DeleteObject(bg);
-    // row 0: which item
-    {
-        int y = 14;
-        if (sel == 0) { RECT hl{ 10, y - 4, W - 10, y + 38 }; HBRUSH br = CreateSolidBrush(RGB(60, 52, 36)); FillRect(dc, &hl, br); DeleteObject(br); }
-        SelectObject(dc, big); SetTextColor(dc, sel == 0 ? RGB(255, 240, 200) : RGB(235, 225, 190));
-        char t[64]; snprintf(t, sizeof t, "<  %s  >", kMenuPages[page]);
-        RECT r{ 20, y, W - 20, y + 34 }; DrawTextA(dc, t, -1, &r, DT_CENTER | DT_SINGLELINE);
-    }
-    static const char* names[3] = { "Pitch", "Yaw", "Roll" };
-    for (int i = 0; i < 3; ++i) {
-        int row = i + 1, y = 66 + i * 58;
-        if (row == sel) { RECT hl{ 10, y - 6, W - 10, y + 46 }; HBRUSH br = CreateSolidBrush(RGB(60, 52, 36)); FillRect(dc, &hl, br); DeleteObject(br); }
-        SelectObject(dc, big); SetTextColor(dc, row == sel ? RGB(255, 240, 200) : RGB(190, 190, 190));
-        RECT n{ 24, y, 130, y + 34 }; DrawTextA(dc, names[i], -1, &n, DT_LEFT | DT_SINGLELINE);
-        char val[16]; snprintf(val, sizeof val, "%.0f\xB0", v[i]);
-        RECT vr{ W - 110, y, W - 24, y + 34 }; DrawTextA(dc, val, -1, &vr, DT_RIGHT | DT_SINGLELINE);
-        int x0 = 140, x1 = W - 125, cy = y + 18;   // slider: -180..180
-        RECT tr{ x0, cy - 3, x1, cy + 3 }; HBRUSH tb = CreateSolidBrush(RGB(90, 90, 90)); FillRect(dc, &tr, tb); DeleteObject(tb);
-        RECT zr{ (x0 + x1) / 2 - 1, cy - 9, (x0 + x1) / 2 + 1, cy + 9 }; HBRUSH zb = CreateSolidBrush(RGB(120, 120, 120)); FillRect(dc, &zr, zb); DeleteObject(zb);
-        float f = (fmaxf(-180.0f, fminf(180.0f, v[i])) + 180.0f) / 360.0f; int kx = x0 + (int)(f * (x1 - x0));
-        RECT kr{ kx - 6, cy - 12, kx + 6, cy + 12 }; HBRUSH kb = CreateSolidBrush(row == sel ? RGB(240, 200, 90) : RGB(200, 200, 200)); FillRect(dc, &kr, kb); DeleteObject(kb);
-    }
-    SelectObject(dc, small_); SetTextColor(dc, RGB(170, 170, 170));
-    RECT h1{ 20, H - 60, W - 20, H - 38 }; DrawTextA(dc, "Left stick / Up-Down: choose    Right stick / Left-Right: adjust", -1, &h1, DT_LEFT | DT_SINGLELINE);
-    RECT h2{ 20, H - 34, W - 20, H - 12 }; DrawTextA(dc, "Shift = 1\xB0 steps    End: close and save", -1, &h2, DT_LEFT | DT_SINGLELINE);
-    GdiFlush();
-    static uint32_t out[xr::MenuW * xr::MenuH];
-    for (int i = 0; i < W * H; ++i) { uint32_t p = bits[i]; out[i] = 0xF0000000u | ((p & 0xFF) << 16) | (p & 0xFF00) | ((p >> 16) & 0xFF); }   // BGRA -> RGBA, nearly opaque
-    xr::SetMenu(out, g_menuPoseX, 0.6f);
-}
 // short on-screen notes (DLSS mode), shown on the menu layer for a moment
 static char g_toast[128] = ""; static double g_toastUntil = 0; static bool g_toastNew = false; static XrPosef g_toastPose{};
 static void ShowToast(const char* t) { snprintf(g_toast, sizeof g_toast, "%s", t); g_toastUntil = NowMs() + 2500.0; g_toastNew = true; }
@@ -3405,68 +3359,6 @@ static void ToastTick(const xr::FrameViews& fv) {
         V3 p = mid + fwd * 0.75f + V3{ 0, -0.15f, 0 }; g_toastPose.position = { p.x, p.y, p.z };
         DrawToast();
     } else xr::SetMenu(nullptr, g_toastPose, 0.6f);
-}
-// End key: hand angle menu. Page 1 = machete (right hand), page 2 = map & GPS (both hands, mirrored for the left).
-static void MacheteMenu(const xr::FrameViews& fv) {
-    static bool open = false, prevEnd = false, prevUp = false, prevDn = false, prevL = false, prevR = false; static int sel = 1, page = 0; static int stickSel = 0, stickPage = 0;
-    static double tPrev = 0; static float acc = 0;
-    bool endK = (GetAsyncKeyState(VK_END) & 0x8000) != 0;
-    bool toggle = endK && !prevEnd; prevEnd = endK;
-    auto get = [&](int pg, float* v) { if (pg == 0) arms::GetMachete(v[0], v[1], v[2]); else if (pg == 1) arms::GetMapHands(v[0], v[1], v[2]); else if (pg == 2) arms::GetFreeHands(v[0], v[1], v[2]); else arms::GetPhoneHands(v[0], v[1], v[2]); };
-    auto set = [&](int pg, const float* v) { if (pg == 0) arms::SetMachete(v[0], v[1], v[2]); else if (pg == 1) arms::SetMapHands(v[0], v[1], v[2]); else if (pg == 2) arms::SetFreeHands(v[0], v[1], v[2]); else arms::SetPhoneHands(v[0], v[1], v[2]); };
-    float v[3]; get(page, v);
-    if (toggle) {
-        open = !open; controls::SetMenuMode(open);
-        if (open) {   // panel 0.75 m ahead of the head, level, facing you
-            page = controls::MapOpen() ? 1 : (controls::PhoneOut() || !controls::NormalControls()) ? 3 : arms::CurrentWeapon() ? 0 : 2; get(page, v);
-            const XrPosef& h = fv.views[0].pose;
-            V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
-            V3 fwd = QRot(h.orientation, { 0, 0, -1 }); fwd.y = 0; fwd = Norm(fwd);
-            V3 zq = fwd * -1.0f, xq = Norm(Cross(V3{ 0, 1, 0 }, zq)), yq = Cross(zq, xq);
-            g_menuPoseX.orientation = QuatFromBasis(xq, yq, zq);
-            V3 p = mid + fwd * 0.75f + V3{ 0, -0.1f, 0 }; g_menuPoseX.position = { p.x, p.y, p.z };
-            DrawMenu(page, sel, v); LOG("hand menu open (%s)", kMenuPages[page]);
-        } else {
-            char path[MAX_PATH], b[32]; snprintf(path, MAX_PATH, "%sfc2vr.ini", g_dir);
-            float m[3], g[3], fh[3], ph[3]; get(0, m); get(1, g); get(2, fh); get(3, ph);
-            static const char* keys[4][3] = { { "MacheteAngle", "MacheteYaw", "MacheteRoll" }, { "MapPitch", "MapYaw", "MapRoll" }, { "FreeHandPitch", "FreeHandYaw", "FreeHandRoll" }, { "PhonePitch", "PhoneYaw", "PhoneRoll" } };
-            for (int k = 0; k < 3; ++k) { snprintf(b, sizeof b, "%.0f", m[k]); WritePrivateProfileStringA("VR", keys[0][k], b, path);
-                                          snprintf(b, sizeof b, "%.0f", g[k]); WritePrivateProfileStringA("VR", keys[1][k], b, path);
-                                          snprintf(b, sizeof b, "%.0f", fh[k]); WritePrivateProfileStringA("VR", keys[2][k], b, path);
-                                          snprintf(b, sizeof b, "%.0f", ph[k]); WritePrivateProfileStringA("VR", keys[3][k], b, path); }
-            LOG("hand menu closed: machete %.0f/%.0f/%.0f, map %.0f/%.0f/%.0f, free hands %.0f/%.0f/%.0f, phone %.0f/%.0f/%.0f saved", m[0], m[1], m[2], g[0], g[1], g[2], fh[0], fh[1], fh[2], ph[0], ph[1], ph[2]);
-        }
-    }
-    if (!open) { tPrev = 0; ToastTick(fv); return; }
-    double now = NowMs(); float dt = tPrev > 0 ? (float)((now - tPrev) * 0.001) : 0.0f; tPrev = now; if (dt > 0.1f) dt = 0.1f;
-    bool changed = false;
-    bool up = (GetAsyncKeyState(VK_UP) & 0x8000) != 0, dn = (GetAsyncKeyState(VK_DOWN) & 0x8000) != 0;
-    bool kl = (GetAsyncKeyState(VK_LEFT) & 0x8000) != 0, kr = (GetAsyncKeyState(VK_RIGHT) & 0x8000) != 0;
-    bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-    if (up && !prevUp) { sel = (sel + 3) % 4; changed = true; }
-    if (dn && !prevDn) { sel = (sel + 1) % 4; changed = true; }
-    float step = shift ? 1.0f : 5.0f;
-    int flip = 0;
-    if (kl && !prevL) { if (sel == 0) flip = -1; else v[sel - 1] -= step; changed = true; }
-    if (kr && !prevR) { if (sel == 0) flip = 1; else v[sel - 1] += step; changed = true; }
-    prevUp = up; prevDn = dn; prevL = kl; prevR = kr;
-    const xr::HandState& L = xr::Hand(0); const xr::HandState& R = xr::Hand(1);
-    int ss = L.stick.y > 0.7f ? -1 : L.stick.y < -0.7f ? 1 : 0;
-    if (ss != 0 && stickSel == 0) { sel = (sel + 4 + ss) % 4; changed = true; xr::Haptic(0, 0.2f, 0.02f); }
-    stickSel = ss;
-    float rx = R.stick.x; if (fabsf(rx) < 0.15f) { rx = 0; acc = 0; }
-    if (sel == 0) {   // the item row: a push of the right stick flips the page
-        int sp = rx > 0.6f ? 1 : rx < -0.6f ? -1 : 0;
-        if (sp != 0 && stickPage == 0) { flip = sp; changed = true; xr::Haptic(1, 0.2f, 0.02f); }
-        stickPage = sp;
-    } else if (rx != 0) {   // up to 60 deg/s, whole degrees
-        acc += rx * fabsf(rx) * 60.0f * dt;
-        float whole = truncf(acc); if (whole != 0) { v[sel - 1] += whole; acc -= whole; changed = true; }
-    }
-    if (flip) { page = (page + 4 + flip) % 4; get(page, v); }
-    for (float& x : v) { while (x > 180.0f) x -= 360.0f; while (x < -180.0f) x += 360.0f; }
-    if (changed) { if (!flip) set(page, v); DrawMenu(page, sel, v); }
-    else xr::SetMenu(nullptr, g_menuPoseX, 0.6f);
 }
 // v224 Home: smooth turning speed. Left arrow slower, right arrow faster (10% steps); Home again closes and saves.
 static bool g_turnMenuOpen = false;
@@ -4536,7 +4428,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     }
     if (poseReady && g_frame % 90 == 0) {
         arms::FrameUsage use;
-        if (arms::ReadFrameUsage(use)) LOG("pose use shared-camera-1 published=%llu eyes=%d scope=%d renderThread=%lu appliedValid=%d applied=%llu appliedCalls=%u applyThread=%u interactionValid=%d interaction=%llu interactionCalls=%u interactionThread=%u",
+        if (arms::ReadFrameUsage(use)) DLOG("pose use shared-camera-1 published=%llu eyes=%d scope=%d renderThread=%lu appliedValid=%d applied=%llu appliedCalls=%u applyThread=%u interactionValid=%d interaction=%llu interactionCalls=%u interactionThread=%u",
             (unsigned long long)frame.sequence, eyes, g_scopeFrame, GetCurrentThreadId(), use.haveApplied,
             (unsigned long long)use.appliedSequence, use.appliedCalls, use.appliedThread, use.haveInteraction,
             (unsigned long long)use.interactionSequence, use.interactionCalls, use.interactionThread);
@@ -4706,7 +4598,7 @@ static void __fastcall Hook_Present(void* self, void* edx, int a1) {
                 ULONGLONG proc = ((ULONGLONG)k.dwHighDateTime << 32 | k.dwLowDateTime) + ((ULONGLONG)u.dwHighDateTime << 32 | u.dwLowDateTime);
                 if (tsc0 && now > q0) {
                     const double tscPerMs = (double)(tsc - tsc0) / (now - q0);
-                    LOG("FLAT CPU avg %d frames: render thread busy in RenderFrame %.2f ms (of %.2f ms) | whole process CPU %.2f ms per frame (%.1f cores busy) | %s",
+                    DLOG("FLAT CPU avg %d frames: render thread busy in RenderFrame %.2f ms (of %.2f ms) | whole process CPU %.2f ms per frame (%.1f cores busy) | %s",
                         n, g_rfCycles / tscPerMs / n, g_rfMs / n, (proc - proc0) / 10000.0 / n, (proc - proc0) / 10000.0 / (now - last), g_dxvkOn ? "DXVK" : "native D3D10");
                 }
                 tsc0 = tsc; q0 = now; proc0 = proc; g_rfCycles = 0;
@@ -5114,7 +5006,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         char lp[MAX_PATH]; snprintf(lp, MAX_PATH, "%sfc2vr.log", g_dir);
         { char pp[MAX_PATH]; snprintf(pp, MAX_PATH, "%sfc2vr_prev.log", g_dir); MoveFileExA(lp, pp, MOVEFILE_REPLACE_EXISTING); }   // keep the last session's log
         g_log = fopen(lp, "w");
-        LOG("FC2VR loaded (v234 test 92: the reticle stays on the turret while it is gripped; v234 test 91: gripped mounted gun keeps the hands on its handles; no sights/scope window on mounted guns; v234 test 90: turret motion aim up/down reversed - controller down raises the barrel (TurretMotionInvertY); v234 test 89: right grip on a vehicle's mounted gun aims it instead of changing seat; v234 test 88: mounted guns - grip held, point either controller to aim (TurretMotionAim); v234 test 87: scope view camera starts past the weapon (ScopeViewForward=1.0 m); v234 test 86: alignment menu - Up/Down choose the row, Enter ticks / unticks it; v234 test 85: the dot stays with the gun in the two-handed grip; v234 test 84: alignment menu second tick box - the right stick moves the dot (per gun); v234 test 83: F1 weapon alignment menu (tick box: the right stick turns the held gun onto the dot, untick saves), toasts shown again; v234 test 82: the calibration stick turns the gun onto the dot (the dot stays on the controller line); v234 test 81: after the Ctrl+F1 capture the right stick nudges the dot, Ctrl+F1 again saves; eye picked by the gun's centre plane; v234 test 80: Ctrl+F1 sight calibration - the eye looking down the sights becomes the gun's sight line, saved per gun; v234 test 79: each gun turned so its own sight line (~20 deg off its model axis) runs along the controller and the dot; v234 test 78: aiming dot on the gun's own sights, measured once per gun in the game's aim pose; v234 test 77: fixed weapon axes (guns +X/+Z, machete +X/-Y), weapon offset from its attachment node; v234 test 76: weapon axes settle after the draw and are remembered per type, sight line above the barrel, machete upright; v234 test 75: weapons follow the controller, fixed hand angles, no hand menu; v234 test 74: sun shadow zones snapped to whole shadow-map pixels (ShadowSnap=1); v234 test 73: weapon barrel brought onto the view in its hold (crossbow); v234 test 72: weapon holds only taken with the weapon settled on the hand, no reload; v234 test 71: CPU placement (CpuPlacement, CpuPriority); v234 test 70: machete taken from the held weapon, not the slot guess; v234 test 69: at most one frame ahead of the GPU (FrameAheadLimit=1); v234 test 68: DLSS hand-over guides made on the D3D10 device; v234 test 67: DlssGuideHandover A/B; v234 test 66: DLSS guides handed over with keyed mutexes (no CPU wait with DLSS); v234 test 65: merged main (PR #8 headset body yaw, grass fix, shoulder fix); v234 test 64: GPU handover with DLSS off even when the DLSS module is loaded; v234 test 63: keyed mutex on every shared texture (right-eye twitch fix); v234 test 62: fast map check (FastMapCheck=1); v234 test 61: counters on the runtime implementations, profiler names system functions; v234 test 60: Profile=1 work breakdown (shadows, draws, state calls); v234 test 59: flat CPU-busy measurement, dxvk.conf; v234 test 58: Dxvk ini read before the device patch; v234 test 57: DXVK trial (Dxvk=1, flat Enable=2 first); v234 test 56: game DXGI factory made as DXGI 1.1 for the keyed-mutex handover; v234 test 55: handover fence made on the D3D11 device; v234 test 54: end-of-frame GPU handover, EndFrameWait=0, Ctrl+F11 A/B; v234 test 53: desktop VSync off; v234 test 52: health + syrettes beside the clock under the map; 12 hour map clock; map clock on the drawn body update; clock under the map; grenade panel tilt; grenade counter by the left hand; secondary weapon ammo panel gap; ammo panel fixed to the weapon; no weapon select in menus; optional indestructible buggy / hang glider / ATV; optional no timed malaria attacks / unlimited pills; HUD prompt row placed from its vertex data; predecessor missions, bonus machetes, Jackal tape fix; two-handed grip held through tracking dropouts; game pad aim assist off, view on the drawn body update (CameraOnBodyClock=2, Ctrl+F10 cycles); build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
+        LOG("FC2VR loaded (1.0.4 - v234 test 92; build " __DATE__ " " __TIME__ ", module=%s)", modulePath);
         LogVA("startup");
         {   // v225: the game doesn't start on more than 16 logical processors. This DLL loads before any game code (Dunia
             // imports dinput8), so the limit is applied here - FarCry2VR.exe / FarCry2.exe started any way get it.

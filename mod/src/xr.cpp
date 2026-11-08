@@ -504,7 +504,7 @@ static void PublishInput(bool synced, const XrPosef& head, bool headValid, XrTim
         | (g_hs[1].poseAuthority ? 8 : 0) | (headValid ? 16 : 0);
     if (state != previousState || stamp.sequence % 900 == 0) {
         previousState = state;
-        LOG("XR: input-authority-1 seq=%llu gen=%llu focused=%d sync=%d headTracked=%d L(active=%d gripValid=%d gripTracked=%d aimValid=%d aimTracked=%d held=%d authority=%d) R(active=%d gripValid=%d gripTracked=%d aimValid=%d aimTracked=%d held=%d authority=%d)",
+        DLOG("XR: input-authority-1 seq=%llu gen=%llu focused=%d sync=%d headTracked=%d L(active=%d gripValid=%d gripTracked=%d aimValid=%d aimTracked=%d held=%d authority=%d) R(active=%d gripValid=%d gripTracked=%d aimValid=%d aimTracked=%d held=%d authority=%d)",
             (unsigned long long)stamp.sequence,(unsigned long long)stamp.generation,stamp.focused,synced,headValid,
             g_hs[0].active,g_hs[0].gripEvidence.Valid(),g_hs[0].gripEvidence.Tracked(),g_hs[0].aimEvidence.Valid(),g_hs[0].aimEvidence.Tracked(),g_hs[0].gripHeld||g_hs[0].aimHeld,g_hs[0].poseAuthority,
             g_hs[1].active,g_hs[1].gripEvidence.Valid(),g_hs[1].gripEvidence.Tracked(),g_hs[1].aimEvidence.Valid(),g_hs[1].aimEvidence.Tracked(),g_hs[1].gripHeld||g_hs[1].aimHeld,g_hs[1].poseAuthority);

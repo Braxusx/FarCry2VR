@@ -200,6 +200,7 @@ struct MappingHistory {
     ULONGLONG recenterAt = 0, gadgetAt = 0, mapPress = 0, notMapSince = 0;
     bool recenterFired = false, driverMap = false, gadgetHeld = false, gadgetDelayed = false, mapPrev = false;
     int lastMap = -1, turnDir = 0, snapDir = 0;
+    int turretHand = -1; float turretC0y = 0, turretC0p = 0, turretG0y = 0, turretG0p = 0; DWORD turretLog = 0;   // v234 test 88 motion aim
     bool aPrev = false, aCombo = false, rThrow = false, lThrow = false, trigFlash = false, bCombo = false;
 };
 static MappingHistory g_history;
@@ -349,7 +350,8 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         // v234 test 88: point to aim - with a grip held, the gun turns to follow where that controller points, relative
         // to how it was held when the grip went down. The game only takes stick input, so the stick is steered toward the
         // wanted heading from the gun's current one (the game camera on the gun), harder the further off it is.
-        static int mHand = -1; static float c0y, c0p, g0y, g0p; static DWORD lastLog = 0;
+        auto& mHand = g_history.turretHand; auto& c0y = g_history.turretC0y; auto& c0p = g_history.turretC0p;
+        auto& g0y = g_history.turretG0y; auto& g0p = g_history.turretG0p; auto& lastLog = g_history.turretLog;
         const bool camOk = GetTickCount() - g_mcTick < 200;
         int want = !g_c.turretMotion || !camOk ? -1 : (R.squeeze > 0.6f && R.aimValid) ? 1 : (L.squeeze > 0.6f && L.aimValid) ? 0 : -1;
         if (mHand >= 0 && (want < 0 || !(mHand ? R : L).aimValid || (mHand ? R : L).squeeze < 0.4f)) { mHand = -1; LOG("controls: turret motion aim off"); }
@@ -376,7 +378,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
             };
             g.sThumbRX = Axis(-drive(ey));   // right on the stick turns the heading clockwise (down)
             g.sThumbRY = Axis(drive(ep));
-            if (GetTickCount() - lastLog > 1000) { lastLog = GetTickCount(); LOG("controls: turret motion aim - off by %.1f deg sideways, %.1f deg up/down", ey, ep); }
+            if (GetTickCount() - lastLog > 1000) { lastLog = GetTickCount(); DLOG("controls: turret motion aim - off by %.1f deg sideways, %.1f deg up/down", ey, ep); }
         }
     }
     if (down) b |= XINPUT_GAMEPAD_B;                       // crouch

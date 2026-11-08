@@ -916,7 +916,7 @@ static void Apply(uint8_t* skel) {
         static double sum = 0; static int cnt = 0, nLog = 0; static ULONGLONG lastL = 0;
         if (std::isfinite(dl) && dl < 1.5f) { f.game.P.x += d[0]; f.game.P.y += d[1]; f.game.P.z += d[2]; sum += dl; ++cnt; }
         ULONGLONG tn = GetTickCount64();
-        if (nLog < 30 && tn - lastL > 10000 && cnt) { ++nLog; lastL = tn; LOG("body clock: hands moved with the body by %.1f mm per frame on average (%d frames)", sum / cnt * 1000.0, cnt); sum = 0; cnt = 0; }
+        if (nLog < 30 && tn - lastL > 10000 && cnt) { ++nLog; lastL = tn; DLOG("body clock: hands moved with the body by %.1f mm per frame on average (%d frames)", sum / cnt * 1000.0, cnt); sum = 0; cnt = 0; }
     }
     g_dbgApplyP[0] = f.game.P.x + O[0]; g_dbgApplyP[1] = f.game.P.y + O[1]; g_dbgApplyP[2] = f.game.P.z + O[2]; g_dbgApplySeq = f.frameSequence;
     g_dbgApplyF[0] = f.game.F.x; g_dbgApplyF[1] = f.game.F.y; g_dbgApplyF[2] = f.game.F.z;
@@ -1051,7 +1051,7 @@ static void Apply(uint8_t* skel) {
             if (LoadHold(key, r, l, &ax, &sg)) { g_relR = r; g_relL = l; g_relHave = true; g_relCached = true; if (g_curAxis < 0) { g_curAxis = ax; g_curSign = sg; } LOG("arms: saved hold %08x used for weapon %p", key, w); }
         }
         if (!g_relHave && t - tChange > 150 && !controls::NormalControls()) {   // the phone (or another gadget with its own controls)
-            M4 r, l; if (LoadHold(0xFFFFFFFFu, r, l, nullptr, nullptr)) { g_relR = r; g_relL = l; g_relHave = true; g_relCached = true; LOG("arms: empty-hands hold used for item %p (phone / gadget)", w); }
+            M4 r, l; if (LoadHold(0xFFFFFFFFu, r, l, nullptr, nullptr)) { g_relR = r; g_relL = l; g_relHave = true; g_relCached = true; { static void* lastEH = nullptr; if (w != lastEH) { lastEH = w; LOG("arms: empty-hands hold used for item %p (phone / gadget)", w); } } }
         }
         // A hold is taken once per weapon (type) and then kept: automatic renewals picked up the game's special poses
         // (town, phone, map). Left grip + A takes the current hold again on request (when one looks wrong).
@@ -2361,7 +2361,7 @@ static void BodyYawTick(uint8_t* pawn,uint8_t* pd) {
         }
         if(!valid)g_bodyYaw.refused=true;
         static uint64_t lastLog=0;const uint64_t now=GetTickCount64();
-        if(now-lastLog>500 || !valid){lastLog=now;LOG("body-yaw apply seq=%llu owner=%p head=%.6f native=%.6f transferred=%.6f delta=%.6f accepted=%d thread=%lu",(unsigned long long)sample.sequence,pawn,sample.headYaw,valid?*(float*)(pd+0x310):old[2],g_bodyYaw.transferred,delta,valid,GetCurrentThreadId());}
+        if(now-lastLog>500 || !valid){lastLog=now;DLOG("body-yaw apply seq=%llu owner=%p head=%.6f native=%.6f transferred=%.6f delta=%.6f accepted=%d thread=%lu",(unsigned long long)sample.sequence,pawn,sample.headYaw,valid?*(float*)(pd+0x310):old[2],g_bodyYaw.transferred,delta,valid,GetCurrentThreadId());}
     }
 #if defined(FC2VR_BODY_YAW_TESTING)
     if(frame.bodyYawFixture){
@@ -3872,7 +3872,7 @@ static void __fastcall Hook_UseMon(uint8_t* self, void* edx, uint32_t a, uint32_
         if (strcmp(last, g_useDiagLine) != 0 || now - g_useDiagLast > 3000) {
             strcpy(last, g_useDiagLine); g_useDiagLast = now; ++g_useDiagN;
             const float* hb = g_useBox; float pitch = asinf(fmaxf(-1.0f, fminf(1.0f, g_useHeadD[2]))) * 57.29578f;
-            LOG("use: head z %.2f pitch %+.0f | box half %.2f %.2f %.2f at z %.2f (%+.2f from head) | box %u sphere %u candidates%s",
+            DLOG("use: head z %.2f pitch %+.0f | box half %.2f %.2f %.2f at z %.2f (%+.2f from head) | box %u sphere %u candidates%s",
                 g_useHeadO[2], pitch, hb[0], hb[1], hb[2], hb[5], hb[5] - g_useHeadO[2], g_useBoxHits, g_useSphereHits, g_useDiagLine[0] ? g_useDiagLine : " | none asked");
         }
     }
@@ -4044,7 +4044,7 @@ static bool __fastcall Use_IsUsable(void* self, void* edx, void* cand, void* usa
     if (r && g_c.useCenter > 0 && g_useThread == GetCurrentThreadId()) {
         float a = UseViewAngle(cand, pos);
         if (a > g_c.useCenter) r = false;
-        static int nl = 0; if (nl < 20 && a < 1e8f) { ++nl; LOG("use: candidate %.0f deg outside its bounds from the view centre -> %s", a, r ? "offered" : "not offered"); }
+        static int nl = 0; if (nl < 20 && a < 1e8f) { ++nl; DLOG("use: candidate %.0f deg outside its bounds from the view centre -> %s", a, r ? "offered" : "not offered"); }
     }
     bool aimed = g_useCandOn; g_useCandOn = false;
     int asked = g_useAimAsks - asks0;

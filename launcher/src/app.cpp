@@ -154,6 +154,8 @@ static V234Opt g_v234Game[] = {
     { L"JackalTapeFix", "Jackal tape fix", "Fixes Jackal tape #9 repeating on the southern map (a patch 1.03 bug).", L"1", false, true },
     { L"HeadsetBodyYaw", "Turn the body with your head", "Turning physically with the headset turns your character's body too (on foot). Steam version only.", L"0", false, false },
     { L"GrassHeadYawFix", "Steady grass when turning", "Keeps grass from swinging around when you turn physically. Needs \"Turn the body with your head\". Steam version only.", L"0", false, false },
+    { L"TurretMotionAim", "Aim mounted guns with the controllers", "On a mounted gun, hold either grip and point that controller to aim it. Your hands stay on the gun's handles. Released, the sticks aim as before.", L"1", false, true },
+    { L"TurretMotionInvertY", "Mounted guns: lower to raise the barrel", "With motion aiming, lowering the controller raises the barrel, like pushing down on a real gun's rear handles. Off: the barrel follows the controller up and down.", L"1", false, true },
 };
 static V234Opt g_v234Hud[] = {
     { L"AmmoPanel", "Ammo counter on the gun", "Rounds in the clip and spare rounds, beside the gun in your right hand.", L"1", false, true },
