@@ -365,7 +365,8 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
             float cy, cp; ang(mHand ? R : L, cy, cp);
             auto wrap = [](float a) { while (a > 3.14159265f) a -= 6.2831853f; while (a < -3.14159265f) a += 6.2831853f; return a; };
             // the room turns right with yaw up; the game's heading turns left with yaw up (Z up)
-            const float wy = g0y - wrap(cy - c0y), wp = fmaxf(-1.4f, fminf(1.4f, g0p + (cp - c0p)));
+            // v234 test 90: like the gun's rear handles - the controller down raises the barrel (TurretMotionInvertY=1, default)
+            const float wy = g0y - wrap(cy - c0y), wp = fmaxf(-1.4f, fminf(1.4f, g0p + (g_c.turretMotionInvY ? -1.0f : 1.0f) * (cp - c0p)));
             const float ey = wrap(wy - g_mcYaw) * 57.2958f, ep = (wp - g_mcPitch) * 57.2958f;   // degrees still to go
             auto drive = [](float e) {   // past the game's stick dead zone at once, full stick 8 deg off
                 const float a = fabsf(e); if (a < 0.25f) return 0.0f;

@@ -22,6 +22,7 @@ struct Config {
     int   monocular = 1;       // Monocular: right grip with the map up takes the monocular out / puts it back (v212)
     int   recenterHoldMs = 1000; // RecenterHoldMs: left stick held in this long starts the recenter countdown (v222, 0 = off)
     int   turretInvertY = 0;   // TurretInvertY: 1 = stick up lowers a mounted gun (v221)
+    int   turretMotionInvY = 1; // TurretMotionInvertY (v234 test 90): 1 = controller down raises the barrel (rear handles)
     int   turretMotion = 1;    // TurretMotionAim (v234 test 88): grip held on a mounted gun - point either controller to aim it
     int   flashlight = 0;      // Flashlight: left hand at the left temple + left trigger switches a head-mounted light on / off (v220)
     float flashRadius = 0.13f; // FlashlightGestureRadius: how close (m) the left hand must be to the temple
