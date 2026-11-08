@@ -192,6 +192,8 @@ float TurnExtra() { return g_turnExtra; }
 void SetWatchActive() { g_watchTick = GetTickCount(); }
 bool WatchActive() { return GetTickCount() - g_watchTick < 250; }
 void SetMenuMode(bool on) { g_menuMode = on; }
+static volatile float g_mcYaw = 0, g_mcPitch = 0; static volatile DWORD g_mcTick = 0;
+void SetMountedCamera(float yaw, float pitch) { g_mcYaw = yaw; g_mcPitch = pitch; g_mcTick = GetTickCount(); }
 void SetRightClickBlocked(bool on) { g_rClickBlocked = on; }   // v234 test 83: the alignment menu ticks with the right stick click
 struct MappingHistory {
     ULONGLONG recenterAt = 0, gadgetAt = 0, mapPress = 0, notMapSince = 0;
@@ -343,6 +345,36 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         float ay = fabsf(R.stick.y) >= fabsf(L.stick.y) ? R.stick.y : L.stick.y;
         g.sThumbRX = Axis(ax); g.sThumbRY = Axis(g_c.turretInvertY ? -ay : ay);
         g.sThumbLX = g.sThumbLY = 0;
+        // v234 test 88: point to aim - with a grip held, the gun turns to follow where that controller points, relative
+        // to how it was held when the grip went down. The game only takes stick input, so the stick is steered toward the
+        // wanted heading from the gun's current one (the game camera on the gun), harder the further off it is.
+        static int mHand = -1; static float c0y, c0p, g0y, g0p; static DWORD lastLog = 0;
+        const bool camOk = GetTickCount() - g_mcTick < 200;
+        int want = !g_c.turretMotion || !camOk ? -1 : (R.squeeze > 0.6f && R.aimValid) ? 1 : (L.squeeze > 0.6f && L.aimValid) ? 0 : -1;
+        if (mHand >= 0 && (want < 0 || !(mHand ? R : L).aimValid || (mHand ? R : L).squeeze < 0.4f)) { mHand = -1; LOG("controls: turret motion aim off"); }
+        auto ang = [](const xr::HandState& h, float& yaw, float& pitch) {
+            const XrQuaternionf q = h.aim.orientation;   // forward = q * (0, 0, -1) in the room (Y up)
+            const float fx = -(2 * (q.x * q.z + q.w * q.y)), fy = -(2 * (q.y * q.z - q.w * q.x)), fz = -(1 - 2 * (q.x * q.x + q.y * q.y));
+            yaw = atan2f(fx, -fz); pitch = asinf(fmaxf(-1.0f, fminf(1.0f, fy)));
+        };
+        if (mHand < 0 && want >= 0) {
+            mHand = want; ang(mHand ? R : L, c0y, c0p); g0y = g_mcYaw; g0p = g_mcPitch;
+            LOG("controls: turret motion aim on (%s hand), gun heading %.1f pitch %.1f", mHand ? "right" : "left", g0y * 57.2958f, g0p * 57.2958f);
+        }
+        if (mHand >= 0) {
+            float cy, cp; ang(mHand ? R : L, cy, cp);
+            auto wrap = [](float a) { while (a > 3.14159265f) a -= 6.2831853f; while (a < -3.14159265f) a += 6.2831853f; return a; };
+            // the room turns right with yaw up; the game's heading turns left with yaw up (Z up)
+            const float wy = g0y - wrap(cy - c0y), wp = fmaxf(-1.4f, fminf(1.4f, g0p + (cp - c0p)));
+            const float ey = wrap(wy - g_mcYaw) * 57.2958f, ep = (wp - g_mcPitch) * 57.2958f;   // degrees still to go
+            auto drive = [](float e) {   // past the game's stick dead zone at once, full stick 8 deg off
+                const float a = fabsf(e); if (a < 0.25f) return 0.0f;
+                return (e > 0 ? 1.0f : -1.0f) * fminf(1.0f, 0.28f + 0.72f * a / 8.0f);
+            };
+            g.sThumbRX = Axis(-drive(ey));   // right on the stick turns the heading clockwise (down)
+            g.sThumbRY = Axis(drive(ep));
+            if (GetTickCount() - lastLog > 1000) { lastLog = GetTickCount(); LOG("controls: turret motion aim - off by %.1f deg sideways, %.1f deg up/down", ey, ep); }
+        }
     }
     if (down) b |= XINPUT_GAMEPAD_B;                       // crouch
     // left grip + A: take the weapon's hold again (no jump)

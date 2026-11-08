@@ -22,6 +22,7 @@ struct Config {
     int   monocular = 1;       // Monocular: right grip with the map up takes the monocular out / puts it back (v212)
     int   recenterHoldMs = 1000; // RecenterHoldMs: left stick held in this long starts the recenter countdown (v222, 0 = off)
     int   turretInvertY = 0;   // TurretInvertY: 1 = stick up lowers a mounted gun (v221)
+    int   turretMotion = 1;    // TurretMotionAim (v234 test 88): grip held on a mounted gun - point either controller to aim it
     int   flashlight = 0;      // Flashlight: left hand at the left temple + left trigger switches a head-mounted light on / off (v220)
     float flashRadius = 0.13f; // FlashlightGestureRadius: how close (m) the left hand must be to the temple
     int   macheteTrigger = 0;  // MacheteTriggerAttack: 1 = the right trigger also does the game's machete attack (its animation sways the camera)
@@ -43,6 +44,7 @@ bool FlashlightOn();
 bool TakeRecenterRequest();      // v222: the left stick was held in (once per hold)             // v220: the flashlight is switched on
 bool MonocularAtFace();           // ... and held at the eye: scope view, the trigger tags       // the right controller's trigger (0..1), last frame
 void SetMenuMode(bool on);
+void SetMountedCamera(float yaw, float pitch);   // v234 test 88: the game camera's heading on a mounted gun (radians; render thread)
 void SetRightClickBlocked(bool on);
 bool MapOpen();
 void SetSightsAllowed(bool a);
