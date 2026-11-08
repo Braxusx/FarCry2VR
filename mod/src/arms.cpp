@@ -927,7 +927,13 @@ static void Apply(uint8_t* skel) {
         Put3(out, f.game.ReferencePosition(Read3(w)));
     };
     // v234 test 91: gripping a mounted gun - the game's own pose keeps both hands on its handles (the controllers aim it)
-    if (controls::TurretGripped()) return;
+    if (controls::TurretGripped()) {   // ...but the turret's aiming line (its reticle) is still published (test 92)
+        float cro[3], crd[3]; Put3(crd, f.game.ReferenceDirection(Read3(cf))); toRef(co, cro);
+        const bool authority = (f.handSynth || (f.handAuthority && xr::InputCurrent(f.source, 1))) && f.weapon && f.weapon == g_curWeapon;
+        Lock(); g_shotSource = f.source; g_shotWeapon = f.weapon; g_shotSynth = f.handSynth; g_shotValid = authority;
+        memcpy(g_camRefO, cro, 12); memcpy(g_camRefD, crd, 12); g_rayTick = GetTickCount(); Unlock();
+        return;
+    }
     float ar[3], au[3], ab[3], ao[3], grip[3];
     toWorld(f.aimR, ar, false); toWorld(f.aimU, au, false); toWorld(f.aimB, ab, false); toWorld(f.aimO, ao, true); toWorld(f.gripO, grip, true);
     M4 C = FromRows(cr, cu, cb, co), Cinv; if (!Inv(C, Cinv)) return;
