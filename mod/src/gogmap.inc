@@ -41,6 +41,7 @@ static const uint32_t kGogMap[][2] = {
     { 0x10229400, 0x10226AF0 },
     { 0x10291D70, 0x1028F9E0 },
     { 0x1029741B, 0x1029563B },
+    { 0x1029B290, 0x10299360 },   // frame timer Update (v232 pacing); GOG timer layout matches
     { 0x1029B7F0, 0x102999F0 },
     { 0x1029DA10, 0x1029BBB0 },
     { 0x102AF580, 0x102ADA30 },
@@ -159,6 +160,7 @@ static const uint32_t kGogMap[][2] = {
     { 0x10FDF194, 0x10F2E894 },
     { 0x10FDF1AC, 0x10F2E8AC },
     { 0x10FE4DA4, 0x10F344A4 },
+    { 0x11606360, 0x11555A60 },   // frame timer singleton; GOG 0x1029B2E0 passes it to Update
     { 0x11609560, 0x11558950 },
     { 0x11609668, 0x11558A58 },
     { 0x1160C2EC, 0x1155B6DC },

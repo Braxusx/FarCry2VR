@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 project(fc2vr_tracking_tests LANGUAGES CXX)
 
 enable_testing()
+add_test(NAME gog_pacing_map COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../src -P ${CMAKE_CURRENT_SOURCE_DIR}/check_gog_pacing_map.cmake)
 if(WIN32)
     add_executable(native_input_probe native_input_probe.cpp)
     target_compile_features(native_input_probe PRIVATE cxx_std_17)
