@@ -408,7 +408,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         if (z != Z_NONE) { LOG("controls: holster grab at %s", ZoneName(z)); InterlockedExchange(&g_selectReq, 1); }
     }
     g_rGripDown = grip; if (!grip) g_rGripAim = false;
-    if (g_vehMode == 2 && grip) { b |= XINPUT_GAMEPAD_A; g_rGripAim = false; }   // passenger / gunner seat: right grip changes seat
+    if (g_vehMode == 2 && grip && !(g_mounted && g_c.turretMotion)) { b |= XINPUT_GAMEPAD_A; g_rGripAim = false; }   // passenger seat: right grip changes seat (v234 test 89: not on a mounted gun with motion aim - the grip aims it there; A still changes seat)
     // iron sight / scope: hold the weapon up to your face (CrysisVR: on within 0.25 m of the head, off beyond 0.35 m)
     if (headValid && R.gripValid) {
         float dx = R.grip.position.x - head.position.x, dy = R.grip.position.y - head.position.y, dz = R.grip.position.z - head.position.z;
