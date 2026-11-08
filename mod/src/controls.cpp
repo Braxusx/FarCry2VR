@@ -3,6 +3,7 @@
 // (ordinal 3). Both imports are redirected here: while VR controllers are active, pad 0 is synthesised from them,
 // so the game's gamepad bindings, hints and menus all work unchanged.
 #include "controls.h"
+#include "arms.h"
 #include "xr.h"
 #include "log.h"
 #include "gameaddr.h"
@@ -162,6 +163,7 @@ static volatile bool g_mapReal = false;   // v219: the map controls are up for t
 static volatile bool g_phoneOut = false; static ULONGLONG g_phoneT = 0;
 bool PhoneOut() { return g_phoneOut; }
 bool ItemControls() { return g_itemMap || g_phoneOut; }
+unsigned long long PhoneAgeMs() { return g_phoneOut ? GetTickCount64() - g_phoneT : 0; }
 void ClearPhone() { if (g_phoneOut) { g_phoneOut = false; LOG("controls: phone away (weapon back)"); } }
 static volatile LONG g_recapReq = 0;
 int TakeRecapture() { return (int)InterlockedExchange(&g_recapReq, 0); }
@@ -176,7 +178,7 @@ void SetRightHandFree(bool f) { g_rightFree = f; }
 static volatile bool g_handsAway = false; static volatile LONG g_mapLiftReq = 0;
 void SetHandsAway(bool a) { g_handsAway = a; }
 int TakeMapLift() { return (int)InterlockedExchange(&g_mapLiftReq, 0); }
-static volatile bool g_menuMode = false;
+static volatile bool g_menuMode = false; static volatile bool g_rClickBlocked = false;
 static volatile LONG g_snapReq = 0; static volatile float g_snapStick = 0; static volatile DWORD g_watchTick = 0;
 int TakeSnap() { return (int)InterlockedExchange(&g_snapReq, 0); }
 void SetSnapStick(float x) { g_snapStick = x; }
@@ -190,10 +192,15 @@ float TurnExtra() { return g_turnExtra; }
 void SetWatchActive() { g_watchTick = GetTickCount(); }
 bool WatchActive() { return GetTickCount() - g_watchTick < 250; }
 void SetMenuMode(bool on) { g_menuMode = on; }
+static volatile float g_mcYaw = 0, g_mcPitch = 0; static volatile DWORD g_mcTick = 0; static volatile bool g_turretGrip = false;
+bool TurretGripped() { return g_mounted && g_turretGrip; }
+void SetMountedCamera(float yaw, float pitch) { g_mcYaw = yaw; g_mcPitch = pitch; g_mcTick = GetTickCount(); }
+void SetRightClickBlocked(bool on) { g_rClickBlocked = on; }   // v234 test 83: the alignment menu ticks with the right stick click
 struct MappingHistory {
     ULONGLONG recenterAt = 0, gadgetAt = 0, mapPress = 0, notMapSince = 0;
     bool recenterFired = false, driverMap = false, gadgetHeld = false, gadgetDelayed = false, mapPrev = false;
     int lastMap = -1, turnDir = 0, snapDir = 0;
+    int turretHand = -1; float turretC0y = 0, turretC0p = 0, turretG0y = 0, turretG0p = 0; DWORD turretLog = 0;   // v234 test 88 motion aim
     bool aPrev = false, aCombo = false, rThrow = false, lThrow = false, trigFlash = false, bCombo = false;
 };
 static MappingHistory g_history;
@@ -231,6 +238,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     memset(&g, 0, sizeof g);
     xr::HandState hm[2];
     if (g_menuMode) { hm[0] = h[0]; hm[1] = h[1]; for (auto& x : hm) { x.stick.x = x.stick.y = 0; x.stickClick = false; } h = hm; }   // the sticks drive the mod's menu
+    else if (g_rClickBlocked) { hm[0] = h[0]; hm[1] = h[1]; hm[1].stickClick = false; h = hm; }
     ULONGLONG now = GetTickCount64();
     const xr::HandState& L = h[0]; const xr::HandState& R = h[1];
     // v222 recenter: the left stick held in for RecenterHoldMs (the click still sprints as usual)
@@ -339,6 +347,39 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         float ay = fabsf(R.stick.y) >= fabsf(L.stick.y) ? R.stick.y : L.stick.y;
         g.sThumbRX = Axis(ax); g.sThumbRY = Axis(g_c.turretInvertY ? -ay : ay);
         g.sThumbLX = g.sThumbLY = 0;
+        // v234 test 88: point to aim - with a grip held, the gun turns to follow where that controller points, relative
+        // to how it was held when the grip went down. The game only takes stick input, so the stick is steered toward the
+        // wanted heading from the gun's current one (the game camera on the gun), harder the further off it is.
+        auto& mHand = g_history.turretHand; auto& c0y = g_history.turretC0y; auto& c0p = g_history.turretC0p;
+        auto& g0y = g_history.turretG0y; auto& g0p = g_history.turretG0p; auto& lastLog = g_history.turretLog;
+        const bool camOk = GetTickCount() - g_mcTick < 200;
+        int want = !g_c.turretMotion || !camOk ? -1 : (R.squeeze > 0.6f && R.aimValid) ? 1 : (L.squeeze > 0.6f && L.aimValid) ? 0 : -1;
+        if (mHand >= 0 && (want < 0 || !(mHand ? R : L).aimValid || (mHand ? R : L).squeeze < 0.4f)) { mHand = -1; LOG("controls: turret motion aim off"); }
+        auto ang = [](const xr::HandState& h, float& yaw, float& pitch) {
+            const XrQuaternionf q = h.aim.orientation;   // forward = q * (0, 0, -1) in the room (Y up)
+            const float fx = -(2 * (q.x * q.z + q.w * q.y)), fy = -(2 * (q.y * q.z - q.w * q.x)), fz = -(1 - 2 * (q.x * q.x + q.y * q.y));
+            yaw = atan2f(fx, -fz); pitch = asinf(fmaxf(-1.0f, fminf(1.0f, fy)));
+        };
+        if (mHand < 0 && want >= 0) {
+            mHand = want; ang(mHand ? R : L, c0y, c0p); g0y = g_mcYaw; g0p = g_mcPitch;
+            LOG("controls: turret motion aim on (%s hand), gun heading %.1f pitch %.1f", mHand ? "right" : "left", g0y * 57.2958f, g0p * 57.2958f);
+        }
+        g_turretGrip = mHand >= 0;
+        if (mHand >= 0) {
+            float cy, cp; ang(mHand ? R : L, cy, cp);
+            auto wrap = [](float a) { while (a > 3.14159265f) a -= 6.2831853f; while (a < -3.14159265f) a += 6.2831853f; return a; };
+            // the room turns right with yaw up; the game's heading turns left with yaw up (Z up)
+            // v234 test 90: like the gun's rear handles - the controller down raises the barrel (TurretMotionInvertY=1, default)
+            const float wy = g0y - wrap(cy - c0y), wp = fmaxf(-1.4f, fminf(1.4f, g0p + (g_c.turretMotionInvY ? -1.0f : 1.0f) * (cp - c0p)));
+            const float ey = wrap(wy - g_mcYaw) * 57.2958f, ep = (wp - g_mcPitch) * 57.2958f;   // degrees still to go
+            auto drive = [](float e) {   // past the game's stick dead zone at once, full stick 8 deg off
+                const float a = fabsf(e); if (a < 0.25f) return 0.0f;
+                return (e > 0 ? 1.0f : -1.0f) * fminf(1.0f, 0.28f + 0.72f * a / 8.0f);
+            };
+            g.sThumbRX = Axis(-drive(ey));   // right on the stick turns the heading clockwise (down)
+            g.sThumbRY = Axis(drive(ep));
+            if (GetTickCount() - lastLog > 1000) { lastLog = GetTickCount(); DLOG("controls: turret motion aim - off by %.1f deg sideways, %.1f deg up/down", ey, ep); }
+        }
     }
     if (down) b |= XINPUT_GAMEPAD_B;                       // crouch
     // left grip + A: take the weapon's hold again (no jump)
@@ -351,7 +392,10 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     g.bRightTrigger = poseFire ? (BYTE)lroundf(fminf(1.0f, R.trigger) * 255.0f) : 0;   // pose-guided fire needs tracked input; native vehicle/turret controls do not
     if (!g_c.macheteTrigger && MacheteSelected()) g.bRightTrigger = 0;   // machete: hits come from swinging it; the game's attack animation sways the camera
     // right grip: holster grab (weapon select) in a body zone, iron sight / reverse elsewhere
-    Zone z = headValid && g_vehMode == 0 ? RightHandZone(R, head) : Z_NONE;   // no holster grabs in a vehicle seat
+    // no holster grabs in a vehicle seat, nor in menus / loading screens (v234 test 36: a chest grab in the pause menu left
+    // the mod thinking the machete was out - the gun in the hand then got the machete's hand angles, twisted)
+    const bool inMenu = g_menuMap || g_loadingMap;
+    Zone z = headValid && g_vehMode == 0 && !inMenu ? RightHandZone(R, head) : Z_NONE;
     g_zoneNow = z != Z_NONE;
     bool grip = R.squeeze > (g_rGripDown ? 0.35f : 0.6f);
     // v212 monocular: with the map / GPS up (or the monocular out), a right-grip press away from the holster spots takes the
@@ -369,13 +413,13 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         if (z != Z_NONE) { LOG("controls: holster grab at %s", ZoneName(z)); InterlockedExchange(&g_selectReq, 1); }
     }
     g_rGripDown = grip; if (!grip) g_rGripAim = false;
-    if (g_vehMode == 2 && grip) { b |= XINPUT_GAMEPAD_A; g_rGripAim = false; }   // passenger / gunner seat: right grip changes seat
+    if (g_vehMode == 2 && grip && !(g_mounted && g_c.turretMotion)) { b |= XINPUT_GAMEPAD_A; g_rGripAim = false; }   // passenger seat: right grip changes seat (v234 test 89: not on a mounted gun with motion aim - the grip aims it there; A still changes seat)
     // iron sight / scope: hold the weapon up to your face (CrysisVR: on within 0.25 m of the head, off beyond 0.35 m)
     if (headValid && R.gripValid) {
         float dx = R.grip.position.x - head.position.x, dy = R.grip.position.y - head.position.y, dz = R.grip.position.z - head.position.z;
         float d = sqrtf(dx * dx + dy * dy + dz * dz);
         bool was = g_sightOn;
-        g_sightOn = (g_leftClaimed || !g_c.sightNeedsGrip) && d < (g_sightOn ? g_c.sightOff : g_c.sightOn);
+        g_sightOn = !g_mounted && (g_leftClaimed || !g_c.sightNeedsGrip) && d < (g_sightOn ? g_c.sightOff : g_c.sightOn);   // v234 test 91: never on a mounted gun (its zoom opened the scope window)
         if (g_sightOn != was) { xr::Haptic(1, 0.3f, 0.03f); LOG("controls: sights %s (hand %.2f m from head)", g_sightOn ? "up" : "down", d); }
     } else g_sightOn = false;
     if (g_sightOn && g_sightsAllowed) g.bLeftTrigger = 255;
@@ -439,9 +483,9 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     if (R.btn2 && !g_bDown && L.squeeze > 0.6f) { g_bCombo = true; InterlockedExchange(&g_holsterReq, 1); xr::Haptic(1, 0.5f, 0.05f); LOG("controls: left grip + B - weapon away / back"); }
     if (g_bCombo) { if (!R.btn2) g_bCombo = false; g_bDown = R.btn2; g_bHoldFired = true; }
     if (R.btn2 && !g_bDown) { g_bTime = now; g_bHoldFired = false; }
-    if (R.btn2 && !g_bHoldFired && now - g_bTime >= (ULONGLONG)g_c.holdMs) { PulseBtn(XINPUT_GAMEPAD_RIGHT_THUMB, now); g_bHoldFired = true; }
+    if (R.btn2 && !g_bHoldFired && now - g_bTime >= (ULONGLONG)g_c.holdMs && !inMenu) { PulseBtn(XINPUT_GAMEPAD_RIGHT_THUMB, now); g_bHoldFired = true; }
     if (!R.btn2 && g_bDown && !g_bHoldFired && g_mono) { g_mono = false; LOG("controls: monocular away (weapon change)"); }
-    if (!R.btn2 && g_bDown && !g_bHoldFired) { g_mapOpen = false; g_cycle = (g_cycle + 1) & 3; PulseBtn(kSlots[g_cycle], now); InterlockedExchange(&g_selectReq, 1); }
+    if (!R.btn2 && g_bDown && !g_bHoldFired && !inMenu) { g_mapOpen = false; g_cycle = (g_cycle + 1) & 3; PulseBtn(kSlots[g_cycle], now); InterlockedExchange(&g_selectReq, 1); }   // B in a menu = back, not a weapon change
     g_bDown = R.btn2;
     for (auto& p : g_pulse) if (p.until > now) b |= p.btn;
     if (g_usePulse > now) b |= XINPUT_GAMEPAD_Y;           // a hand touched the interaction target
@@ -488,7 +532,16 @@ void Install(HMODULE dunia, const Config& c) {
     LOG("controls: XInputGetState hook %d, XInputSetState hook %d", a, b);
 }
 bool Active() { return g_active != 0; }
-bool MacheteSelected() { return g_cycle == 3; }
+bool MacheteSelected() {   // v234 test 70: the held weapon decides when it is known; the slot guess only before that
+    const int m = arms::HeldMelee();
+    if (m >= 0) {
+        if (m == 1 && g_cycle != 3) g_cycle = 3;
+        if (m == 0 && g_cycle == 3) { LOG("controls: slot guess said machete, the held weapon is not - guess corrected"); g_cycle = 0; }
+        return m == 1;
+    }
+    return g_cycle == 3;
+}
+bool SecondarySelected() { return g_cycle == 1; }   // the hip slot (pistols, SMGs, sawed-off, M-79, flare gun, IED)
 bool MapOpen() { return g_mapOpen; }
 void SetSightsAllowed(bool a) { g_sightsAllowed = a; }
 bool RightHandInHolsterZone() { return g_zoneNow; }

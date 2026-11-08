@@ -37,6 +37,7 @@ struct Config {
     float leftHandYaw = 30.0f;    // LeftHandYaw: free left hand turned inward about the controller's up axis (deg)
     float leftForearmTwist = 1.0f;   // LeftForearmTwist: share of LeftHandRoll carried by the forearm
     float upperArmTwist = 0.5f;   // UpperArmTwist: share of the forearm's turn the upper arm follows
+    int   weaponFollow = 1;   // WeaponFollow (v234 test 75): a held weapon's barrel points where the controller points, sights up; the hand is placed from the weapon (no learned per-weapon grips)
     int   steadyHands = 1;    // SteadyHands: animations (sprint sway, gun pulled in near walls) don't turn the hands
     int   armsIndependent = 1;   // ArmsIndependent: upper arms keep the body orientation; the free left forearm follows the left controller
     float mapAngle = 0.0f, mapYaw = 0.0f, mapRoll = 0.0f;   // MapPitch/MapYaw/MapRoll: hands holding the map and GPS (deg)
@@ -66,6 +67,7 @@ struct Config {
     int   macheteSound = 1;      // MacheteSwingSound: the game's machete swoosh plays on a fast VR swing
     int   noColorFilter = 0;  // NoColorFilter: 1 = no colour grading / desaturation ("brown filter") - v223
     int   noRimLight = 0;     // NoRimLight: 1 = no rim lighting on characters - v223
+    int   gameAimAssist = 0;  // GameAimAssist (v234): 0 = the game's gamepad aim assist off (it turned the view by itself)
     float flashRange = 30.0f, flashInner = 18.0f, flashOuter = 32.0f;   // v220 Flashlight: FlashlightRange (m), FlashlightInnerAngle / OuterAngle (deg)
     float flashBright = 1.0f, flashForward = 0.10f;   // FlashlightBrightness (colour scale), FlashlightForward (m in front of the head)
     float macheteSoundSpeed = 6.0f; // MacheteSoundSpeed: blade-tip m/s that counts as a swing for the sound
@@ -102,6 +104,10 @@ struct Config {
     float throwScale = 1.3f;      // ThrowScale: hand speed at release x this = throw speed
     float throwMaxSpeed = 25.0f;  // ThrowMaxSpeed (m/s)
     float useReach = 0.9f;
+    float useCenter = 10.0f;      // UseCenter (v234): objects are offered only when the view centre is on them or this close to their edge (deg; 0 = any)
+    float useCone = 30.0f;        // UseCone (v234): while the game asks a candidate, the aim line points at it if it is this close to the view (deg; 0 = view centre only)
+    int useDiag = 1;              // UseDiag (v234 test): log what the interaction monitor finds
+    int useFromHead = 1;          // UseFromHead (v234): the game's interaction target follows the head (box, sphere, aim ray)
     float mouthReach = 0.18f;     // MouthReach: food/water consumed this close to the mouth (m)        // UseReach: hand to the game's interaction point (m)
     float backpackFwd = 0.0f, backpackUp = -0.25f;   // BackpackZoneFwd/Up: over the shoulder, relative to the head (m)
     uint32_t grabMask = 0x4A7;    // GrabQueryMask: physics query layers
@@ -125,10 +131,13 @@ struct Frame {
     float aimO[3], aimR[3], aimU[3], aimB[3];   // right controller aim pose (ref)
     float gripO[3];               // right controller grip position (ref)
     bool leftValid = false, twoHand = false, headValid = false;
+    bool handSynth = false;       // v234: the right hand's pose is held on the weapon (two-handed grip, right or both controllers untracked)
+    bool leftSynth = false;       // v234: the left hand's pose is held on the weapon (two-handed grip, left controller untracked)
     float lSqueeze = 0, rSqueeze = 0;
     bool machete = false, map = false;   // machete in hand; map/GPS out
     float laimO[3], laimR[3], laimU[3], laimB[3], lgripO[3];   // left controller (ref)
     float headO[3], headF[3];     // head position and forward (ref)
+    float eyeL[3], eyeR[3];       // v234 test 80: the two eye positions (ref)
 };
 typedef bool (*PatchFn)(uintptr_t target, const uint8_t* expect, size_t n, void* hook, void** tramp);
 void Install(uintptr_t base, const Config& c, PatchFn patch);
@@ -186,9 +195,18 @@ void SetFreeHands(float angle, float yaw, float roll);
 void GetFreeHands(float& angle, float& yaw, float& roll);
 void SetPhoneHands(float angle, float yaw, float roll);
 void GetPhoneHands(float& angle, float& yaw, float& roll);
+void SetAlignMode(int mode);   // v234 test 84: the weapon alignment menu - 0 off, 1 the right stick turns the gun, 2 it moves the dot
+int AlignStatus(uint32_t* key, float adj[4]);   // adj: gun right/up, dot right/up (deg);   // 0 no gun, 1 measuring the eye, 2 the right stick turns the gun, 3 a gun held (box unticked)
+int HeldMelee();        // v234 test 70: 1 the held weapon is the machete, 0 another weapon, -1 unknown
 void* CurrentWeapon();   // the player's current weapon object (identity only)                     // called (game thread) when a hand uses the interaction target
 // the weapon's sight line (ref frame: origin, unit direction); false if not updated recently
 bool SightRay(float o[3], float d[3], RayContext* context = nullptr);
+bool SightFrame(float o[3], float d[3], float u[3]);
+bool MapClock(float p[3], float w[3], float h[3]);
+bool MapClockHand(float rel[9]);
+bool MapClockModel(uint8_t*& gfx, float pts[4][3]);
+uint8_t* GpsGfx();   // v234: the GPS graphic while the map is out (world matrix at +0x170)   // v234: the held map's graphic + bottom-mid / top-mid / bottom-left / bottom-right (model space)   // v234: the same, in the left controller's aim frame (right, up, back; ref units)   // v234: held map's bottom-middle point, width and height vectors (ref frame)
+bool GameTimeOfDay(int& hh, int& mm);   // v234: sight line + up, fixed to the held weapon (ref frame)
 float AimDistance();
 bool ProjectileReloadActive();     // within the 3.5 s after a projectile weapon shot (its reload)
 void NotifyClip(int clip, int pouch);         // the HUD clip count changed (player's weapon)               // game units along the sight ray to what the weapon points at (0 = unknown)

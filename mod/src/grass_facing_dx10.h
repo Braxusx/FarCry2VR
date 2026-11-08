@@ -90,7 +90,7 @@ inline bool Patch(ID3D10Buffer* buffer,void* data){
     const float before=atan2f(matrix[4],matrix[0]);
     if(!fc2vr::grass::SetWorldYaw(matrix,target))return false;
     static uint64_t last=0;const auto now=GetTickCount64();
-    if(now-last>1000){last=now;LOG("grass-facing head=%.6f native=%.6f corrected=%.6f",yaw,before,atan2f(matrix[4],matrix[0]));}
+    if(now-last>1000){last=now;DLOG("grass-facing head=%.6f native=%.6f corrected=%.6f",yaw,before,atan2f(matrix[4],matrix[0]));}
     return true;
 }
 }

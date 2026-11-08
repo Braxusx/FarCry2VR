@@ -22,6 +22,8 @@ struct Config {
     int   monocular = 1;       // Monocular: right grip with the map up takes the monocular out / puts it back (v212)
     int   recenterHoldMs = 1000; // RecenterHoldMs: left stick held in this long starts the recenter countdown (v222, 0 = off)
     int   turretInvertY = 0;   // TurretInvertY: 1 = stick up lowers a mounted gun (v221)
+    int   turretMotionInvY = 1; // TurretMotionInvertY (v234 test 90): 1 = controller down raises the barrel (rear handles)
+    int   turretMotion = 1;    // TurretMotionAim (v234 test 88): grip held on a mounted gun - point either controller to aim it
     int   flashlight = 0;      // Flashlight: left hand at the left temple + left trigger switches a head-mounted light on / off (v220)
     float flashRadius = 0.13f; // FlashlightGestureRadius: how close (m) the left hand must be to the temple
     int   macheteTrigger = 0;  // MacheteTriggerAttack: 1 = the right trigger also does the game's machete attack (its animation sways the camera)
@@ -36,12 +38,16 @@ void SetLeftGripClaimed(bool c);
 void PulseUse();
 bool SightsUp();
 bool MacheteSelected();
+bool SecondarySelected();   // v234: the secondary (hip) slot is out (the mod's guess from your selections)
 float RightTriggerValue();
 bool MonocularOut();              // the monocular is out (the game's aim button held with the map up)
 bool FlashlightOn();
 bool TakeRecenterRequest();      // v222: the left stick was held in (once per hold)             // v220: the flashlight is switched on
 bool MonocularAtFace();           // ... and held at the eye: scope view, the trigger tags       // the right controller's trigger (0..1), last frame
 void SetMenuMode(bool on);
+void SetMountedCamera(float yaw, float pitch);
+bool TurretGripped();   // v234 test 91: a grip aims the mounted gun - the hands stay on its handles (the game's pose)   // v234 test 88: the game camera's heading on a mounted gun (radians; render thread)
+void SetRightClickBlocked(bool on);
 bool MapOpen();
 void SetSightsAllowed(bool a);
 int TakeSnap();                  // snap turns requested since the last call (+1 right, -1 left each)
@@ -64,6 +70,7 @@ int TakeThrowRelease();          // the aiming hand let go since the last call (
 void FireThrow();                // press the game's throw button
 bool PhoneOut();                  // a phone call is up (see controls.cpp)
 void ClearPhone();
+unsigned long long PhoneAgeMs();   // v234: how long the phone has been out
 int TakeRecapture();              // left grip + A: take the current weapon hold again
 int TakeHolsterToggle();          // left grip + B was pressed (put the weapon away / bring it back)
 int TakeReloadPress();            // the reload button was pressed since the last call

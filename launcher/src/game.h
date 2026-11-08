@@ -68,5 +68,9 @@ extern const char* kModVersion;
 
 // Help: collects the logs into a zip on the desktop; returns its path (empty on failure)
 std::wstring CollectLogs(const Game& g, std::string& err);
+// v234: the game's own video settings the VR mod needs (Documents\My Games\Far Cry 2\GamerProfile.xml, <RenderProfile>)
+struct ProfileCheck { bool found = false; std::vector<std::string> issues; };
+ProfileCheck CheckGameProfile();
+bool FixGameProfile(std::string& err);   // DirectX 10, anti-aliasing off, V-Sync off; keeps GamerProfile.xml.fc2vr-backup
 
 } // namespace fc2
