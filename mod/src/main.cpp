@@ -100,6 +100,7 @@ struct Config {
     int   symmetricFov = 1;          // render each eye with a symmetric frustum (fixes water reflection streaks)
     float overscanH = 0.15f, overscanV = 0.25f;
     int   shadowFix = 1;
+    int   shadowExpanded = 1;     // ShadowExpanded: 0 keeps native cascade reach; 1 preserves expanded VR coverage
     float shadowFarScale = 3.0f;   // last sun shadow cascade range x this (1 = game)
     float shadowRadial = 7.0f;     // sun shadow cascades centered on the eye, radius = range x this (0 = game's fit)
     float grabDistance = 0.15f;
@@ -202,6 +203,7 @@ static void LoadConfig() {
     g_cfg.hangWatch = (int)IniF("HangWatch", 1);
     g_cfg.symmetricFov = (int)IniF("SymmetricFov", 1);
     g_cfg.shadowFix = (int)IniF("ShadowFix", 1);
+    g_cfg.shadowExpanded = IniF("ShadowExpanded", 1) != 0;
     g_cfg.shadowRadial = IniF("ShadowRadialScale", 7.0f); if (g_cfg.shadowRadial < 0) g_cfg.shadowRadial = 0; if (g_cfg.shadowRadial > 10) g_cfg.shadowRadial = 10;
     g_cfg.shadowFarScale = IniF("ShadowFarScale", 3.0f); if (g_cfg.shadowFarScale < 1.0f) g_cfg.shadowFarScale = 1.0f; if (g_cfg.shadowFarScale > 5.0f) g_cfg.shadowFarScale = 5.0f;
     g_cfg.shadowMapSize = (int)IniF("ShadowMapSize", 2720); if (g_cfg.shadowMapSize > 2730) g_cfg.shadowMapSize = 2730; if (g_cfg.shadowMapSize < 0) g_cfg.shadowMapSize = 0; g_cfg.shadowMapSize &= ~15;
@@ -2008,7 +2010,7 @@ static void* __fastcall Hook_ReflCamCopy(void* self, void* edx, void* src) {
 // at the side of the wide VR view is still inside the last cascade but drops out of it once it is looked at directly:
 // distant shadows (cliffs, rocks) came and went while turning the head. The last cascade's range is stretched by
 // ShadowFarScale (about 1 / cos of the half view angle) so it reaches as far straight ahead as it does at the edges.
-static bool g_shadowFarOn = true;   // F2 toggles (comparison)
+static bool g_shadowFarOn = true;   // initialized from ShadowExpanded; F2 toggles for this session
 typedef void (__cdecl *CascadeFit_t)(float*, float*, int, int, float*, float*, int, void*);
 static void __cdecl Hook_CascadeFit(float* a1, float* a2, int a3, int cam, float* fov, float* ranges, int a7, void* a8) {
     if (!g_reflWide || g_reflFov <= 0 || !cam) { ((CascadeFit_t)A(0x103AD0D0))(a1, a2, a3, cam, fov, ranges, a7, a8); return; }
@@ -2230,8 +2232,10 @@ static void InstallShadowShare() {
     LOG("shared sun shadows: hooks %d %d %d %d %d (%s)", a, b, x, c, d, g_cfg.shareShadows ? "on" : "off");
 }
 static void InstallReflFix() {
+    g_shadowFarOn = g_cfg.shadowExpanded != 0;
     PatchCall(0x103A8B9D, 0x1039FEA0, (void*)&Hook_ReflCamCopy, "water reflection fix");      // call camera copy (water reflection)
     if (g_cfg.shadowFix) {
+        LOG("shadow coverage startup: %s (ShadowExpanded=%d)", g_shadowFarOn ? "EXPANDED" : "NATIVE", g_cfg.shadowExpanded);
         PatchCall(0x103AE098, 0x1039FEA0, (void*)&Hook_ReflCamCopy, "shadow caster camera fix"); // call camera copy (sun shadows)
         PatchCall(0x103AE5BC, 0x103AD0D0, (void*)&Hook_CascadeFit, "shadow cascade fix");        // call cascade fit
     }

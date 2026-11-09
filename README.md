@@ -72,6 +72,8 @@ Far Cry 2 can run in DirectX 9 or DirectX 10. **The VR mod only works in DirectX
 
 The game has to keep up with the headset's refresh rate (90 Hz on most headsets). Below it, frames reach the headset unevenly and everything that moves judders, most of all in vehicles. The launcher's **Collect logs** zip shows it in the `PACE` lines of `fc2vr.log` (fps vs. runtime refresh). If you can't hold the rate, set the headset to a lower refresh rate (72 or 80 Hz, e.g. in Pimax Play, the Oculus app, Virtual Desktop or `DisplayRefreshRate=72` in `fc2vr.ini`), lower the render resolution or use a lower DLSS quality mode.
 
+Another option is **Settings > Display > Shadows > Expanded shadow coverage** in the launcher. Turn it off to use the game's usual shadow reach, which can improve frame rates in scenes limited by shadow rendering. Shadows remain enabled, but distant or side shadows may disappear sooner. Expanded coverage stays on by default. See [shadow coverage settings](docs/SHADOW_COVERAGE.md) for details.
+
 ## Frame rate capped at about 64-65 fps?
 
 Version 1.0.1 fixes the most common cause: Windows 11 slows the game's timer while its window is in the background, which caps it at 64 fps. If the cap remains, check:
