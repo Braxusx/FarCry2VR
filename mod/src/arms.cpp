@@ -13,6 +13,7 @@
 #include "gameaddr.h"
 #include "xr.h"
 #include "controls.h"
+#include "common/wheel_pose.h"
 #include "common/shoulder_frame.h"
 #include <cstdio>
 #include <cstdlib>
@@ -1851,8 +1852,31 @@ static void Apply(uint8_t* skel) {
         for (int i = 0; i < n && i < 512; ++i) { if (i == cam) continue; if (!all && !g_armMask[i] && g_follow[i] < 0) continue; int h = handFor(i); if (h < 0 || i == h) continue;
             Bw[i] = Mul(rel[i], Bw[h]); }
     }
+    // Wheel contact is the native driving pose, including its authored fingers.
+    // WheelHands has current input/context authority. Preserve original model
+    // bytes for only the held side; releasing a hand resumes this VR pose path.
+    const unsigned wheelHands=controls::WheelHands();
+    bool nativeWheel[512]{};unsigned nativeWheelCount=0;
+    if(wheelHands) for(int i=0;i<n;++i) {
+        nativeWheel[i]=fc2vr::presentation::NativeWheelBone(bones,n,i,cam,g_follow,g_slot[19],g_slot[15],wheelHands);
+        if(!nativeWheel[i]) continue;
+        ++nativeWheelCount;
+        M4 native;memcpy(native.m,bones[i].model,64);
+        native.m[0][3]=native.m[1][3]=native.m[2][3]=0;native.m[3][3]=1;
+        Bw[i]=Mul(native,W); // scratch/diagnostics agree with the native publication
+    }
+    if(nativeWheel[rh]) {
+        g_prevFinalRh=Bw[rh];for(int k=0;k<3;++k) g_prevFinalRh.m[3][k]+=O[k];
+    }
+    {
+        static volatile LONG previousWheel=0,reports=0;
+        if(InterlockedExchange(&previousWheel,LONG(wheelHands))!=LONG(wheelHands)
+            && InterlockedIncrement(&reports)<=40)
+            LOG("motion-25 wheel pose: native hands=%u bones=%u",wheelHands,nativeWheelCount);
+    }
     // write back (model space)
     for (int i = 0; i < n && i < 512; ++i) {
+        if(nativeWheel[i]) continue; // preserve native wheel contact bytes
         if (!g_armMask[i] && g_follow[i] < 0 && !(s_allRigid && i != cam)) continue;
         M4 r = Mul(Bw[i], Winv);
         float* dst = bones[i].model;
@@ -1863,7 +1887,7 @@ static void Apply(uint8_t* skel) {
     InterlockedIncrement(&g_applied);
     if (g_boneSink) { static float mods[512 * 16]; int m = n < 512 ? n : 512; for (int i = 0; i < m; ++i) memcpy(mods + i * 16, bones[i].model, 64); float w[16]; memcpy(w, W.m, 64); g_boneSink(w, mods, m); }
     {   // v231: keep what was written to every arm / helper bone (model space) for the render-time comparison
-        Lock(); g_dgN = n < 512 ? n : 512; for (int i = 0; i < g_dgN; ++i) { g_dgWritten[i] = (g_armMask[i] || g_follow[i] >= 0); if (g_dgWritten[i]) memcpy(g_dgModel[i], bones[i].model, 64); } g_dgSkel = skel; Unlock();
+        Lock(); g_dgN = n < 512 ? n : 512; for (int i = 0; i < g_dgN; ++i) { g_dgWritten[i] = !nativeWheel[i] && (g_armMask[i] || g_follow[i] >= 0); if (g_dgWritten[i]) memcpy(g_dgModel[i], bones[i].model, 64); } g_dgSkel = skel; Unlock();
     }
     {   // v231 diagnostic: world matrix used, drawn right hand and its controller target (world)
         Lock(); for (int k = 0; k < 3; ++k) { g_dgW[k] = W.m[3][k] + O[k]; g_dgHand[k] = Bw[rh].m[3][k] + O[k]; g_dgTarget[k] = grip[k] + O[k]; } ++g_dgSeq; Unlock();
@@ -2295,6 +2319,7 @@ static Handle* FindNpc(const float* hp, uint8_t* playerEnt, uint8_t** compOut, f
 struct ClimbHand { bool on = false; float anchor[3] = {}, now[3] = {}; float refStart[3] = {}; unsigned gen = 0; };
 static unsigned g_climbGen = 0;
 static ClimbHand g_climb[2]; static bool g_climbWas = false;
+static volatile LONG g_climbActive = 0;
 static uint8_t* PlayerCharComp(uint8_t* playerEnt) {
     if (!playerEnt || *(uint32_t*)A(0x10FDE930) == 0) return nullptr;
     uint8_t* c = (uint8_t*)GetComp(playerEnt, 0x10FDE940);
@@ -3586,7 +3611,9 @@ static void HandInteract(uint8_t* pawn, uint8_t* pd) {
     if (g_c.contactPush) ContactPush(f, playerEnt, toWorld, weapon);
     MacheteSwing(f, playerEnt, toWorld, weapon);
     if (g_c.climbing) {
+        InterlockedExchange(&g_climbActive,(g_climbWas || g_climb[0].on || g_climb[1].on) ? 1 : 0);
         ClimbUpdate(playerEnt, f, dt);
+        InterlockedExchange(&g_climbActive,(g_climbWas || g_climb[0].on || g_climb[1].on) ? 1 : 0);
     }
     SnapUpdate(playerEnt, dt);
     RoomScaleUpdate(playerEnt, dt);
@@ -4140,6 +4167,9 @@ bool CameraRay(float o[3], float d[3]) { if (!g_csInit) return false; fc2vr::aut
     Lock(); bool ok = g_shotValid && g_rayTick && GetTickCount()-g_rayTick < 200; source = g_shotSource; weapon = g_shotWeapon;
     memcpy(o,g_camRefO,12); memcpy(d,g_camRefD,12); Unlock(); return ok && ShotCurrent(source,weapon); }
 bool ProjectileReloadActive() { return GetTickCount64() < g_diagUntil; }
+bool MotionGestureBusy() { return g_reloadOn || ProjectileReloadActive() || InterlockedCompareExchange(&g_climbActive,0,0)!=0; }
+bool IsLocalPawn(const void* pawn) { return pawn && pawn==g_pawn; }
+void* LocalPawnIdentity() { return g_pawn; }
 float AimDistance() { return g_aimTick && GetTickCount() - g_aimTick < 300 ? g_aimDist : 0.0f; }
 bool SightRay(float o[3], float d[3], RayContext* context) { if (!g_csInit) return false; fc2vr::authority::Stamp source; void* weapon;
     Lock(); bool ok = g_shotValid && g_rayTick && GetTickCount()-g_rayTick < 200; source = g_shotSource; weapon = g_shotWeapon;
