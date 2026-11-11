@@ -9,6 +9,8 @@
 #include <cmath>
 #include <d3dcompiler.h>
 #include "common/xr_runtime_probe.h"
+#include "common/controller_alignment.h"
+#include "common/controller_anchor.h"
 
 namespace xr {
 
@@ -168,6 +170,8 @@ static PFN_xrEnumerateDisplayRefreshRatesFB p_xrEnumerateDisplayRefreshRatesFB;
 static PFN_xrGetDisplayRefreshRateFB p_xrGetDisplayRefreshRateFB;
 static PFN_xrRequestDisplayRefreshRateFB p_xrRequestDisplayRefreshRateFB;
 static bool g_hasRefreshExt;
+static bool g_wantPalmPose=true,g_hasPalmPose=false,g_palmBindings=false;
+void SetRuntimePalmPose(bool enabled) { g_wantPalmPose=enabled; }
 static float g_wantRefresh;   // ini DisplayRefreshRate (0 = leave it to the runtime)
 volatile double g_displayPeriod = 0;   // v232: seconds, from xrWaitFrame (frame pacing)
 double DisplayPeriod() { return g_displayPeriod; }
@@ -375,7 +379,14 @@ static XrAction g_aGrip = XR_NULL_HANDLE, g_aAim = XR_NULL_HANDLE, g_aTrig = XR_
                 g_aMenu = XR_NULL_HANDLE, g_aHaptic = XR_NULL_HANDLE;
 static XrPath g_hand[2] = { XR_NULL_PATH, XR_NULL_PATH };
 static XrSpace g_gripSpace[2] = { XR_NULL_HANDLE, XR_NULL_HANDLE }, g_aimSpace[2] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
-static bool g_inputOk = false, g_profileLogged = false;
+static XrAction g_aPalm=XR_NULL_HANDLE;
+static XrSpace g_palmSpace[2]={XR_NULL_HANDLE,XR_NULL_HANDLE};
+static fc2vr::controllers::PalmCalibration g_palmCalibration[2];
+static bool g_inputOk = false;
+static fc2vr::controllers::Detection g_controllerDetection;
+static XrPath g_controllerProfile[2]{};
+static bool g_profilesDirty=true;
+static ULONGLONG g_profileRetryAt=0;
 static HandState g_hs[2];
 // game-thread copy (XInputGetState runs on the game thread)
 struct CsInit { CRITICAL_SECTION cs; CsInit() { InitializeCriticalSection(&cs); } };
@@ -399,6 +410,7 @@ static bool InputImpl() {
     if (!Check(p_xrCreateActionSet(g_inst, &si, &g_set), "xrCreateActionSet")) return false;
     g_aGrip = MakeAction("grip_pose", "Grip pose", XR_ACTION_TYPE_POSE_INPUT, true);
     g_aAim = MakeAction("aim_pose", "Aim pose", XR_ACTION_TYPE_POSE_INPUT, true);
+    g_aPalm=g_hasPalmPose ? MakeAction("palm_pose","Palm location",XR_ACTION_TYPE_POSE_INPUT,true) : XR_NULL_HANDLE;
     g_aTrig = MakeAction("trigger", "Trigger", XR_ACTION_TYPE_FLOAT_INPUT, true);
     g_aSqueeze = MakeAction("squeeze", "Grip", XR_ACTION_TYPE_FLOAT_INPUT, true);
     g_aStick = MakeAction("thumbstick", "Thumbstick", XR_ACTION_TYPE_VECTOR2F_INPUT, true);
@@ -424,15 +436,27 @@ static bool InputImpl() {
     add(g_aBtn1, "/user/hand/left/input/x/click"); add(g_aBtn2, "/user/hand/left/input/y/click");
     add(g_aBtn1, "/user/hand/right/input/a/click"); add(g_aBtn2, "/user/hand/right/input/b/click");
     add(g_aMenu, "/user/hand/left/input/menu/click");
+    const auto baseBindingCount=b.size();
+    if(g_aPalm) for(int h=0;h<2;++h) {
+        snprintf(buf,sizeof buf,"%s/input/palm_ext/pose",hs[h]);add(g_aPalm,buf);
+    }
     XrInteractionProfileSuggestedBinding sb{ XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
     sb.interactionProfile = P("/interaction_profiles/oculus/touch_controller");
     sb.suggestedBindings = b.data(); sb.countSuggestedBindings = (uint32_t)b.size();
-    if (!Check(p_xrSuggestInteractionProfileBindings(g_inst, &sb), "xrSuggestInteractionProfileBindings (touch)")) return false;
+    XrResult bindingResult=p_xrSuggestInteractionProfileBindings(g_inst,&sb);
+    g_palmBindings=g_aPalm && XR_SUCCEEDED(bindingResult);
+    if(XR_FAILED(bindingResult) && g_aPalm) {
+        LOG("XR: palm bindings rejected (%d); retrying original Touch bindings",(int)bindingResult);
+        b.resize(baseBindingCount);sb.suggestedBindings=b.data();sb.countSuggestedBindings=(uint32_t)b.size();
+        bindingResult=p_xrSuggestInteractionProfileBindings(g_inst,&sb);
+    }
+    if (!Check(bindingResult,"xrSuggestInteractionProfileBindings (touch)")) return false;
     for (int h = 0; h < 2; ++h) {
         XrActionSpaceCreateInfo ac{ XR_TYPE_ACTION_SPACE_CREATE_INFO };
         ac.subactionPath = g_hand[h]; ac.poseInActionSpace.orientation.w = 1.0f;
         ac.action = g_aGrip; Check(p_xrCreateActionSpace(g_sess, &ac, &g_gripSpace[h]), "grip space");
         ac.action = g_aAim;  Check(p_xrCreateActionSpace(g_sess, &ac, &g_aimSpace[h]), "aim space");
+        if(g_palmBindings) { ac.action=g_aPalm;Check(p_xrCreateActionSpace(g_sess,&ac,&g_palmSpace[h]),"optional palm space"); }
     }
     XrSessionActionSetsAttachInfo ai{ XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO };
     ai.countActionSets = 1; ai.actionSets = &g_set;
@@ -514,6 +538,11 @@ static void InvalidateInput(const char* reason, bool clearPoses = false) {
     for (int h = 0; h < 2; ++h) {
         g_buttonGate[h].Clear(); g_poseGate[h].Clear();
         g_hs[h] = HandState{};
+        // Held visual poses retain their calibration through focus/tracking loss.
+        // Profile changes clear detection AND cached poses before calling here.
+        g_hs[h].questTouch = g_controllerDetection.QuestTouch(h);
+        if(clearPoses) g_palmCalibration[h].Reset();
+        g_hs[h].palmOffsetValid=g_palmCalibration[h].Valid();g_hs[h].palmOffset=g_palmCalibration[h].Offset();
         for (int k = 0; k < 2; ++k) {
             if (clearPoses) g_poseCache[h][k].Clear();
             const auto kept = g_poseCache[h][k].Resolve(XrPosef{}, {}, g_holdLost);
@@ -572,6 +601,38 @@ static void RevokeViewPoses() {
     if (changed && count++ % 90 == 0) LOG("XR: input-authority-1 spatial use revoked: incomplete view tracking (events=%u, buttons remain fresh)",count);
 }
 
+static void ClearControllerProfiles() {
+    g_controllerDetection.ClearProfiles();
+    for(auto& calibration:g_palmCalibration) calibration.Reset();
+    g_controllerProfile[0]=g_controllerProfile[1]=XR_NULL_PATH;
+    g_profilesDirty=true; g_profileRetryAt=0;
+}
+static void RefreshControllerProfiles() {
+    if (!g_profilesDirty || GetTickCount64()<g_profileRetryAt) return;
+    g_profilesDirty=false; g_profileRetryAt=GetTickCount64()+1000;
+    bool changed=false;
+    for (int h=0;h<2;++h) {
+        XrInteractionProfileState ps{XR_TYPE_INTERACTION_PROFILE_STATE};
+        char name[XR_MAX_PATH_LENGTH]{}; uint32_t count=0;
+        const bool known=p_xrGetCurrentInteractionProfile(g_sess,g_hand[h],&ps)==XR_SUCCESS
+            && ps.interactionProfile!=XR_NULL_PATH
+            && p_xrPathToString(g_inst,ps.interactionProfile,sizeof name,&count,name)==XR_SUCCESS
+            && count>1 && count<=sizeof name && name[count-1]=='\0';
+        const XrPath path=known ? ps.interactionProfile : XR_NULL_PATH;
+        const bool oldQuest=g_controllerDetection.QuestTouch(h);
+        g_controllerDetection.Profile(h,known ? name : "",known);
+        if (g_controllerProfile[h]!=path || oldQuest!=g_controllerDetection.QuestTouch(h)) {
+            changed=true;
+            LOG("XR: controller alignment %s profile=%s family=%s (preset enabled by QuestControllerAlignment)",
+                h ? "right" : "left",known ? name : "unknown",
+                g_controllerDetection.QuestTouch(h) ? "Quest/Touch" : "base");
+        }
+        g_controllerProfile[h]=path;
+        if (!known) g_profilesDirty=true; // bounded retry while controllers are absent/query failed
+    }
+    // Drop old controller poses and action leases before publishing new hardware.
+    if (changed) InvalidateInput("controller profile changed",true);
+}
 static void SyncInput(XrTime t) {
     bool spaceChanged = false;
     for (auto it = g_referenceChanges.begin(); it != g_referenceChanges.end();) {
@@ -587,18 +648,13 @@ static void SyncInput(XrTime t) {
     XrActiveActionSet as{ g_set, XR_NULL_PATH };
     XrActionsSyncInfo si{ XR_TYPE_ACTIONS_SYNC_INFO }; si.countActiveActionSets = 1; si.activeActionSets = &as;
     if (p_xrSyncActions(g_sess, &si) != XR_SUCCESS) { InvalidateInput("sync failed"); return; }
-    if (!g_profileLogged) {
-        XrInteractionProfileState ps{ XR_TYPE_INTERACTION_PROFILE_STATE };
-        if (XR_SUCCEEDED(p_xrGetCurrentInteractionProfile(g_sess, g_hand[1], &ps)) && ps.interactionProfile) {
-            char name[256] = ""; uint32_t n = 0; p_xrPathToString(g_inst, ps.interactionProfile, sizeof name, &n, name);
-            LOG("XR: interaction profile %s", name); g_profileLogged = true;
-        }
-    }
+    RefreshControllerProfiles();
     XrSpaceLocation hl{XR_TYPE_SPACE_LOCATION};
     const bool headLocated = g_view && p_xrLocateSpace(g_view,g_local,t,&hl) == XR_SUCCESS;
     const bool headOk = Evidence(headLocated,headLocated,hl).Tracked();
     for (int h = 0; h < 2; ++h) {
         HandState s;
+        s.questTouch = g_controllerDetection.QuestTouch(h);
         for (int k = 0; k < 2; ++k) {
             XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
             gi.action = k ? g_aAim : g_aGrip; gi.subactionPath = g_hand[h];
@@ -612,6 +668,24 @@ static void SyncInput(XrTime t) {
             else { s.grip = visual.pose; s.gripEvidence = evidence; s.gripValid = visual.visualValid; s.gripHeld = visual.held; }
             s.active |= active;
         }
+        if(g_palmBindings && g_palmSpace[h] && !g_palmCalibration[h].Valid()
+            && s.questTouch && s.gripEvidence.Tracked() && s.aimEvidence.Tracked()) {
+            XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};gi.action=g_aPalm;gi.subactionPath=g_hand[h];
+            XrActionStatePose ps{XR_TYPE_ACTION_STATE_POSE};XrSpaceLocation palm{XR_TYPE_SPACE_LOCATION};
+            const bool active=p_xrGetActionStatePose(g_sess,&gi,&ps)==XR_SUCCESS && ps.isActive;
+            // Relative location removes tracking/world motion; this is a fixed
+            // controller calibration, not a second independently filtered pose.
+            // Once known, keep it until a context/profile reset: no added
+            // per-frame pose query or independent palm tracking jitter.
+            const bool located=active && p_xrLocateSpace(g_palmSpace[h],g_gripSpace[h],t,&palm)==XR_SUCCESS;
+            const bool trusted=located && (palm.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) && FinitePosition(palm.pose);
+            const bool had=g_palmCalibration[h].Valid();
+            if(g_palmCalibration[h].Observe({palm.pose.position.x,palm.pose.position.y,palm.pose.position.z},trusted) && !had) {
+                const auto offset=g_palmCalibration[h].Offset();
+                LOG("alignment-16: %s runtime palm relative to grip: %.1f %.1f %.1f mm (grip-local axes)",h?"right":"left",offset.x*1000,offset.y*1000,offset.z*1000);
+            }
+        }
+        s.palmOffsetValid=s.questTouch && g_palmCalibration[h].Valid();s.palmOffset=g_palmCalibration[h].Offset();
         // Buttons are independent of positional tracking and even pose-action activity.
         bool buttonsActive = false;
         s.trigger = GetF(g_aTrig,h,&buttonsActive); s.squeeze = GetF(g_aSqueeze,h,&buttonsActive); s.stick = GetV(g_aStick,h,&buttonsActive);
@@ -661,6 +735,7 @@ void Haptic(int side, float amplitude, float seconds, float frequency) {
 
 // ---------------------------------------------------------------- init
 static void Teardown() {
+    g_controllerDetection.System("",false); ClearControllerProfiles();
     InvalidateInput("teardown",true); g_referenceChanges.clear(); ++g_spaceGeneration;
     for (int i = 0; i < 5; ++i) ReleaseShared(g_shared[i]);
     for (Shared& e : g_extra) ReleaseShared(e);
@@ -671,18 +746,19 @@ static void Teardown() {
     g_inst = XR_NULL_HANDLE; g_sess = XR_NULL_HANDLE; g_local = XR_NULL_HANDLE; g_view = XR_NULL_HANDLE; g_sys = XR_NULL_SYSTEM_ID;
     SafeRelease(g_ctx11); SafeRelease(g_dev11);
     g_running = false; g_state = XR_SESSION_STATE_UNKNOWN;
-    g_inputOk = false; g_set = XR_NULL_HANDLE; for (int h = 0; h < 2; ++h) { g_gripSpace[h] = g_aimSpace[h] = XR_NULL_HANDLE; g_hs[h] = HandState{}; }
+    g_inputOk = false; g_set = XR_NULL_HANDLE;g_aPalm=XR_NULL_HANDLE;g_palmBindings=false;
+    for (int h = 0; h < 2; ++h) { g_gripSpace[h] = g_aimSpace[h] = g_palmSpace[h] = XR_NULL_HANDLE;g_palmCalibration[h].Reset();g_hs[h] = HandState{}; }
 }
 
 static bool InstanceImpl(ID3D10Device* dev10) {
     g_dev10 = dev10;
     if (!LoadLoader()) return false;
-    const char* exts[2] = { XR_KHR_D3D11_ENABLE_EXTENSION_NAME, nullptr };
+    const char* exts[3] = { XR_KHR_D3D11_ENABLE_EXTENSION_NAME, nullptr, nullptr };
     uint32_t nExt = 1;
     {   // v230: log what the runtime offers; enable XR_FB_display_refresh_rate when present (read / request the refresh rate)
         PFN_xrEnumerateInstanceExtensionProperties enumExt = nullptr;
         p_xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrEnumerateInstanceExtensionProperties", (PFN_xrVoidFunction*)&enumExt);
-        uint32_t n = 0; g_hasRefreshExt = false;
+        uint32_t n = 0; g_hasRefreshExt = false;g_hasPalmPose=false;
         if (enumExt && XR_SUCCEEDED(enumExt(nullptr, 0, &n, nullptr)) && n) {
             std::vector<XrExtensionProperties> props(n, XrExtensionProperties{ XR_TYPE_EXTENSION_PROPERTIES });
             enumExt(nullptr, n, &n, props.data());
@@ -690,10 +766,13 @@ static bool InstanceImpl(ID3D10Device* dev10) {
             for (auto& e : props) {
                 if (len + strlen(e.extensionName) + 2 < sizeof all) len += snprintf(all + len, sizeof all - len, "%s ", e.extensionName);
                 if (!strcmp(e.extensionName, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME)) g_hasRefreshExt = true;
+                if (!strcmp(e.extensionName,XR_EXT_PALM_POSE_EXTENSION_NAME)) g_hasPalmPose=g_wantPalmPose;
             }
             LOG("XR: %u runtime extensions: %s", n, all);
         }
         if (g_hasRefreshExt) exts[nExt++] = XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME;
+        if(g_hasPalmPose) exts[nExt++]=XR_EXT_PALM_POSE_EXTENSION_NAME;
+        LOG("alignment-16: runtime palm extension requested=%d enabled=%d",g_wantPalmPose,g_hasPalmPose);
         char ip[MAX_PATH]; GetModuleFileNameA(GetModuleHandleA("dinput8.dll"), ip, MAX_PATH);
         char* sl = strrchr(ip, '\\'); if (sl) strcpy(sl + 1, "fc2vr.ini");
         char buf[32] = ""; GetPrivateProfileStringA("VR", "DisplayRefreshRate", "0", buf, sizeof buf, ip); g_wantRefresh = (float)atof(buf);
@@ -705,6 +784,11 @@ static bool InstanceImpl(ID3D10Device* dev10) {
     ici.applicationInfo.apiVersion = XR_API_VERSION_1_0;
     ici.enabledExtensionCount = nExt; ici.enabledExtensionNames = exts;
     {   XrResult cr = p_xrCreateInstance(&ici, &g_inst);
+        if(XR_FAILED(cr) && g_hasPalmPose) {
+            LOG("XR: instance rejected optional palm extension (%d); retrying without it",(int)cr);
+            g_hasPalmPose=false;ici.enabledExtensionCount=--nExt;g_inst=XR_NULL_HANDLE;
+            cr=p_xrCreateInstance(&ici,&g_inst);
+        }
         if (XR_FAILED(cr)) {   // v231: say which runtime this 32-bit game was given and whether it can load here
             static bool told = false;
             if (!told) {
@@ -735,8 +819,10 @@ static bool InstanceImpl(ID3D10Device* dev10) {
     if (!Check(p_xrGetSystem(g_inst, &sgi, &g_sys), "xrGetSystem")) return false;   // headset absent: retryable
     g_fatal = true;   // from here on, failures are not fixed by retrying; avoid session churn
     XrSystemProperties sp{ XR_TYPE_SYSTEM_PROPERTIES };
-    p_xrGetSystemProperties(g_inst, g_sys, &sp);
-    LOG("XR: system '%s'", sp.systemName);
+    const bool systemKnown=p_xrGetSystemProperties(g_inst,g_sys,&sp)==XR_SUCCESS;
+    sp.systemName[XR_MAX_SYSTEM_NAME_SIZE-1]='\0';
+    g_controllerDetection.System(sp.systemName,systemKnown); ClearControllerProfiles();
+    LOG("XR: system '%s'; Quest alignment headset match=%d",systemKnown ? sp.systemName : "unknown",g_controllerDetection.QuestHeadset());
     uint32_t nv = 0; XrViewConfigurationView vcv[2]{ { XR_TYPE_VIEW_CONFIGURATION_VIEW }, { XR_TYPE_VIEW_CONFIGURATION_VIEW } };
     p_xrEnumerateViewConfigurationViews(g_inst, g_sys, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2, &nv, vcv);
     g_recW = vcv[0].recommendedImageRectWidth; g_recH = vcv[0].recommendedImageRectHeight;
@@ -931,6 +1017,15 @@ void PollEvents() {
     if (!g_inst) return;
     XrEventDataBuffer ev{ XR_TYPE_EVENT_DATA_BUFFER };
     while (p_xrPollEvent(g_inst, &ev) == XR_SUCCESS) {
+        if (ev.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
+            const auto* change=(const XrEventDataInteractionProfileChanged*)&ev;
+            if (change->session==g_sess) {
+                ClearControllerProfiles(); InvalidateInput("controller profile event",true);
+            }
+        }
+        if (ev.type == XR_TYPE_EVENT_DATA_EVENTS_LOST) {
+            ClearControllerProfiles(); InvalidateInput("events lost",true);
+        }
         if (ev.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) { g_running = false; InvalidateInput("instance loss",true); }
         if (ev.type == XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB) {
             auto* d = (XrEventDataDisplayRefreshRateChangedFB*)&ev;
@@ -940,6 +1035,8 @@ void PollEvents() {
             auto* s = (XrEventDataSessionStateChanged*)&ev;
             if (s->session != g_sess) { ev = XrEventDataBuffer{XR_TYPE_EVENT_DATA_BUFFER}; continue; }
             g_state = s->state;
+            // Refresh after focus returns as well as on profile-change events.
+            if (g_state == XR_SESSION_STATE_FOCUSED) { g_profilesDirty=true; g_profileRetryAt=0; }
             if (g_state != XR_SESSION_STATE_FOCUSED) InvalidateInput("session state");
             LOG("XR: session state %d", (int)g_state);
             if (g_state == XR_SESSION_STATE_READY) {

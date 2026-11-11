@@ -1,5 +1,6 @@
 #pragma once
 #include "tracking_frame.h"
+#include "body_pose.h"
 #include <cmath>
 #include <cstdint>
 
@@ -24,6 +25,23 @@ struct SteadyInput {
     bool eligible = false, turning = false;
     Vec3 playerPosition{0,0,0};
 };
+
+// The camera and its locomotion origin must describe the same queued scene.
+// A live entity position can already be one simulation step ahead; smoothing
+// that difference mistakes real movement for camera bob. Keep the same root
+// as the hand anchor so a later hierarchy update transports only locomotion,
+// without adding the animated Camera bone's bob back to stabilized hands.
+inline BodyAnchor SceneAnchor(const BodyPose& matched, Vec3 nativeOrigin, SteadyInput& input) {
+    if (!matched.valid) {
+        input.eligible = false;
+        return {nativeOrigin,0,true,false};
+    }
+    if (input.eligible) {
+        input.playerPosition = {matched.root[12],matched.root[13],matched.root[14]};
+        return AnchorFor(matched,true);
+    }
+    return AnchorFor(matched,false);
+}
 
 // The existing SteadyCamera policy, independent of engine queries and wall clock.
 // Build once per sample, never once per eye/consumer.
@@ -72,6 +90,10 @@ struct PoseFrame {
     ReferenceFrame reference{};
     float worldScale = 1;   // finite, positive game units/metre (existing config contract)
     std::uint64_t sequence = 0;
+    BodyAnchor bodyAnchor{}; // captured once with the camera; never re-read for hands
+    Vec3 nativeOrigin{};     // observation: engine camera before body/seat correction
+    bool comfortActive=false;
+    GameBasis gameplay{}; // unmodified native camera policy for ballistic/physics consumers
 
     Vec3 ReferencePosition(Vec3 local) const { return Scale(reference.Position(local),worldScale); }
     Vec3 ReferenceDirection(Vec3 local) const { return reference.Direction(local); }

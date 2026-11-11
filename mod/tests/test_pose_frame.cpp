@@ -163,6 +163,59 @@ void Bone() {
         }
     }
 }
+void Scene() {
+    // Deterministic scheduling replay, not a captured headset trace: scene
+    // movement is uniform while the live entity alternates between the queued
+    // frame and two steps ahead. Exercise strafe, forward and physical steps.
+    for (Vec3 step : {Vec3{.05f,0,0},Vec3{0,.05f,0},Vec3{.02f,.01f,.005f}}) {
+        BodyPoseHistory history;
+        CameraSmoother fixed, mixed;
+        float maxFixed=0,maxMixed=0;
+        for (unsigned i=0;i<180;++i) {
+            const double now=1000+i*(1000.0/90);
+            const Vec3 root=Add({2000,2700,30},Scale(step,static_cast<float>(i)));
+            const Vec3 camera=Add(root,{0,0,1.7f});
+            float matrix[16]={1,0,0,0,0,1,0,0,0,0,1,0,root.x,root.y,root.z,1};
+            history.Publish(camera,matrix,1,2,now);
+            const Vec3 live=Add(root,Scale(step,(i%2) ? 2.0f : 0.0f));
+            // A worker can publish the next skeleton before the renderer reads.
+            if(i%2) {
+                matrix[12]=live.x;matrix[13]=live.y;matrix[14]=live.z;
+                history.Publish(Add(live,{0,0,1.7f}),matrix,1,2,now+.1);
+            }
+            SteadyInput input{now+1,true,false,live},old=input;
+            const auto anchor=SceneAnchor(history.Capture().MatchCamera(camera,now+1),camera,input);
+            Check(anchor.root && !anchor.followSeat,"on-foot matched root never selects vehicle rotation transport");
+            Near(input.playerPosition,root,"stabilizer uses the queued root, never the live entity");
+            const auto result=fixed.Update(Camera(camera),input),legacy=mixed.Update(Camera(camera),old);
+            maxFixed=std::fmax(maxFixed,Distance(result.P,camera));
+            maxMixed=std::fmax(maxMixed,Distance(legacy.P,camera));
+        }
+        Check(maxFixed<.001f,"uniform locomotion stays uniform despite worker lead (world-coordinate precision)");
+        if(step.x>.04f) Check(maxMixed>.09f,"negative control reproduces roughly 10 cm lateral timing error");
+        std::printf("scene scheduling replay: mixed max %.3f mm, matched max %.3f mm\n",maxMixed*1000,maxFixed*1000);
+    }
+    SteadyInput missing{2000,true,false,{100,200,0}};
+    auto fallback=SceneAnchor({}, {1,2,3},missing);
+    Check(!missing.eligible && fallback.valid && !fallback.root,"missing match bypasses smoothing and preserves native camera anchor");
+    Near(fallback.position,{1,2,3},"missing match never falls back to live entity");
+    BodyPose pose;pose.valid=true;pose.camera={1,2,3};pose.root[12]=4;
+    SteadyInput disabled{2000,false,false,{8,9,10}};
+    auto native=SceneAnchor(pose,pose.camera,disabled);
+    Check(!native.root && !disabled.eligible,"disabled/special controls preserve native Camera-bone behaviour");
+    Check(AnchorFor(pose,true,true).followSeat,"vehicle anchor retains explicit full seat transport");
+}
+void Transport() {
+    BodyPose pose;pose.valid=true;pose.sequence=4;pose.root[12]=10;pose.root[13]=20;pose.root[14]=30;pose.camera={10,20,31.7f};
+    SteadyInput input{1000,true,false,{10,20,30}};
+    const auto anchor=SceneAnchor(pose,pose.camera,input);
+    const Vec3 oldView{10,20,31.7f},rootStep{.05f,.02f,0};
+    const Vec3 nextRoot=Add({10,20,30},rootStep),nextCamera=Add(Add(pose.camera,rootStep),{.08f,0,.10f});
+    const Vec3 transported=Add(oldView,Subtract(nextRoot,anchor.position));
+    Near(transported,Add(oldView,rootStep),"on-foot hands follow body travel without animated camera kick");
+    const Vec3 legacy=Add(oldView,Subtract(nextCamera,pose.camera));
+    Check(Distance(legacy,transported)>.12f,"negative control exposes reintroduced camera animation");
+}
 } // namespace
 int main(int argc,char** argv) {
     if (argc != 2) return 2;
@@ -173,6 +226,8 @@ int main(int argc,char** argv) {
     else if (!std::strcmp(group,"once")) Once();
     else if (!std::strcmp(group,"inverse")) Inverse();
     else if (!std::strcmp(group,"bone")) Bone();
+    else if (!std::strcmp(group,"scene")) Scene();
+    else if (!std::strcmp(group,"transport")) Transport();
     else return 2;
     std::printf("%s: %d checks, %d failures\n",group,checks,failures);
     return failures ? 1 : 0;

@@ -7,9 +7,11 @@
 #include "xr.h"
 #include "log.h"
 #include "gameaddr.h"
+#include "common/action_context.h"
 #include <xinput.h>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 
 namespace controls {
 static volatile float g_rtValue = 0;
@@ -112,7 +114,10 @@ static MapName g_maps[] = {
     { "using_mounted_weapon", 2, 0 }, { "paragliderdriving", 2, 0 },
     { "gameplay", 0, 0 }, { "default", 0, 0 }, { "ladder", 0, 0 }, { "watch", 0, 0 }, { "menus", 0, 0 }, { "pausemenu", 0, 0 },
     { "cinematic", 0, 0 }, { "mapcompass", 0, 0 }, { "lyingdown", 0, 0 }, { "machete_finish", 0, 0 }, { "healPlayer", 0, 0 },
+    { "briefing", 0, 0 }, { "briefinginteraction", 0, 0 }, { "briefing_no_map", 0, 0 }, { "map_briefing", 0, 0 },
 };
+static volatile bool g_interactionMap=false, g_locomotionMap=false;
+static volatile uint32_t g_actionMapId=0;
 static volatile int g_vehMode = 0; static volatile bool g_mounted = false; static volatile bool g_normalMap = true; static volatile bool g_menuMap = false; static volatile int g_mapCompass = -1; static volatile bool g_itemMap = false; static volatile bool g_loadingMap = false;   // -1 unknown, else the game's map action map is (1) / is not (0) up
 static uint32_t TopActionMap() {
     if (!g_base) return 0;
@@ -136,6 +141,7 @@ static void UpdateVehicleMode() {
         ids = true;
     }
     uint32_t id = TopActionMap();
+    g_actionMapId=id;
     static uint32_t last = 1;
     int mode = 0; const char* nm = nullptr;
     for (auto& m : g_maps) if (m.id == id) { mode = m.mode; nm = m.name; break; }
@@ -143,16 +149,25 @@ static void UpdateVehicleMode() {
     if (id != last) { last = id; if (nm) LOG("controls: action map %s (%s)", nm, mode == 1 ? "driving" : mode == 2 ? "vehicle seat / mounted" : "on foot"); else LOG("controls: action map %08x", id); }
     if (mode != g_vehMode) { g_vehMode = mode; }
     g_normalMap = id == 0 || (nm && (!strcmp(nm, "default") || !strcmp(nm, "gameplay")));
+    const auto context=fc2vr::input::OnFootContext(nm);
+    g_interactionMap=context.interaction; g_locomotionMap=context.locomotion;
     g_menuMap = nm && (!strcmp(nm, "pausemenu") || !strcmp(nm, "menus"));
     g_mounted = nm && !strcmp(nm, "using_mounted_weapon");
     g_itemMap = nm && (!strcmp(nm, "watch") || !strcmp(nm, "mapcompass") || !strcmp(nm, "map_driving") || !strcmp(nm, "pausemenu") || !strcmp(nm, "menus") || !strcmp(nm, "cinematic") || !strcmp(nm, "healPlayer"));
-    g_mapCompass = id == 0 ? -1 : (nm && (!strcmp(nm, "mapcompass") || !strcmp(nm, "map_driving"))) ? 1 : 0;
+    if(nm && !strcmp(nm,"map_briefing")) g_itemMap=true;
+    g_mapCompass = id == 0 ? -1 : (nm && (!strcmp(nm, "mapcompass") || !strcmp(nm, "map_driving") || !strcmp(nm,"map_briefing"))) ? 1 : 0;
 }
 int VehicleMode() { return g_vehMode; }
+static volatile LONG g_passiveRide = 0;
+void SetPassiveRide(bool riding) { InterlockedExchange(&g_passiveRide,riding ? 1 : 0); }
+bool PassiveRide() { return g_vehMode == 0 && g_normalMap && !g_loadingMap && InterlockedCompareExchange(&g_passiveRide,0,0) != 0; }
 int ThrowAimHand() { return g_aimHand; }
 int TakeThrowRelease() { return (int)InterlockedExchange(&g_throwRelease, 0); }
 void FireThrow() { InterlockedExchange(&g_throwFire, 1); }
 bool NormalControls() { return g_normalMap; }
+bool InteractionControls() { return g_interactionMap && !g_loadingMap; }
+bool LocomotionControls() { return g_locomotionMap && !g_loadingMap; }
+uint32_t ActionMapId() { return g_actionMapId; }
 bool MapControls() { return g_mapCompass == 1; }
 bool LoadingControls() { return g_loadingMap; }
 bool MenuControls() { return g_menuMap; }
@@ -201,9 +216,10 @@ struct MappingHistory {
     bool recenterFired = false, driverMap = false, gadgetHeld = false, gadgetDelayed = false, mapPrev = false;
     int lastMap = -1, turnDir = 0, snapDir = 0;
     int turretHand = -1; float turretC0y = 0, turretC0p = 0, turretG0y = 0, turretG0p = 0; DWORD turretLog = 0;   // v234 test 88 motion aim
-    bool aPrev = false, aCombo = false, rThrow = false, lThrow = false, trigFlash = false, bCombo = false;
+    bool aPrev = false, aCombo = false, rThrow = false, lThrow = false, trigFlash = false, bCombo = false, usePrev = false;
 };
 static MappingHistory g_history;
+static unsigned g_usePressLogs=0;
 static fc2vr::authority::SampleCursor g_inputCursor;
 static uint64_t g_mappingGeneration = 0;
 void CancelPendingInput() {
@@ -277,6 +293,10 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         g.sThumbLX = Axis(sx); g.sThumbLY = Axis(sy); g_moveMag = sqrtf(sx * sx + sy * sy); }
     if (L.stickClick) b |= XINPUT_GAMEPAD_LEFT_THUMB;      // sprint
     if (L.btn1 && !g_menuMode) b |= XINPUT_GAMEPAD_Y;     // X: interact / use (E) - doors, turrets, weapons on the ground
+    if (L.btn1 && !g_history.usePrev && !g_menuMode) {
+        if(g_usePressLogs++<80) LOG("interaction: left X -> native pad Y (map %08x, headset targeting allowed %d)",g_actionMapId,InteractionControls());
+    }
+    g_history.usePrev=L.btn1;
     { auto& held = g_history.gadgetHeld; auto& delayed = g_history.gadgetDelayed; auto& at = g_history.gadgetAt;   // map / gadget
       if (L.btn2 && !held) { delayed = g_handsAway; if (delayed) { InterlockedExchange(&g_mapLiftReq, 1); at = now + 150; LOG("controls: map button with the weapon away - lifting the holster lock first"); } }
       held = L.btn2;
@@ -390,12 +410,13 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
       if (R.btn1 && !aCombo) b |= XINPUT_GAMEPAD_A; }      // jump / change seat
     if (R.stickClick) b |= XINPUT_GAMEPAD_LEFT_SHOULDER;   // right stick click: syrette (heal yourself)
     g.bRightTrigger = poseFire ? (BYTE)lroundf(fminf(1.0f, R.trigger) * 255.0f) : 0;   // pose-guided fire needs tracked input; native vehicle/turret controls do not
-    if (!g_c.macheteTrigger && MacheteSelected()) g.bRightTrigger = 0;   // machete: hits come from swinging it; the game's attack animation sways the camera
+    if (!g_c.macheteTrigger && MacheteEquipped()) g.bRightTrigger = 0;   // machete: hits come from swinging it; the game's attack animation sways the camera
     // right grip: holster grab (weapon select) in a body zone, iron sight / reverse elsewhere
     // no holster grabs in a vehicle seat, nor in menus / loading screens (v234 test 36: a chest grab in the pause menu left
     // the mod thinking the machete was out - the gun in the hand then got the machete's hand angles, twisted)
     const bool inMenu = g_menuMap || g_loadingMap;
-    Zone z = headValid && g_vehMode == 0 && !inMenu ? RightHandZone(R, head) : Z_NONE;
+    const bool passiveRide = PassiveRide();
+    Zone z = headValid && g_vehMode == 0 && !passiveRide && !inMenu ? RightHandZone(R, head) : Z_NONE;   // includes the intro's default-map seat
     g_zoneNow = z != Z_NONE;
     bool grip = R.squeeze > (g_rGripDown ? 0.35f : 0.6f);
     // v212 monocular: with the map / GPS up (or the monocular out), a right-grip press away from the holster spots takes the
@@ -409,13 +430,13 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         if (z == Z_SHOULDER) { PulseBtn(g_shoulderNext ? kSlots[2] : kSlots[0], now); g_cycle = g_shoulderNext ? 2 : 0; g_shoulderNext ^= 1; g_rGripAim = false; xr::Haptic(1, 0.6f, 0.06f); }
         else if (z == Z_HIP) { PulseBtn(kSlots[1], now); g_cycle = 1; g_rGripAim = false; xr::Haptic(1, 0.6f, 0.06f); }
         else if (z == Z_CHEST) { PulseBtn(kSlots[3], now); g_cycle = 3; g_rGripAim = false; xr::Haptic(1, 0.6f, 0.06f); }
-        else g_rGripAim = true;
+        else g_rGripAim = !passiveRide;
         if (z != Z_NONE) { LOG("controls: holster grab at %s", ZoneName(z)); InterlockedExchange(&g_selectReq, 1); }
     }
-    g_rGripDown = grip; if (!grip) g_rGripAim = false;
+    g_rGripDown = grip; if (!grip || passiveRide) g_rGripAim = false;
     if (g_vehMode == 2 && grip && !(g_mounted && g_c.turretMotion)) { b |= XINPUT_GAMEPAD_A; g_rGripAim = false; }   // passenger seat: right grip changes seat (v234 test 89: not on a mounted gun with motion aim - the grip aims it there; A still changes seat)
     // iron sight / scope: hold the weapon up to your face (CrysisVR: on within 0.25 m of the head, off beyond 0.35 m)
-    if (headValid && R.gripValid) {
+    if (headValid && R.gripValid && !g_rightFree && !passiveRide) {
         float dx = R.grip.position.x - head.position.x, dy = R.grip.position.y - head.position.y, dz = R.grip.position.z - head.position.z;
         float d = sqrtf(dx * dx + dy * dy + dz * dz);
         bool was = g_sightOn;
@@ -445,7 +466,7 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     {
         auto& rPrev = g_history.rThrow; auto& lPrev = g_history.lThrow;
         bool rT = R.trigger > 0.6f, lT = L.trigger > 0.6f;
-        bool allowed = g_c.throwArc && g_vehMode == 0 && g_normalMap && !g_mapOpen;
+        bool allowed = g_c.throwArc && g_vehMode == 0 && !passiveRide && g_normalMap && !g_mapOpen;
         bool lostPose = g_aimHand >= 0 && !(h[g_aimHand].gripValid && h[g_aimHand].aimValid);
         if (!allowed || lostPose) { g_aimHand = -1; InterlockedExchange(&g_throwRelease,0); InterlockedExchange(&g_throwFire,0); }
         else if (g_aimHand < 0) {
@@ -532,6 +553,7 @@ void Install(HMODULE dunia, const Config& c) {
     LOG("controls: XInputGetState hook %d, XInputSetState hook %d", a, b);
 }
 bool Active() { return g_active != 0; }
+bool MacheteEquipped() { const auto weapon=arms::EquippedWeapon(); return weapon.MeleeFor(weapon.owner); }
 bool MacheteSelected() {   // v234 test 70: the held weapon decides when it is known; the slot guess only before that
     const int m = arms::HeldMelee();
     if (m >= 0) {

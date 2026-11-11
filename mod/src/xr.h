@@ -9,6 +9,7 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 #include "common/pose_authority.h"
+#include "common/controller_anchor.h"
 
 namespace xr {
 
@@ -106,6 +107,9 @@ struct HandState {
     // gripValid/aimValid describe the visual pose (including HoldLostTracking).
     // Only poseAuthority plus raw tracked evidence can authorize physical use.
     bool active = false, gripValid = false, aimValid = false;
+    bool questTouch = false; // headset + this hand's interaction profile, captured with its poses
+    bool palmOffsetValid=false,usingRuntimePalm=false;
+    fc2vr::tracking::Vec3 palmOffset{}; // runtime palm relative to raw grip, metres; calibration only
     fc2vr::authority::PoseEvidence gripEvidence{}, aimEvidence{};
     bool gripHeld = false, aimHeld = false, poseAuthority = false;
     XrPosef grip{ { 0, 0, 0, 1 }, { 0, 0, 0 } }, aim{ { 0, 0, 0, 1 }, { 0, 0, 0 } };
@@ -131,6 +135,7 @@ bool GpuHandover();
 bool GpuHandoverAvailable();
 bool HandoverStats(double& avgMs, double& maxMs, int& frames, bool& gpu);   // since the last call (render thread)
 void SetHoldLostPose(bool on);   // HoldLostTracking: keep the last pose of a controller that loses tracking   // 0..1 per hand, applied every frame
+void SetRuntimePalmPose(bool enabled); // optional runtime calibration; configure before Init
 
 void Shutdown();
 const char* LastError();

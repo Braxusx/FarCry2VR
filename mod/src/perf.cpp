@@ -121,14 +121,17 @@ static bool IsDuniaRA(uintptr_t v) {
 }
 static uint32_t ToVA(uintptr_t a) { return (uint32_t)(a - g_dBase + 0x10000000); }
 
+static DWORD g_sampleDuration=0;
 static DWORD WINAPI SamplerThread(LPVOID p) {
     DWORD tid = (DWORD)(uintptr_t)p;
     HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, tid);
     if (!th) { LogWrite("perf: OpenThread failed %lu", GetLastError()); return 0; }
     timeBeginPeriod(1);
     static uintptr_t stack[4096];
+    const DWORD startedAt=GetTickCount();
     for (;;) {
-        Sleep(1);
+        Sleep(g_sampleDuration ? 4 : 1);
+        if (g_sampleDuration && GetTickCount()-startedAt>=g_sampleDuration) break;
         LONG ph = g_phase;
         if (ph == P_NONE) continue;
         if (SuspendThread(th) == (DWORD)-1) continue;
@@ -173,19 +176,23 @@ static DWORD WINAPI SamplerThread(LPVOID p) {
         }
         LeaveCriticalSection(&g_cs);
     }
+    CloseHandle(th); timeEndPeriod(1);
+    LogWrite("perf: bounded CPU sample finished");
+    return 0;
 }
 
-void StartSampler(DWORD mainTid) {
+void StartSampler(DWORD mainTid,DWORD durationMs) {
     static bool started = false;
     if (started) return;
     started = true;
+    g_sampleDuration=durationMs;
     HMODULE d = GetModuleHandleA("Dunia.dll");
     g_dBase = (uintptr_t)d; g_dTextEnd = g_dBase + 0xE00000;
     for (int f = 0; f < kFocus; ++f) { uint32_t v = gameaddr::Xlate(g_focus[f].va); g_focus[f].lo = v ? g_dBase + (v - 0x10000000) : 0; g_focus[f].hi = v ? g_focus[f].lo + g_focus[f].size : 0; }
     InitializeCriticalSection(&g_cs);
     HANDLE h = CreateThread(nullptr, 0, SamplerThread, (LPVOID)(uintptr_t)mainTid, 0, nullptr);
-    if (h) { SetThreadPriority(h, THREAD_PRIORITY_TIME_CRITICAL); CloseHandle(h); }
-    LOG("perf: sampler started on thread %lu", mainTid);
+    if (h) { SetThreadPriority(h, durationMs ? THREAD_PRIORITY_NORMAL : THREAD_PRIORITY_TIME_CRITICAL); CloseHandle(h); }
+    LOG("perf: sampler started on thread %lu (%lu ms; 0=continuous)", mainTid,durationMs);
 }
 
 static void ModName(uint32_t mod, char* out, size_t n) {
