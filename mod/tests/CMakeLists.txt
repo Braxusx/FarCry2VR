@@ -79,3 +79,8 @@ foreach(group freshness cache rearm cursor safety finite)
 endforeach()
 add_test(NAME authority_source_wiring COMMAND ${CMAKE_COMMAND}
     -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../src -P ${CMAKE_CURRENT_SOURCE_DIR}/check_authority_wiring.cmake)
+
+add_executable(panel_anchor_tests test_panel_anchor.cpp)
+target_compile_features(panel_anchor_tests PRIVATE cxx_std_17)
+target_include_directories(panel_anchor_tests PRIVATE ../src)
+add_test(NAME panel_anchor COMMAND panel_anchor_tests)

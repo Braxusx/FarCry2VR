@@ -58,8 +58,10 @@ ID3D10Texture2D* EyeTexture10(int e);
 void WaitEyeCopies();
 
 // Flat "virtual screen" frame for menus/loading (whole frame as a quad layer).
-// pose: quad centre/orientation in LOCAL space (null = 2 m ahead of the LOCAL origin); width in metres.
-void SubmitScreen(ID3D10Texture2D* src, const XrPosef* pose = nullptr, float width = 2.4f);
+// pose: quad centre/orientation in LOCAL space (null = anchored ahead of the current head pose); width in metres.
+void SubmitScreen(ID3D10Texture2D* src, const XrPosef* pose = nullptr, float width = 2.4f, float distance = 3.0f);
+XrPosef FixedPanelPose(const FrameViews& fv,int mode,float distance,float vertical=0);
+void ResetPanelAnchor();
 // End the current (BeginFrame) frame showing only src as a flat quad at pose (LOCAL), width metres.
 void EndFrameScreen(const FrameViews& fv, ID3D10Texture2D* src, const XrPosef& pose, float width);
 // Scope: square centre crop of src in a round window with a crosshair; hudRect (x,y,w,h px of the HUD texture) shown at hudPose.
@@ -68,7 +70,7 @@ void EndFrameScope(const FrameViews& fv, ID3D10Texture2D* src, const XrPosef& po
 // HUD layer: an eye-sized transparent texture on the game device that the game's UI is redirected into.
 ID3D10Texture2D* HudTexture();
 // Show the HUD as a quad this frame (call between BeginFrame and EndFrame). pose in LOCAL space, width in metres.
-void SetHudLayer(const XrPosef& pose, float width, bool viewSpace = false);   // viewSpace: pose relative to the head
+void SetHudLayer(const XrPosef& pose, float width, bool viewSpace = false, float contentAspect = 0); // 0: texture aspect; otherwise logical UI width/height
 
 // Reticle layer: eye-sized texture; the central `frac` of it is shown as a quad (LOCAL space), `width` metres wide.
 ID3D10Texture2D* ReticleTexture();
