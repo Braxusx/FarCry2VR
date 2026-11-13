@@ -176,6 +176,8 @@ Mod and launcher by **Braxus**, developed with Claude (Anthropic).
 
 Licensed under the **GNU GPL v3** (see `LICENSE`). Third-party components keep their own licenses; see `THIRD_PARTY_NOTICES.md`.
 
+The DLSS helper program comes with an additional permission to link it with NVIDIA's DLSS SDK (see `LICENSE-NVIDIA-EXCEPTION.md`). NVIDIA's `nvngx_dlss.dll` is proprietary NVIDIA software, **not** covered by the GPL; it is redistributed only inside the releases, under the NVIDIA RTX SDKs License (copy: `docs/NVIDIA-RTX-SDKs-License.txt`).
+
 This is an unofficial fan project, not affiliated with or endorsed by Ubisoft. Far Cry® is a trademark of Ubisoft Entertainment. No game files are included.
 
 This product uses NVIDIA DLSS technology. NVIDIA and DLSS are trademarks of NVIDIA Corporation.
