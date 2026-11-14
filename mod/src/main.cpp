@@ -475,6 +475,7 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
         bool r = still > 400.0;
         if (r != riding) { riding = r; LOG("steady camera: %s", r ? "riding (off)" : "on foot"); }
         g_riding = riding;
+        controls::SetPassiveRide(riding);
         if (riding) input.eligible = false;
     }
     GameBasis gb = BasisFromGameCam(rc);
@@ -4916,13 +4917,19 @@ static void Install() {
     {
         controls::Config cc;
         cc.enable = (int)IniF("MotionControls", 1); cc.rumble = IniF("ControllerRumble", 1.0f);
+        cc.motionSteering = (int)IniF("MotionSteering", 0);
+        cc.steeringDirect = (int)IniF("MotionSteeringDirect", 1);
+        cc.steeringLock = IniF("SteeringFullLockDegrees", 90.0f);
+        cc.armSwingSprint = (int)IniF("ArmSwingSprint", 0);
+        cc.handbrakeA = (int)IniF("DrivingHandbrakeOnA", 0);
+        cc.motionInputTrace = (int)IniF("MotionInputTrace", 1);
         cc.stickPitch = (int)IniF("TurnStickPitch", 0); cc.holdMs = (int)IniF("ButtonHoldMs", 400); cc.turnFull = (int)IniF("TurnFullSpeed", 1); cc.snapTurn = IniF("SnapTurn", 45.0f); cc.throwArc = (int)IniF("ThrowArc", 1); cc.throwArcRight = (int)IniF("ThrowArcRight", 1); cc.macheteTrigger = (int)IniF("MacheteTriggerAttack", 0); cc.monocular = (int)IniF("Monocular", 1); cc.flashlight = (int)IniF("Flashlight", 0); cc.moveDir = (int)IniF("MovementDirection", 0); cc.turretInvertY = (int)IniF("TurretInvertY", 0); cc.turretMotion = (int)IniF("TurretMotionAim", 1); cc.turretMotionInvY = (int)IniF("TurretMotionInvertY", 1); cc.recenterHoldMs = (int)IniF("RecenterHoldMs", 1000); controls::SetTurnSpeed(IniF("SmoothTurnSpeed", 1.0f)); cc.flashRadius = IniF("FlashlightGestureRadius", 0.13f);
         cc.shoulderFwd = IniF("ShoulderZoneFwd", -0.02f); cc.shoulderUp = IniF("ShoulderZoneUp", -0.20f);
         cc.hipUp = IniF("HipZoneUp", -0.45f); cc.chestUpMin = IniF("ChestZoneUpMin", -0.55f); cc.chestUpMax = IniF("ChestZoneUpMax", -0.10f);
         cc.logZones = (int)IniF("LogHolsterZones", 0);
         cc.sightNeedsGrip = (int)IniF("ScopeNeedsGrip", 1);
         cc.sightOn = IniF("SightOnDistance", 0.25f); cc.sightOff = IniF("SightOffDistance", 0.35f);
-        controls::Install(dunia, cc);
+        controls::Install(dunia, cc, &PatchJmpN);
         arms::Config ac;
         ac.bodyYawDiagnostics=(int)IniF("BodyYawDiagnostics",0);
         ac.headsetBodyYaw=(int)IniF("HeadsetBodyYaw",0);

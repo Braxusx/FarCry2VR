@@ -23,7 +23,7 @@
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 namespace fc2 { int ElevatedMain(int argc, wchar_t** argv); }
-namespace page { void Bindings(float uiScale, const char* turnText); }
+namespace page { void Bindings(float uiScale, const char* turnText, bool motionSteering, bool handbrakeA, bool armSprint); }
 using namespace fc2;
 
 // ---------------------------------------------------------------- D3D
@@ -102,6 +102,11 @@ static const Setting kSettings[] = {
     // Controls
     { 1, "Movement", L"MovementDirection", "Walking direction", "Which way the left stick walks you: the way your body faces, or the way your head looks.", SCombo, 0, 0, nullptr, 0, kMoveDir, 2, "0" },
     { 1, "Movement", L"RoomScale", "Room-scale walking", "Walking around your room moves you in the game too (walls stop you). Leaning stays leaning.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "0" },
+    { 1, "Movement", L"ArmSwingSprint", "Arm-swing sprint", "Pump both arms while holding the movement stick forward. Stick-click sprint still works. Turn off to keep button-only sprint.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "0" },
+    { 1, "Vehicles", L"MotionSteering", "Motion steering", "Squeeze both grips in front of you to hold the wheel, then turn your hands. Grips are reserved for steering; either stick can override it.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "0" },
+    { 1, "Vehicles", L"MotionSteeringDirect", "Direct steering response", "Reduce the game's steering catch-up while motion steering. Keeps the native speed-dependent angle limit. Currently supported on GOG; other builds keep native response.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
+    { 1, "Vehicles", L"SteeringFullLockDegrees", "Hand rotation for full steering", "Degrees in either direction. Lower values need less physical rotation; this does not increase the vehicle's steering limit.", SSlider, 30, 180, "%.0f degrees", 1, nullptr, 0, "90" },
+    { 1, "Vehicles", L"DrivingHandbrakeOnA", "A button holds the handbrake", "On: A brakes, left-stick click changes seats. Off: A changes seats; use left-stick click to brake with motion steering, or left grip without it.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "0" },
     { 1, "Turning", L"SnapTurn", "Turning", "Right stick left / right.", SCombo, 0, 0, nullptr, 0, kSnap, 5, "0" },
     { 1, "Turning", L"TurnFullSpeed", "Full-speed smooth turning", "Any clear push turns at full speed; off = speed follows how far you push.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
     { 1, "Turning", L"TurnStickPitch", "Right stick also tilts the view", "Normally your head does that.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "0" },
@@ -118,7 +123,7 @@ static const Setting kSettings[] = {
     { 1, "Hands", L"ControllerRumble", "Controller rumble", nullptr, SSlider, 0.0f, 1.0f, "%.0f%%", 100, nullptr, 0, "1.0" },
 };
 static const int kNumSettings = (int)(sizeof kSettings / sizeof kSettings[0]);
-struct SettingsDraft { std::wstring saved[64], draft[64]; bool loaded = false; int tab = 0; };
+struct SettingsDraft { std::wstring saved[kNumSettings], draft[kNumSettings]; bool loaded = false; int tab = 0; };
 static SettingsDraft g_set;
 static void LoadSettings() {
     for (int i = 0; i < kNumSettings; ++i) { std::wstring v = IniGet(g_app_game_for_settings(), kSettings[i].key, Widen(kSettings[i].def).c_str()); g_set.saved[i] = g_set.draft[i] = v; }
@@ -379,7 +384,10 @@ static void SettingRow(int i) {
     static const int iDlss = SettingIndex(L"Dlss"), iQual = SettingIndex(L"DlssQuality"), iScale = SettingIndex(L"RenderScale");
     const bool dlssOn = iDlss >= 0 && g_set.draft[iDlss] != L"0";
     const int qual = iQual >= 0 ? _wtoi(g_set.draft[iQual].c_str()) : 0;
-    const bool disabled = (!dlssOn && (!wcscmp(st.key, L"DlssQuality") || !wcscmp(st.key, L"DlssPreset"))) || (!wcscmp(st.key, L"Afw") && dlssOn && qual > 0);
+    const int iMotion=SettingIndex(L"MotionSteering");
+    const bool motionOn=iMotion>=0 && g_set.draft[iMotion]!=L"0";
+    const bool disabled = (!dlssOn && (!wcscmp(st.key, L"DlssQuality") || !wcscmp(st.key, L"DlssPreset"))) || (!wcscmp(st.key, L"Afw") && dlssOn && qual > 0)
+        || (!motionOn && (!wcscmp(st.key,L"MotionSteeringDirect") || !wcscmp(st.key,L"SteeringFullLockDegrees")));
     if (disabled) ImGui::BeginDisabled();
     ImGui::PushID(i);
     float labelW = 230 * g_scale, ctrlW = ImGui::GetContentRegionAvail().x - labelW;
@@ -482,7 +490,8 @@ static void PageBindingsDraw() {
     std::wstring snap = g_app.state.iniExists ? IniGet(g_app.game, L"SnapTurn", L"0") : L"0";
     char turn[96]; int deg = _wtoi(snap.c_str());
     if (deg > 0) snprintf(turn, sizeof turn, "Turn (snap %d degrees).", deg); else snprintf(turn, sizeof turn, "Turn (smooth).");
-    page::Bindings(g_scale, turn);
+    page::Bindings(g_scale, turn, IniGet(g_app.game,L"MotionSteering",L"0")!=L"0",
+        IniGet(g_app.game,L"DrivingHandbrakeOnA",L"0")!=L"0",IniGet(g_app.game,L"ArmSwingSprint",L"0")!=L"0");
 }
 static void PageCheatsDraw() {
     theme::PageHeader("Cheats", "The game's own cheat switches, applied when you press Play.");

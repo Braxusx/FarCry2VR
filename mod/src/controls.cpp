@@ -7,9 +7,17 @@
 #include "xr.h"
 #include "log.h"
 #include "gameaddr.h"
+#include "common/arm_swing.h"
+#include "common/motion_steering.h"
+#include "common/native_axis_gate.h"
+#include "common/native_sprint_gate.h"
+#include "common/native_steering_response.h"
+#include "common/native_gog_address.h"
+#include "common/driving_controls.h"
 #include <xinput.h>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 
 namespace controls {
 static volatile float g_rtValue = 0;
@@ -105,6 +113,7 @@ static inline SHORT Axis(float v) { v = v > 1 ? 1 : v < -1 ? -1 : v; return (SHO
 // (0x1058F930): [0x11645578] -> +4 -> [0] -> +4 -> +0xE4 = stack; 0x104F0720(stack, -1) = top map.
 static uintptr_t g_base = 0;
 static inline uintptr_t GA(uintptr_t va) { uint32_t v = gameaddr::Xlate((uint32_t)va); return v ? g_base + (v - 0x10000000) : 0; }
+static inline uintptr_t NGA(uintptr_t va) { return fc2vr::native::GogImageAddress(g_base,gameaddr::Detect()==gameaddr::GOG,va); }
 struct MapName { const char* name; int mode; uint32_t id; };
 static MapName g_maps[] = {
     { "driving", 1, 0 }, { "map_driving", 1, 0 },
@@ -149,6 +158,9 @@ static void UpdateVehicleMode() {
     g_mapCompass = id == 0 ? -1 : (nm && (!strcmp(nm, "mapcompass") || !strcmp(nm, "map_driving"))) ? 1 : 0;
 }
 int VehicleMode() { return g_vehMode; }
+static volatile LONG g_passiveRide = 0;
+void SetPassiveRide(bool riding) { InterlockedExchange(&g_passiveRide,riding ? 1 : 0); }
+bool PassiveRide() { return g_vehMode == 0 && g_normalMap && !g_loadingMap && InterlockedCompareExchange(&g_passiveRide,0,0) != 0; }
 int ThrowAimHand() { return g_aimHand; }
 int TakeThrowRelease() { return (int)InterlockedExchange(&g_throwRelease, 0); }
 void FireThrow() { InterlockedExchange(&g_throwFire, 1); }
@@ -206,8 +218,171 @@ struct MappingHistory {
 static MappingHistory g_history;
 static fc2vr::authority::SampleCursor g_inputCursor;
 static uint64_t g_mappingGeneration = 0;
+static fc2vr::motion::ArmSwingSprint g_armSprint;
+static fc2vr::wheel::Steering g_wheel;
+static bool g_swingSprintOn=false,g_wheelOn=false;
+static uint8_t g_motionAxes=0,g_lastMotionAxes=0;
+static SRWLOCK g_wheelHoldLock=SRWLOCK_INIT;
+static xr::InputStamp g_wheelHoldSource;
+static xr::InputStamp g_sprintSource;
+static bool g_sprintRequest=false;
+static uint8_t g_wheelHoldMask=0;
+struct NativeSteeringOwner { uintptr_t pawn=0,vehicle=0,physics=0,havok=0,component=0,analog=0; };
+static bool InitNativeSteeringOwner();
+static NativeSteeringOwner ResolveSteeringOwner(void* pawn);
+static bool g_steeringResponseEnabled=false;
+static NativeSteeringOwner g_wheelOwner;
+static bool g_wheelMotionOwned=false;
+static float g_wheelDegrees=0,g_wheelEmittedAxis=0;
+static uint64_t g_wheelHoldGeneration=0;
+static void TraceWheelOwner(const NativeSteeringOwner& owner) {
+    static ULONGLONG last=0;static unsigned reports=0;
+    const auto now=GetTickCount64();
+    if(!g_c.motionInputTrace || reports>=30 || (reports && now-last<2000)) return;
+    last=now;++reports;
+    LOG("motion-28 wheel owner: resolved=%d pawn=%p vehicle=%p physics=%p havok=%p component=%p analog=%p",
+        owner.component!=0,(void*)owner.pawn,(void*)owner.vehicle,(void*)owner.physics,
+        (void*)owner.havok,(void*)owner.component,(void*)owner.analog);
+}
+static void PublishWheelHands(const xr::InputStamp& source,uint8_t mask,float degrees=0,float axis=0,
+    bool motionOwned=false,const NativeSteeringOwner& owner={}) {
+    AcquireSRWLockExclusive(&g_wheelHoldLock);
+    if(mask && !g_wheelHoldMask) ++g_wheelHoldGeneration;
+    g_wheelHoldSource=source;g_wheelHoldMask=mask;
+    g_wheelDegrees=degrees;g_wheelEmittedAxis=axis;
+    g_wheelMotionOwned=motionOwned;g_wheelOwner=owner;
+    ReleaseSRWLockExclusive(&g_wheelHoldLock);
+}
+static void PublishSprintRequest(const xr::InputStamp& source,bool requested) {
+    AcquireSRWLockExclusive(&g_wheelHoldLock);
+    g_sprintSource=source;g_sprintRequest=requested;
+    ReleaseSRWLockExclusive(&g_wheelHoldLock);
+}
+bool MotionSprintCurrent() {
+    if(g_c.moveDir!=1 || !g_c.armSwingSprint || !g_active || !g_normalMap || g_vehMode || g_mounted
+        || g_menuMode || g_loadingMap || g_menuMap || PassiveRide() || ItemControls() || g_mapOpen) return false;
+    AcquireSRWLockShared(&g_wheelHoldLock);
+    const auto source=g_sprintSource;const bool requested=g_sprintRequest;
+    ReleaseSRWLockShared(&g_wheelHoldLock);
+    if(!requested) return false;
+    xr::HandState hands[2];XrPosef head;bool headValid=false;xr::InputStamp current;
+    if(!xr::InputSnapshot(hands,head,headValid,&current) || !headValid
+        || hands[0].stick.y<=.65f || fabsf(hands[0].stick.x)>=.65f) return false;
+    for(int side=0;side<2;++side) if(!hands[side].poseAuthority || !hands[side].gripValid
+        || hands[side].squeeze>=.35f || hands[side].trigger>=.15f
+        || !fc2vr::authority::Fresh(source,current,GetTickCount64(),side)) return false;
+    return true;
+}
+static uint8_t CurrentWheelMask(const xr::InputStamp& source,uint8_t mask) {
+    if(!g_c.motionSteering || !g_active || g_vehMode!=1 || g_menuMode || MapControls() || g_loadingMap || g_menuMap) return 0;
+    if(!mask) return 0;
+    xr::HandState hands[2];XrPosef head;bool headValid=false;xr::InputStamp current;
+    if(!xr::InputSnapshot(hands,head,headValid,&current) || !headValid) return 0;
+    for(int side=0;side<2;++side) if(!hands[side].poseAuthority || !hands[side].gripValid || hands[side].squeeze<.35f
+        || !fc2vr::authority::Fresh(source,current,GetTickCount64(),side)) mask&=uint8_t(~(1u<<side));
+    return mask;
+}
+uint8_t WheelHands() {
+    AcquireSRWLockShared(&g_wheelHoldLock);
+    const auto source=g_wheelHoldSource;const uint8_t mask=g_wheelHoldMask;
+    ReleaseSRWLockShared(&g_wheelHoldLock);
+    return CurrentWheelMask(source,mask);
+}
+bool WheelTraceInput(float& degrees,float& axis,uint64_t& holdGeneration) {
+    degrees=axis=0;holdGeneration=0;
+    if(!g_c.motionInputTrace) return false;
+    AcquireSRWLockShared(&g_wheelHoldLock);
+    const auto source=g_wheelHoldSource;const uint8_t mask=g_wheelHoldMask;
+    const float angle=g_wheelDegrees,emitted=g_wheelEmittedAxis;
+    const uint64_t hold=g_wheelHoldGeneration;
+    ReleaseSRWLockShared(&g_wheelHoldLock);
+    if(!CurrentWheelMask(source,mask) || !std::isfinite(angle) || !std::isfinite(emitted)) return false;
+    degrees=angle;axis=emitted;holdGeneration=hold;return true;
+}
+static unsigned g_swingReports=0,g_wheelReports=0; // bounded diagnostics, not mapping state
+struct MotionTraceWindow {
+    ULONGLONG start=0;unsigned samples=0,eligible=0,active=0,zeroHost=0,blocked=0;
+    float grip[2]{},trigger[2]{},request=0,sent=0;
+};
+static MotionTraceWindow g_motionTrace[2];
+static unsigned g_motionTraceReports[2]{};
+static ULONGLONG g_motionHost=0;
+static uint64_t g_motionSequence=0;
+struct SprintTraceWindow {
+    ULONGLONG start=0;
+    unsigned reason[static_cast<unsigned>(fc2vr::motion::ArmSwingReason::Count)]{},busy=0;
+    float seconds=0,left=0,right=0,span=0,rawSpeed[2]{};
+};
+static SprintTraceWindow g_sprintTrace;
+static unsigned g_sprintTraceReports=0;
+struct WheelTraceWindow {
+    ULONGLONG start=0;
+    unsigned reason[static_cast<unsigned>(fc2vr::wheel::SteeringReason::Count)]{};
+    float delta=0,gripMin[2]{1,1};
+};
+static WheelTraceWindow g_wheelTrace;
+static unsigned g_wheelTraceReports=0;
+static void TraceWheelDecision(ULONGLONG now,const fc2vr::wheel::SteeringDiagnostics& d,const xr::HandState* h) {
+    if(!g_c.motionInputTrace || g_wheelTraceReports>=60) return;
+    auto& w=g_wheelTrace;
+    if(!w.start || now-w.start>5000) { w={};w.start=now; }
+    const auto reason=static_cast<unsigned>(d.reason);
+    if(reason<static_cast<unsigned>(fc2vr::wheel::SteeringReason::Count)) ++w.reason[reason];
+    w.delta=fmaxf(w.delta,fabsf(d.deltaDegrees));
+    for(int side=0;side<2;++side) w.gripMin[side]=fminf(w.gripMin[side],h[side].squeeze);
+    if(now-w.start<2000) return;
+    char reasons[384]{};size_t used=0;
+    for(unsigned i=0;i<static_cast<unsigned>(fc2vr::wheel::SteeringReason::Count);++i) if(w.reason[i]) {
+        const int count=std::snprintf(reasons+used,sizeof reasons-used,"%s%s:%u",used?",":"",
+            fc2vr::wheel::SteeringReasonName(static_cast<fc2vr::wheel::SteeringReason>(i)),w.reason[i]);
+        if(count<0 || size_t(count)>=sizeof reasons-used) break;
+        used+=size_t(count);
+    }
+    LOG("motion-28 wheel hold: reasons=%s maxDelta=%.2fdeg gripMin=%.2f/%.2f",reasons,w.delta,w.gripMin[0],w.gripMin[1]);
+    ++g_wheelTraceReports;w={};
+}
+static void TraceSprintDecision(ULONGLONG now,const fc2vr::motion::ArmSwingDiagnostics& d,unsigned busy) {
+    if(!g_c.motionInputTrace || g_sprintTraceReports>=60) return;
+    auto& w=g_sprintTrace;
+    if(!w.start || now-w.start>5000) { w={};w.start=now; }
+    const auto reason=static_cast<unsigned>(d.reason);
+    if(reason<static_cast<unsigned>(fc2vr::motion::ArmSwingReason::Count)) ++w.reason[reason];
+    w.busy|=busy;w.seconds=fmaxf(w.seconds,d.strokeSeconds);
+    w.left=fmaxf(w.left,d.leftTravel);w.right=fmaxf(w.right,d.rightTravel);w.span=fmaxf(w.span,d.spanVariation);
+    w.rawSpeed[0]=fmaxf(w.rawSpeed[0],d.rawLeftSpeed);w.rawSpeed[1]=fmaxf(w.rawSpeed[1],d.rawRightSpeed);
+    if(now-w.start<2000) return;
+    char reasons[512]{};size_t used=0;
+    for(unsigned i=0;i<static_cast<unsigned>(fc2vr::motion::ArmSwingReason::Count);++i) if(w.reason[i]) {
+        const int count=std::snprintf(reasons+used,sizeof(reasons)-used,"%s%s:%u",used?",":"",
+            fc2vr::motion::ArmSwingReasonName(static_cast<fc2vr::motion::ArmSwingReason>(i)),w.reason[i]);
+        if(count<0 || size_t(count)>=sizeof(reasons)-used) break;
+        used+=size_t(count);
+    }
+    LOG("motion-28 sprint detector: reasons=%s busy=0x%02x maxStroke=%.3fs maxTravel=%.3f/%.3fm maxSpanChange=%.3fm rawSpeedMax=%.2f/%.2fmps",
+        reasons,w.busy,w.seconds,w.left,w.right,w.span,w.rawSpeed[0],w.rawSpeed[1]);
+    ++g_sprintTraceReports;w={};
+}
+static void TraceMotionInput(bool driving,ULONGLONG now,const xr::HandState* h,unsigned blocked,
+    bool active,float request,float sent,bool zeroHost) {
+    if(!g_c.motionInputTrace) return;
+    const int side=driving?1:0;
+    if(g_motionTraceReports[side]>=60) return;
+    auto& w=g_motionTrace[side];
+    if(!w.start || now-w.start>5000) { w={};w.start=now; }
+    ++w.samples;if(!blocked) ++w.eligible;if(active) ++w.active;if(zeroHost) ++w.zeroHost;w.blocked|=blocked;
+    for(int i=0;i<2;++i) { w.grip[i]=fmaxf(w.grip[i],h[i].squeeze);w.trigger[i]=fmaxf(w.trigger[i],h[i].trigger); }
+    w.request=fmaxf(w.request,fabsf(request));w.sent=fmaxf(w.sent,fabsf(sent));
+    if(now-w.start<2000) return;
+    ++g_motionTraceReports[side];
+    LOG("motion-28 %s input: samples=%u eligible=%u active=%u blocked=0x%03x hostClockZero=%u gripMax=%.2f/%.2f triggerMax=%.2f/%.2f requestMax=%.3f sentMax=%.3f",
+        driving?"wheel":"sprint",w.samples,w.eligible,w.active,w.blocked,w.zeroHost,w.grip[0],w.grip[1],w.trigger[0],w.trigger[1],w.request,w.sent);
+    w={};
+}
 void CancelPendingInput() {
+    PublishWheelHands({},0);
+    PublishSprintRequest({},false);g_motionAxes=0;
     g_history = {}; g_inputCursor.Clear(); g_mappingGeneration = 0;
+    g_armSprint.Reset();g_wheel.Reset();g_swingSprintOn=g_wheelOn=false;
     g_crouchDown = g_sightOn = g_lGripDown = g_lGripNoUse = g_rGripDown = g_rGripAim = false;
     g_lTrigDown = g_lTrigGrenade = g_bDown = g_bHoldFired = false;
     g_lGripTime = g_bTime = 0; g_rtValue = g_turnExtra = 0; g_snapStick = 0;
@@ -234,32 +409,74 @@ static void StickToHead(float& sx, float& sy, const XrPosef& head) {
     float x = sx * hy + sy * hx, y = -sx * hx + sy * hy;
     sx = x; sy = y;
 }
-static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head, bool headValid) {
+struct NativePadLease { XINPUT_STATE* pointer=nullptr;XINPUT_STATE value{};xr::InputStamp source{};uint8_t axes=0; };
+static thread_local NativePadLease g_nativePad;
+static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head, bool headValid, const xr::InputStamp& stamp) {
     memset(&g, 0, sizeof g);
-    xr::HandState hm[2];
-    if (g_menuMode) { hm[0] = h[0]; hm[1] = h[1]; for (auto& x : hm) { x.stick.x = x.stick.y = 0; x.stickClick = false; } h = hm; }   // the sticks drive the mod's menu
-    else if (g_rClickBlocked) { hm[0] = h[0]; hm[1] = h[1]; hm[1].stickClick = false; h = hm; }
+    g_motionAxes=0;
+    xr::HandState hm[2] = {h[0], h[1]};
+    if (g_menuMode) { for (auto& x : hm) { x.stick.x = x.stick.y = 0; x.stickClick = false; } }   // the sticks drive the mod's menu
+    else if (g_rClickBlocked) hm[1].stickClick = false;
     ULONGLONG now = GetTickCount64();
+    UpdateVehicleMode();
+    h = hm;
     const xr::HandState& L = h[0]; const xr::HandState& R = h[1];
+    const V forward=Rot(head.orientation,{0,0,-1});
+    // The tracked poses are sampled at XR predictedTime. GetTickCount64 is a
+    // freshness/timeout clock and can repeat on adjacent 90 Hz input samples.
+    const bool poseClock=stamp.predictedTime>0;
+    const double sampleSeconds=double(stamp.predictedTime)*1e-9;
+    const bool zeroHost=g_motionSequence && stamp.sequence!=g_motionSequence && now==g_motionHost;
+    g_motionHost=now;g_motionSequence=stamp.sequence;
+    fc2vr::wheel::Input wheel;
+    const auto drivingButtons=fc2vr::input::DrivingLayout(g_c.motionSteering!=0,g_c.handbrakeA!=0,
+        L.stickClick,R.btn1,L.squeeze,R.squeeze);
+    wheel.allowed=g_c.motionSteering && g_vehMode==1 && !g_menuMode && !MapControls()
+        && !g_loadingMap && !g_menuMap && !L.btn2 && !L.menu && !L.btn1 && !drivingButtons.changeSeat && poseClock;
+    wheel.headTracked=headValid;wheel.seconds=sampleSeconds;wheel.sequence=stamp.sequence;wheel.generation=stamp.generation;
+    wheel.head={head.position.x,head.position.y,head.position.z};wheel.forward={forward.x,forward.y,forward.z};
+    wheel.fullLockDegrees=g_c.steeringLock;
+    for(int side=0;side<2;++side) {
+        wheel.tracked[side]=h[side].gripValid && h[side].poseAuthority;
+        wheel.hand[side]={h[side].grip.position.x,h[side].grip.position.y,h[side].grip.position.z};
+        wheel.squeeze[side]=h[side].squeeze;wheel.handGeneration[side]=stamp.handGeneration[side];
+    }
+    const auto steering=g_wheel.Update(wheel);
+    if(g_vehMode==1) TraceWheelDecision(now,g_wheel.Diagnostics(),h);
+    if(steering.engaged!=g_wheelOn) {
+        if(g_wheelReports++<40) LOG("motion-28 wheel: %s reason=%s",steering.engaged?"two-hand wheel acquired":"released",
+            fc2vr::wheel::SteeringReasonName(g_wheel.Diagnostics().reason));
+        if(steering.engaged) { xr::Haptic(0,.25f,.04f);xr::Haptic(1,.25f,.04f); }
+        g_wheelOn=steering.engaged;
+    }
     // v222 recenter: the left stick held in for RecenterHoldMs (the click still sprints as usual)
     { auto& downAt = g_history.recenterAt; auto& fired = g_history.recenterFired;
-      if (L.stickClick) { if (!downAt) { downAt = now; fired = false; }
+      if (L.stickClick && (g_vehMode!=1 || drivingButtons.allowRecenter)) { if (!downAt) { downAt = now; fired = false; }
           else if (!fired && g_c.recenterHoldMs > 0 && now - downAt >= (ULONGLONG)g_c.recenterHoldMs) { fired = true; InterlockedExchange(&g_recenterReq, 1); xr::Haptic(0, 0.5f, 0.08f); LOG("controls: left stick held - recenter"); } }
       else downAt = 0; }
     WORD b = 0;
-    UpdateVehicleMode();
     const bool poseFire = g_vehMode != 0 || g_mounted || g_menuMap || (R.gripValid && R.aimValid);
     g_rtValue = poseFire ? R.trigger : 0;
     if (g_vehMode == 1 && !g_menuMode) {   // driver seat (VEHICLE_CONTROLS): the game's pad driving map, Config\InputActionMap.xml
-        // steering = right stick left/right (or the left stick), RT gas, LT brake/reverse, left grip handbrake (pad B),
-        // right grip change seat (pad A), X exit (pad Y), right stick click heal (pad LB), left Y map, menu = pause
+        // Native driving actions: RT gas, LT brake/reverse, pad B handbrake,
+        // pad A change seat, pad Y exit, pad LB heal, pad RB headlights.
         float sx = fabsf(R.stick.x) >= fabsf(L.stick.x) ? R.stick.x : L.stick.x;
+        if(steering.engaged && fabsf(sx)<.2f) { sx=steering.axis;g_motionAxes=1; } // deliberate stick input overrides motion
+        g_armSprint.Reset();g_swingSprintOn=false;
+        PublishSprintRequest({},false);
         g.sThumbLX = Axis(sx); g.sThumbLY = Axis(L.stick.y);
+        NativeSteeringOwner owner;
+        if(g_steeringResponseEnabled && g_motionAxes==1) {
+            owner=ResolveSteeringOwner(arms::LocalPawnIdentity());TraceWheelOwner(owner);
+        }
+        PublishWheelHands(stamp,steering.engaged?uint8_t((steering.held[0]?1u:0u)|(steering.held[1]?2u:0u)):0,
+            steering.degrees,g.sThumbLX/32767.f,g_motionAxes==1,owner);
         g.bRightTrigger = (BYTE)lroundf(fminf(1.0f, R.trigger) * 255.0f);
         g.bLeftTrigger = (BYTE)lroundf(fminf(1.0f, L.trigger) * 255.0f);
-        if (L.squeeze > 0.5f) b |= XINPUT_GAMEPAD_B;               // handbrake (held)
-        if (R.squeeze > 0.6f) b |= XINPUT_GAMEPAD_A;               // change seat
-        if (R.btn1) b |= XINPUT_GAMEPAD_A;
+        // Only a seat-change request cancels the wheel; either handbrake
+        // layout retains the grip. Other driving actions are unchanged.
+        if (drivingButtons.handbrake) b |= XINPUT_GAMEPAD_B;
+        if (drivingButtons.changeSeat) b |= XINPUT_GAMEPAD_A;
         if (L.btn1) b |= XINPUT_GAMEPAD_Y;                         // exit / bail out
         if (R.stickClick) b |= XINPUT_GAMEPAD_LEFT_SHOULDER;       // heal
         if (L.btn2) b |= XINPUT_GAMEPAD_BACK;                      // map
@@ -269,8 +486,12 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
         g_sightOn = false; g_zoneNow = false; g_rGripDown = R.squeeze > 0.6f; g_lGripDown = L.squeeze > 0.5f;
         for (auto& p : g_pulse) if (p.until > now) b |= p.btn;
         g.wButtons = b;
+        const unsigned blocked=(!wheel.allowed?1u:0u) | (!headValid || !wheel.tracked[0] || !wheel.tracked[1]?2u:0u)
+            | (!steering.engaged?4u:0u);
+        TraceMotionInput(true,now,h,blocked,steering.engaged,steering.axis,g.sThumbLX/32767.f,zeroHost);
         return;
     }
+    PublishWheelHands({},0);
     // left hand
     {   float sx = L.stick.x, sy = L.stick.y;
         if (g_c.moveDir == 1 && headValid && g_bodyValid) StickToHead(sx, sy, head);
@@ -489,11 +710,47 @@ static void Build(XINPUT_GAMEPAD& g, const xr::HandState* h, const XrPosef& head
     g_bDown = R.btn2;
     for (auto& p : g_pulse) if (p.until > now) b |= p.btn;
     if (g_usePulse > now) b |= XINPUT_GAMEPAD_Y;           // a hand touched the interaction target
+    fc2vr::motion::ArmSwingInput swing;
+    const unsigned sprintBusy=(g_sightOn?1u:0u) | (g_crouchDown?2u:0u) | (g_leftClaimed?4u:0u)
+        | (g_aimHand>=0?8u:0u) | (arms::MotionGestureBusy()?16u:0u) | (arms::HeldMelee()!=0?32u:0u);
+    // Grouped gate reasons are logged only during forward-stick intent. They
+    // distinguish a rejected gesture from a correctly emitted native button.
+    const unsigned sprintBlocked=
+        ((!g_c.armSwingSprint || !g_normalMap || g_loadingMap || g_menuMode || g_menuMap || g_vehMode!=0 || g_mounted || PassiveRide())?1u:0u)
+        | (!(L.stick.y>.65f && fabsf(L.stick.x)<.65f)?2u:0u)
+        | ((!headValid || !wheel.tracked[0] || !wheel.tracked[1])?4u:0u)
+        | ((ItemControls() || g_mapOpen || g_mono || WatchActive())?8u:0u)
+        | (sprintBusy?16u:0u)
+        | ((L.trigger>=.15f || R.trigger>=.15f)?32u:0u)
+        | ((L.squeeze>=.35f || R.squeeze>=.35f)?64u:0u)
+        | ((L.btn1 || L.btn2 || L.menu || R.btn1 || R.btn2)?128u:0u) | (!poseClock?256u:0u);
+    swing.allowed=sprintBlocked==0;
+    swing.tracked=headValid && wheel.tracked[0] && wheel.tracked[1];
+    swing.seconds=wheel.seconds;swing.sequence=stamp.sequence;swing.generation=stamp.generation;
+    swing.head=wheel.head;swing.forward=wheel.forward;
+    for(int side=0;side<2;++side) { swing.hand[side]=wheel.hand[side];swing.handGeneration[side]=stamp.handGeneration[side]; }
+    const bool sprint=g_armSprint.Update(swing);
+    if(L.stick.y>.4f) TraceSprintDecision(now,g_armSprint.Diagnostics(),sprintBusy);
+    PublishSprintRequest(stamp,sprint);
+    if(sprint && g_c.moveDir==1) g_motionAxes=3;
+    if(sprint) b|=XINPUT_GAMEPAD_LEFT_THUMB;
+    if(sprint!=g_swingSprintOn) {
+        if(g_swingReports++<60) {
+            const auto d=g_armSprint.Diagnostics();
+            LOG("motion-28 arm sprint: %s reason=%s busy=0x%02x stroke=%.3fs travel=%.3f/%.3fm span=%.3fm rawSpeed=%.2f/%.2fmps",
+                sprint?"requested":"released",fc2vr::motion::ArmSwingReasonName(d.reason),sprintBusy,
+                d.strokeSeconds,d.leftTravel,d.rightTravel,d.spanVariation,d.rawLeftSpeed,d.rawRightSpeed);
+        }
+        g_swingSprintOn=sprint;
+    }
     g.wButtons = b;
+    if(L.stick.y>.4f) TraceMotionInput(false,now,h,sprintBlocked,sprint,sprint?1.f:0.f,
+        (b&XINPUT_GAMEPAD_LEFT_THUMB)?1.f:0.f,zeroHost);
     if (g_c.logZones && z != g_lastZoneLogged) { g_lastZoneLogged = z; LOG("controls: right hand zone %s", ZoneName(z)); }
 }
 
 static DWORD WINAPI Hook_GetState(DWORD idx, XINPUT_STATE* st) {
+    g_nativePad={};
     if (!st) return ERROR_BAD_ARGUMENTS;
     if (idx != 0) return g_active ? ERROR_DEVICE_NOT_CONNECTED : o_GetState ? o_GetState(idx,st) : ERROR_DEVICE_NOT_CONNECTED;
     xr::HandState h[2]; XrPosef head; bool headValid = false;
@@ -510,11 +767,42 @@ static DWORD WINAPI Hook_GetState(DWORD idx, XINPUT_STATE* st) {
     if (!InterlockedExchange(&g_active, 1)) LOG("controls: VR controllers drive gamepad 0");
     if (g_mappingGeneration != stamp.generation) { CancelPendingInput(); g_mappingGeneration = stamp.generation; }
     if (g_inputCursor.Take(stamp)) {
-        XINPUT_GAMEPAD g; Build(g,h,head,headValid);
-        if (memcmp(&g,&g_last,sizeof g) != 0) { g_last = g; ++g_packet; }
+        XINPUT_GAMEPAD g; Build(g,h,head,headValid,stamp);
+        if (memcmp(&g,&g_last,sizeof g) != 0 || g_motionAxes!=g_lastMotionAxes) { g_last = g; ++g_packet; }
+        g_lastMotionAxes=g_motionAxes;
     }
     st->dwPacketNumber = g_packet; st->Gamepad = g_last;
+    g_nativePad={st,*st,stamp,g_motionAxes};
     return ERROR_SUCCESS;
+}
+static int __cdecl MotionAxisThreshold(uint8_t* driver,unsigned axis) {
+    const auto& lease=g_nativePad;
+    if(!fc2vr::input::MotionAxisOwned(axis,lease.axes,true,true) || !driver
+        || driver+0x14!=(uint8_t*)lease.pointer || IsBadReadPtr(driver+0x0c,0x18)) return false;
+    const bool matched=*(const uint32_t*)(driver+0x0c)==0 && !memcmp(driver+0x14,&lease.value,sizeof lease.value);
+    const bool current=(lease.axes==1 ? WheelHands()!=0 : MotionSprintCurrent())
+        && xr::InputCurrent(lease.source,0) && xr::InputCurrent(lease.source,1);
+    const bool bypass=fc2vr::input::MotionAxisOwned(axis,lease.axes,matched,current);
+    if(bypass) { static unsigned reports=0;if(reports++<12) LOG("motion-28 native axis: dead-zone bypass axis=%u mask=%u packet=%u",axis,(unsigned)lease.axes,(unsigned)lease.value.dwPacketNumber); }
+    return bypass;
+}
+static void InstallMotionAxisGate(PatchFn patch) {
+    if(gameaddr::Detect()!=gameaddr::GOG || !patch) return;
+    const uintptr_t site=g_base+0x2c786d;
+    static const uint8_t expected[]={0xf3,0x0f,0x10,0x51,0x08,0x56};
+    if(IsBadReadPtr((void*)site,sizeof expected) || memcmp((void*)site,expected,sizeof expected)) {
+        LOG("motion-28 native axis: byte guard mismatch; native dead zone retained");return;
+    }
+    auto stub=(uint8_t*)VirtualAlloc(nullptr,96,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    if(!stub) return;
+    const auto code=fc2vr::input::MakeAxisGateStub((uint32_t)(uintptr_t)stub,(uint32_t)(uintptr_t)&MotionAxisThreshold,(uint32_t)(site+sizeof expected));
+    memcpy(stub,code.bytes.data(),code.size);DWORD old=0;
+    if(!VirtualProtect(stub,96,PAGE_EXECUTE_READ,&old)) { VirtualFree(stub,0,MEM_RELEASE);return; }
+    FlushInstructionCache(GetCurrentProcess(),stub,code.size);
+    void* trampoline=nullptr;
+    const bool installed=patch(site,expected,sizeof expected,stub,&trampoline);
+    if(!installed) VirtualFree(stub,0,MEM_RELEASE);
+    LOG("motion-28 native axis: scoped motion threshold hook %d (native saturation/events retained)",installed);
 }
 static DWORD WINAPI Hook_SetState(DWORD idx, XINPUT_VIBRATION* v) {
     if (g_active && idx == 0) {
@@ -524,9 +812,16 @@ static DWORD WINAPI Hook_SetState(DWORD idx, XINPUT_VIBRATION* v) {
     return o_SetState ? o_SetState(idx, v) : ERROR_DEVICE_NOT_CONNECTED;
 }
 
-void Install(HMODULE dunia, const Config& c) {
+#include "controls_sprint.inl"
+#include "controls_vehicle_owner.inl"
+#include "controls_steering.inl"
+void Install(HMODULE dunia, const Config& c,PatchFn patch) {
     g_c = c; g_base = (uintptr_t)dunia;
+    LOG("motion-28 input: pose-sample clock; MotionSteering=%d SteeringFullLockDegrees=%.1f ArmSwingSprint=%d MotionInputTrace=%d",c.motionSteering,c.steeringLock,c.armSwingSprint,c.motionInputTrace);
     if (!c.enable) { LOG("controls: motion controls off"); return; }
+    if(c.motionSteering || c.armSwingSprint) InstallMotionAxisGate(patch);
+    InstallMotionSprintGate(dunia,patch);
+    InstallMotionSteeringResponse(patch);
     bool a = PatchIat(dunia, "XINPUT1_3.dll", 2, (void*)&Hook_GetState, (void**)&o_GetState);
     bool b = PatchIat(dunia, "XINPUT1_3.dll", 3, (void*)&Hook_SetState, (void**)&o_SetState);
     LOG("controls: XInputGetState hook %d, XInputSetState hook %d", a, b);

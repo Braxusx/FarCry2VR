@@ -84,7 +84,7 @@ static void Card(const char* title, const char* const* lines, int n, float w) {
     ImGui::EndGroup();
 }
 
-void Bindings(float uiScale, const char* turnText) {
+void Bindings(float uiScale, const char* turnText, bool motionSteering, bool handbrakeA, bool armSprint) {
     PageHeader("Bindings", "Quest 3 controllers in Far Cry 2 VR, on foot. Vehicles and keyboard keys are below.");
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float avail = ImGui::GetContentRegionAvail().x;
@@ -140,20 +140,25 @@ void Bindings(float uiScale, const char* turnText) {
         "Grab people with a free hand: drag, shove, or pull them down (Optional page: NPC Grabbing).",
         "Hold a grip, then the trigger, to aim a throw: an arc shows where it lands; let go to throw.",
     };
-    static const char* vehicles[] = {
+    const char* vehicles[] = {
         "Right trigger: accelerate. Left trigger: brake / reverse. Left stick (or right): steer.",
-        "Left grip: handbrake. Right grip or A: change seat. X: get out.",
+        handbrakeA ? "Hold A: handbrake. Left-stick click: change seat. X: get out."
+            : motionSteering ? "Left-stick click: handbrake. A: change seat. X: get out."
+            : "Left grip: handbrake. Right grip or A: change seat. X: get out.",
         "Y: map. B: headlights. Right stick click: syrette.",
+        motionSteering ? "Grip with both hands to acquire the wheel; turn your hands to steer. Release the grips to let go."
+            : "Motion steering is off. Enable it in Settings > Controls to steer with your hands.",
     };
     static const char* keys[] = {
         "F8: recenter the view (or hold the left stick in).",
-        "End: hand-angle menu (machete, map, free hand, phone).",
+        "F1: weapon alignment menu.",
         "Home: smooth turning speed (Left / Right arrows).",
         "F9: stereo on/off. DLSS, AFW, shadows: Settings page.",
     };
     Card("Weapons & holsters", holsters, 4, cw); ImGui::SameLine(0, cg); Card("Hands & motion", motion, 4, cw);
     ImGui::Dummy(ImVec2(1, 10 * uiScale));
-    Card("Vehicles", vehicles, 3, cw); ImGui::SameLine(0, cg); Card("Keyboard (on the PC)", keys, 4, cw);
+    Card("Vehicles", vehicles, 4, cw); ImGui::SameLine(0, cg); Card("Keyboard (on the PC)", keys, 4, cw);
+    if(armSprint) theme::Wrapped("Arm-swing sprint is on: hold the movement stick forward and pump both arms. Stick-click sprint also works.",theme::Faded());
 }
 
 } // namespace page

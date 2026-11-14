@@ -208,6 +208,9 @@ bool MapClockModel(uint8_t*& gfx, float pts[4][3]);
 uint8_t* GpsGfx();   // v234: the GPS graphic while the map is out (world matrix at +0x170)   // v234: the held map's graphic + bottom-mid / top-mid / bottom-left / bottom-right (model space)   // v234: the same, in the left controller's aim frame (right, up, back; ref units)   // v234: held map's bottom-middle point, width and height vectors (ref frame)
 bool GameTimeOfDay(int& hh, int& mm);   // v234: sight line + up, fixed to the held weapon (ref frame)
 float AimDistance();
+bool MotionGestureBusy();
+bool IsLocalPawn(const void* pawn);
+void* LocalPawnIdentity();
 bool ProjectileReloadActive();     // within the 3.5 s after a projectile weapon shot (its reload)
 void NotifyClip(int clip, int pouch);         // the HUD clip count changed (player's weapon)               // game units along the sight ray to what the weapon points at (0 = unknown)
 bool CameraRay(float o[3], float d[3]);   // the game camera's line in the reference frame (mounted guns aim along it)

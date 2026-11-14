@@ -1,11 +1,18 @@
 // controls.h - motion controllers mapped onto the game's gamepad input (see controls.cpp).
 #pragma once
+#include <cstdint>
 #include <windows.h>
 
 namespace controls {
 void CancelPendingInput();   // game thread: cancel pending edges/pulses without synthesizing release actions
 struct Config {
     int   enable = 1;          // MotionControls
+    int   motionSteering = 0;  // MotionSteering: opt-in; both grips acquire a virtual steering wheel
+    int   steeringDirect = 1;  // MotionSteeringDirect: owned motion input uses proportional native steering limits
+    float steeringLock = 90;   // SteeringFullLockDegrees: hand rotation per direction at full steering
+    int   armSwingSprint = 0;  // ArmSwingSprint: opt-in; arm pumping requests sprint while holding forward stick
+    int   handbrakeA = 0;      // DrivingHandbrakeOnA: A handbrake, left-stick click changes seats
+    int   motionInputTrace = 1; // MotionInputTrace: bounded text-only gesture gate/output diagnostics
     float rumble = 1.0f;       // ControllerRumble: scale of the game's rumble on the controllers (0 = off)
     int   stickPitch = 0;      // TurnStickPitch: 1 = right stick up/down also pitches the view
     int   turnFull = 1;        // TurnFullSpeed: any left/right push of the right stick turns at full speed
@@ -30,8 +37,12 @@ struct Config {
     int   moveDir = 0;         // MovementDirection (v231): 0 = the left stick walks where the body faces, 1 = where the head looks
     int   sightNeedsGrip = 1;   // ScopeNeedsGrip: sights only with the left hand on the weapon   // SightOnDistance / SightOffDistance: right hand to head (m)
 };
-void Install(HMODULE dunia, const Config& c);
+using PatchFn=bool (*)(uintptr_t,const uint8_t*,size_t,void*,void**);
+void Install(HMODULE dunia, const Config& c,PatchFn patch);
 bool Active();   // VR controllers currently drive the game's gamepad
+uint8_t WheelHands(); // current, tracked wheel hold: bit0 left, bit1 right; zero outside driving
+bool WheelTraceInput(float& degrees,float& axis,uint64_t& holdGeneration); // read-only, trace-enabled coherent held-wheel sample
+bool MotionSprintCurrent(); // fresh arm-swing request, head-directed on-foot movement only
 void SetBodyForward(float x, float z, bool valid);   // v231: the body's forward in tracking space (the recenter forward), horizontal
 float LastMoveStick();           // v231: magnitude of the last on-foot left stick (0..1)
 void SetLeftGripClaimed(bool c);
@@ -64,6 +75,8 @@ bool ItemControls();              // the game's own item / menu / cut-scene cont
 bool LoadingControls();           // no action map / the loading-screen map (405707ae)
 bool MapControls();               // the game's map / GPS action map is up (also while answering the phone)
 bool NormalControls();            // the game's normal on-foot action map is active (not phone, watch, map, menus)
+void SetPassiveRide(bool riding);
+bool PassiveRide();
 int VehicleMode();
 int ThrowAimHand();              // -1 none, 0 left, 1 right: that hand is aiming a throw (grip + trigger held)
 int TakeThrowRelease();          // the aiming hand let go since the last call (1) - the arc decides whether to throw
