@@ -60,6 +60,7 @@ void SetWatchActive();           // the safehouse watch is in its time-setting m
 bool WatchActive();
 bool MountedWeapon();             // on a mounted gun / turret
 bool MenuControls();              // the game's pause menu (in-game menu) action map is active
+bool CinematicControls();         // native cinematic/lyingdown control maps, not inferred from speed
 bool ItemControls();              // the game's own item / menu / cut-scene controls (watch, map, phone, menus, cinematic)
 bool LoadingControls();           // no action map / the loading-screen map (405707ae)
 bool MapControls();               // the game's map / GPS action map is up (also while answering the phone)

@@ -128,6 +128,7 @@ static uint32_t TopActionMap() {
     uint8_t* m = ((Top_t)GA(0x104F0720))(st, nullptr, -1);
     return ok(m, 0x6C) ? *(uint32_t*)(m + 0x68) : 0;
 }
+static volatile bool g_cinematicMap = false;
 static void UpdateVehicleMode() {
     static bool ids = false;
     if (!ids && g_base) {
@@ -144,6 +145,7 @@ static void UpdateVehicleMode() {
     if (mode != g_vehMode) { g_vehMode = mode; }
     g_normalMap = id == 0 || (nm && (!strcmp(nm, "default") || !strcmp(nm, "gameplay")));
     g_menuMap = nm && (!strcmp(nm, "pausemenu") || !strcmp(nm, "menus"));
+    g_cinematicMap = nm && (!strcmp(nm,"cinematic") || !strcmp(nm,"lyingdown"));
     g_mounted = nm && !strcmp(nm, "using_mounted_weapon");
     g_itemMap = nm && (!strcmp(nm, "watch") || !strcmp(nm, "mapcompass") || !strcmp(nm, "map_driving") || !strcmp(nm, "pausemenu") || !strcmp(nm, "menus") || !strcmp(nm, "cinematic") || !strcmp(nm, "healPlayer"));
     g_mapCompass = id == 0 ? -1 : (nm && (!strcmp(nm, "mapcompass") || !strcmp(nm, "map_driving"))) ? 1 : 0;
@@ -156,6 +158,7 @@ bool NormalControls() { return g_normalMap; }
 bool MapControls() { return g_mapCompass == 1; }
 bool LoadingControls() { return g_loadingMap; }
 bool MenuControls() { return g_menuMap; }
+bool CinematicControls() { return g_cinematicMap; }
 bool MountedWeapon() { return g_mounted; }
 
 static volatile LONG g_holsterReq = 0, g_selectReq = 0;   // left grip + B: put the weapon away / bring it back; a weapon was selected

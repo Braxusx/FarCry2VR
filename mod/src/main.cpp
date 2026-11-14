@@ -83,6 +83,7 @@ struct Config {
     float hudFov = 60.0f;         // angular width of the HUD quad, degrees        // weapon/arms near pass uses the eye's off-axis projection
     float menuDistance = 3.0f;    // metres to the menu/loading screen
     float menuWidth = 2.4f;       // metres
+    int worldPanels = 1;         // HUD/menu/movie panels stay in LOCAL space until reopened/recentered
     int   uiMode = 1;             // 1 = per-eye UI viewport: centred on the gun's aim point, scaled (fixes doubled reticle/menus)
     float uiDepth = 6.0f;         // metres: distance at which the UI converges (aim point)
     float uiScale = 0.7f;         // UI size relative to the eye image
@@ -191,6 +192,7 @@ static void LoadConfig() {
     g_cfg.hudDistance = IniF("HudDistance", 3.0f);
     g_cfg.hudFov = IniF("HudFov", 60.0f);
     g_cfg.menuWidth = IniF("MenuWidth", 2.4f);
+    g_cfg.worldPanels = (int)IniF("WorldPanels", 1);
     g_cfg.uiMode = (int)IniF("UiMode", 2);
     g_cfg.uiDepth = IniF("UiDepth", 6.0f);
     g_cfg.uiScale = IniF("UiScale", 0.7f);
@@ -409,6 +411,7 @@ static void DoRecenter(const XrPosef& head) {
     g_ref.rightH = { -fh.z, 0, fh.x };
     g_ref.valid = true;
     xr::InvalidateForRecenter();
+    xr::ResetPanelAnchor();
     g_refYTime = 0;   // set by caller via NowMs when available
     LOG("recentered (head y=%.3f)", head.position.y);
 }
@@ -3708,6 +3711,10 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             af.twoHand = grabbing;
             controls::SetLeftGripClaimed(grabbing); g_twoHandGrip = grabbing;
         }
+        if (g_cfg.worldPanels && controls::CinematicControls()) {
+            af.handValid=af.leftValid=af.headValid=false; af.twoHand=false;
+            controls::SetLeftGripClaimed(false); g_twoHandGrip=false;
+        }
         arms::SubmitFrame(af);
     }
 
@@ -3900,7 +3907,8 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         if (l > 1e-4f) for (int k = 0; k < 3; ++k) scopeO[k] += scopeD[k] / l * g_cfg.scopeForward;
     }
     const bool renderScope = monoScope || weaponScope;
-    const bool renderStereo = poseReady && !g_scopeOn && fv.shouldRender && g_stereoOn && sizeOk;
+    const bool renderStereo = poseReady && !g_scopeOn && fv.shouldRender && g_stereoOn && sizeOk
+        && !(g_cfg.worldPanels && controls::CinematicControls());
     // A native flat fallback still uses its native camera: keep its hands raw too.
     if (g_rsOn && poseReady) {   // v231 room-scale: the body was moved after the head - move the recenter point along
         static V3 pending[4]; static int pn = 0;
@@ -4230,7 +4238,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             if (!arms::PlayerState(pp, &hd) || controls::MenuControls() || loadPic) inGame = false;
             else if (normSince >= 0 && tn - normSince > 2500.0) inGame = true;
             g_snapGame = inGame && !controls::MenuControls();
-            xr::SetHudTopBandOn(g_snapGame);
+            xr::SetHudTopBandOn(g_snapGame && !g_cfg.worldPanels);
         }
         if (g_cfg.uiMode == 2 && g_uiLayerFresh) {
             g_uiLayerFresh = false;
@@ -4239,7 +4247,11 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             float w = D * (tanf(f0.angleRight) - tanf(f0.angleLeft)) * g_cfg.uiScale * g_cfg.hudScale;
             if (controls::MenuControls()) w *= g_cfg.pauseMenuScale;   // the in-game pause menu panel
             XrPosef hp; hp.orientation = { 0, 0, 0, 1 }; hp.position = { 0, g_cfg.uiHeadY, -D };
-            if (!(controls::MonocularOut() && !controls::MonocularAtFace())) xr::SetHudLayer(hp, w, true);   // v213: the monocular's marker icons are placed for the game's zoomed camera - shown only through it
+            if (g_cfg.worldPanels) {
+                hp=xr::FixedPanelPose(fv,controls::MenuControls() ? 2 : 1,g_cfg.menuDistance,g_cfg.uiHeadY);
+                w=g_cfg.menuWidth;
+            }
+            if (!(controls::MonocularOut() && !controls::MonocularAtFace())) xr::SetHudLayer(hp, w, !g_cfg.worldPanels, g_cfg.worldPanels && g_scrH>0 ? (float)g_scrW/g_scrH : 0);
         }
         HudTick();
         // aiming dot: only where the game itself would show a reticle (none for the machete, flamethrower...);
@@ -4408,7 +4420,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             XrPosef hp; hp.orientation = QuatFromBasis(xq, yq, zq);
             float D = g_cfg.hudDistance;
             hp.position = { ref.origin.x + aim.x * D, ref.origin.y + aim.y * D, ref.origin.z + aim.z * D };
-            if (!(controls::MonocularOut() && !controls::MonocularAtFace())) xr::SetHudLayer(hp, 2.0f * D * tanf(g_cfg.hudFov * 0.5f * 3.14159265f / 180.0f));
+            if (!(controls::MonocularOut() && !controls::MonocularAtFace())) xr::SetHudLayer(g_cfg.worldPanels ? xr::FixedPanelPose(fv,controls::MenuControls() ? 2 : 1,g_cfg.menuDistance,g_cfg.uiHeadY) : hp, g_cfg.worldPanels ? g_cfg.menuWidth : 2.0f * D * tanf(g_cfg.hudFov * 0.5f * 3.14159265f / 180.0f), false, g_cfg.worldPanels && g_scrH>0 ? (float)g_scrW/g_scrH : 0);
         }
         RestoreCam(rc, rsave);
         RestoreCam(cc, csave);
@@ -4556,7 +4568,7 @@ static void __fastcall Hook_Present(void* self, void* edx, int a1) {
         g_screenFrame = false;
         D3D10_TEXTURE2D_DESC d{};
         ID3D10Texture2D* bb = AcquireBackbuffer(&d);
-        XrPosef qp = MenuPose();
+        XrPosef qp = g_cfg.worldPanels ? xr::FixedPanelPose(g_screenFv,0,g_cfg.menuDistance) : MenuPose();
         xr::EndFrameScreen(g_screenFv, (bb && d.Width == g_scrW && d.Height == g_scrH) ? bb : nullptr, qp, g_cfg.menuWidth);
         if (bb) bb->Release();
         PathNote('Q');
@@ -4579,7 +4591,7 @@ static void __fastcall Hook_Present(void* self, void* edx, int a1) {
                         float a = atan2f(-f.x, -f.z);
                         qp.orientation = { 0.0f, sinf(a * 0.5f), 0.0f, cosf(a * 0.5f) };
                     }
-                    xr::SubmitScreen(bb, pp, g_cfg.menuWidth);
+                    xr::SubmitScreen(bb, g_cfg.worldPanels ? nullptr : pp, g_cfg.menuWidth,g_cfg.menuDistance);
                     PathNote('S');
                 } else PathNote('x');
                 bb->Release();

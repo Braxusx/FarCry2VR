@@ -9,6 +9,7 @@
 #include <cmath>
 #include <d3dcompiler.h>
 #include "common/xr_runtime_probe.h"
+#include "common/panel_anchor.h"
 
 namespace xr {
 
@@ -92,7 +93,7 @@ static ID3D11Texture2D* g_vigMonoTex[2] = {}; static bool g_monoTarget = false; 
 void SetMonoRingSize(float k) { g_monoRing = k < 0.05f ? 0.05f : k > 0.97f ? 0.97f : k; }
 void SetMonoTarget(bool on) { g_monoTarget = on; }
 void SetMonoViewScale(float k) { g_monoScale = k < 0.5f ? 0.5f : k > 3.0f ? 3.0f : k; }
-static bool g_hudOn = false; static XrPosef g_hudPose{}; static float g_hudWidth = 1.0f; static bool g_hudView = false;
+static bool g_hudOn = false; static XrPosef g_hudPose{}; static float g_hudWidth = 1.0f, g_hudAspect = 0; static bool g_hudView = false;
 // v227: the HUD's top strip (objective updates, tutorial and system messages) is shown as its own quad, lowered toward
 // the upper middle of the view (at the very top of the HUD they sat at the edge of the headset's view)
 static float g_hudBand = 0.22f, g_hudDrop = 0.16f; static bool g_hudBandOn = false;
@@ -910,7 +911,7 @@ void SetMenu(const uint32_t* px, const XrPosef& pose, float width) {
 void SetDotLayer(const XrPosef& pose, float size) { if (g_dot.sc && g_dotTex) { g_dotOn = true; g_dotPose = pose; g_dotSize = size; } }
 ID3D10Texture2D* ReticleTexture() { return g_shared[4].tex10; }
 void SetReticleLayer(const XrPosef& pose, float width, float frac) { if (g_ret.sc && g_shared[4].tex11) { g_retOn = true; g_retPose = pose; g_retWidth = width; g_retFrac = frac; } }
-void SetHudLayer(const XrPosef& pose, float width, bool viewSpace) { if (g_hud.sc && g_shared[3].tex11) { g_hudOn = true; g_hudPose = pose; g_hudWidth = width; g_hudView = viewSpace && g_view; } }
+void SetHudLayer(const XrPosef& pose, float width, bool viewSpace, float contentAspect) { if (g_hud.sc && g_shared[3].tex11) { g_hudOn = true; g_hudPose = pose; g_hudWidth = width; g_hudView = viewSpace && g_view; g_hudAspect = contentAspect; } }
 
 bool InitInstance(ID3D10Device* dev10, uint32_t& recW, uint32_t& recH) {
     if (g_sess) { recW = g_recW; recH = g_recH; return true; }
@@ -1295,7 +1296,7 @@ void EndFrame(const FrameViews& fv, bool submittedEyes) {
                 hq.space = g_hudView ? g_view : g_local; hq.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
                 hq.subImage.swapchain = g_hud.sc; hq.subImage.imageRect.extent = { g_hud.w, g_hud.h };
                 hq.pose = g_hudPose;
-                hq.size = { g_hudWidth, g_hudWidth * (float)g_hud.h / (float)g_hud.w };
+                hq.size = { g_hudWidth, fc2vr::tracking::PanelHeight(g_hudWidth,g_hudAspect,(float)g_hud.w/g_hud.h) };
                 layers[layerCount++] = (XrCompositionLayerBaseHeader*)&hq;
                 int32_t b = g_bandBad ? (int32_t)(g_hud.h * g_hudBand) : g_bandCut;
                 if (g_hudBandOn && b > 0 && b < g_hud.h && g_hudDrop > 0) {
@@ -1492,14 +1493,32 @@ void EndFrameScope(const FrameViews& fv, ID3D10Texture2D* src, const XrPosef& po
     g_frameBegun = false;
 }
 
-void SubmitScreen(ID3D10Texture2D* src, const XrPosef* pose, float width) {
-    if (!SessionRunning() || g_frameBegun) return;
-    XrFrameState fs{ XR_TYPE_FRAME_STATE };
-    if (!WaitBegin(fs)) return;
+static fc2vr::tracking::PanelAnchor g_panelAnchor;
+void ResetPanelAnchor() { g_panelAnchor.Reset(); }
+XrPosef FixedPanelPose(const FrameViews& fv,int mode,float distance,float vertical) {
+    if (g_panelAnchor.generation!=fv.spaceGeneration) g_panelAnchor.Reset();
+    if (fv.valid && fv.positionValid) {
+        const auto& a=fv.views[0].pose; const auto& b=fv.views[1].pose;
+        const auto& q=a.orientation;
+        fc2vr::tracking::Vec3 head{(a.position.x+b.position.x)*.5f,(a.position.y+b.position.y)*.5f,(a.position.z+b.position.z)*.5f};
+        fc2vr::tracking::Vec3 forward{-2*(q.x*q.z+q.w*q.y),0,-(1-2*(q.x*q.x+q.y*q.y))};
+        g_panelAnchor.Update(head,forward,fv.spaceGeneration,mode,distance,vertical);
+    }
+    XrPosef result{}; result.orientation.w=1; result.position={0,0,-distance};
+    if (g_panelAnchor.valid) {
+        auto p=g_panelAnchor.position; result.position={p.x,p.y,p.z};
+        result.orientation={0,std::sin(g_panelAnchor.yaw*.5f),0,std::cos(g_panelAnchor.yaw*.5f)};
+    }
+    return result;
+}
+void SubmitScreen(ID3D10Texture2D* src, const XrPosef* pose, float width, float distance) {
+    FrameViews fv;
+    if (!BeginFrame(fv)) return;
+    const XrPosef fixed=FixedPanelPose(fv,0,distance);
     XrCompositionLayerQuad quad{ XR_TYPE_COMPOSITION_LAYER_QUAD };
     const XrCompositionLayerBaseHeader* layers[1] = { (XrCompositionLayerBaseHeader*)&quad };
     uint32_t layerCount = 0;
-    if (fs.shouldRender) {
+    if (fv.shouldRender && fv.valid && fv.positionValid) {
         CopyInto(g_shared[2], src, g_bbMsaa, g_bbFormat);
         Sync10();
         if (BlitToChain(g_screen, g_shared[2])) {
@@ -1508,14 +1527,14 @@ void SubmitScreen(ID3D10Texture2D* src, const XrPosef* pose, float width) {
             quad.subImage.swapchain = g_screen.sc;
             quad.subImage.imageRect.extent = { g_screen.w, g_screen.h };
             if (pose) quad.pose = *pose;
-            else { quad.pose.orientation.w = 1.0f; quad.pose.position = { 0.0f, 0.0f, -2.0f }; }
+            else quad.pose=fixed;
             quad.size = { width, width * (float)g_screen.h / (float)g_screen.w };
             layerCount = 1;
         }
     }
     g_ctx11->Flush();
     XrFrameEndInfo ei{ XR_TYPE_FRAME_END_INFO };
-    ei.displayTime = fs.predictedDisplayTime; ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    ei.displayTime = fv.displayTime; ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     ei.layerCount = layerCount; ei.layers = layers;
     HandoverDone(); Check(p_xrEndFrame(g_sess, &ei), "xrEndFrame(screen)");
     g_frameBegun = false;
