@@ -91,7 +91,8 @@ static const Setting kSettings[] = {
     { 0, "Performance", L"CpuPlacement", "Best CPU cores", "Keeps the game on the CPU's fastest cores for games: the performance cores on Intel CPUs with E-cores, the 3D V-Cache cores on AMD X3D CPUs. Other programs keep the rest.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
     { 0, "Performance", L"CpuPriority", "Higher game priority", "Runs the game above normal priority, so background programs can't hold it up.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "0" },
     { 0, "Performance", L"CullMode", "Culling", "How the game decides what's in view for both eyes.", SCombo, 0, 0, nullptr, 0, kCull, 4, "1" },
-    { 0, "Shadows", L"ShadowRadialScale", "Sharp shadow reach", "How far around you sun shadows stay sharp (game: 20 m). Lower it for frame rate.", SSlider, 1.0f, 10.0f, "%.0f m", 20, nullptr, 0, "7.0" },
+    { 0, "Shadows", L"ShadowExpanded", "Expanded shadow coverage", "On: extended sun-shadow coverage around you. Off: the game's usual shadow reach for better frame rates; distant or side shadows may disappear sooner. Shadows stay on.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
+    { 0, "Shadows", L"ShadowRadialScale", "Sharp shadow reach", "How far around you sun shadows stay sharp (game: 20 m). Used with expanded shadow coverage; lower it for frame rate.", SSlider, 1.0f, 10.0f, "%.0f m", 20, nullptr, 0, "7.0" },
     { 0, "Shadows", L"ShadowMapSize", "Shadow resolution", nullptr, SCombo, 0, 0, nullptr, 0, kShadowRes, 2, "2720" },
     { 0, "Menus & HUD", L"HudScale", "Menu / prompt size", nullptr, SSlider, 0.5f, 1.2f, "%.0f%%", 100, nullptr, 0, "0.8" },
     { 0, "Menus & HUD", L"MenuDistance", "Menu distance", "Main menu and loading screens.", SSlider, 1.5f, 6.0f, "%.1f m", 1, nullptr, 0, "3.0" },
@@ -375,11 +376,13 @@ static void PageOverviewDraw(HWND hwnd) {
 static int SettingIndex(const wchar_t* key) { for (int i = 0; i < kNumSettings; ++i) if (!wcscmp(kSettings[i].key, key)) return i; return -1; }
 static void SettingRow(int i) {
     const Setting& st = kSettings[i]; std::wstring& v = g_set.draft[i];
-    // the upscaler's options only matter with DLSS on; AFW only with DLAA
-    static const int iDlss = SettingIndex(L"Dlss"), iQual = SettingIndex(L"DlssQuality"), iScale = SettingIndex(L"RenderScale");
+    // Keep dependent settings visible, preserving their saved values while disabled.
+    static const int iDlss = SettingIndex(L"Dlss"), iQual = SettingIndex(L"DlssQuality"), iScale = SettingIndex(L"RenderScale"), iShadowExpanded = SettingIndex(L"ShadowExpanded");
     const bool dlssOn = iDlss >= 0 && g_set.draft[iDlss] != L"0";
+    const bool shadowExpanded = iShadowExpanded >= 0 && g_set.draft[iShadowExpanded] != L"0";
     const int qual = iQual >= 0 ? _wtoi(g_set.draft[iQual].c_str()) : 0;
-    const bool disabled = (!dlssOn && (!wcscmp(st.key, L"DlssQuality") || !wcscmp(st.key, L"DlssPreset"))) || (!wcscmp(st.key, L"Afw") && dlssOn && qual > 0);
+    const bool disabled = (!dlssOn && (!wcscmp(st.key, L"DlssQuality") || !wcscmp(st.key, L"DlssPreset"))) || (!wcscmp(st.key, L"Afw") && dlssOn && qual > 0)
+        || (!wcscmp(st.key, L"ShadowRadialScale") && !shadowExpanded);
     if (disabled) ImGui::BeginDisabled();
     ImGui::PushID(i);
     float labelW = 230 * g_scale, ctrlW = ImGui::GetContentRegionAvail().x - labelW;
