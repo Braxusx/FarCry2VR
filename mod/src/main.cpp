@@ -32,6 +32,10 @@
 namespace sounddiag { void Tick(); }
 #include "afw_fc2.h"
 #include "common/pose_frame.h"
+#include "common/body_transport.h"
+#include "common/view_comfort.h"
+#include "common/ride_detector.h"
+#include "common/diagnostic_gate.h"
 
 // ============================================================ logging
 static CRITICAL_SECTION g_logCs;
@@ -83,6 +87,7 @@ struct Config {
     float hudFov = 60.0f;         // angular width of the HUD quad, degrees        // weapon/arms near pass uses the eye's off-axis projection
     float menuDistance = 3.0f;    // metres to the menu/loading screen
     float menuWidth = 2.4f;       // metres
+    int sceneViewMatchNative = 1; // use the render camera's body sample outside vehicles too
     int   uiMode = 1;             // 1 = per-eye UI viewport: centred on the gun's aim point, scaled (fixes doubled reticle/menus)
     float uiDepth = 6.0f;         // metres: distance at which the UI converges (aim point)
     float uiScale = 0.7f;         // UI size relative to the eye image
@@ -125,12 +130,15 @@ struct Config {
     int   cullMode = 1;           // see g_cullMode
     int   shareShadows = 1;       // render the shadow maps once per frame (left eye) and reuse them for the right eye
     int   uiScope = 2;            // 0 = only while the UI's own render target is bound, 1 = whole UI tail    // metres added to the view height (negative = lower)
-    int   profile = 0;            // 1 = GPU timestamps + main-thread sampler (diagnostics; costs some CPU)
+    int   profile = 0;            // 1 = continuous CPU+GPU; 2 = bounded armed CPU+GPU; 3 = GPU timings only
     int   skipRedundantReset = 1; // skip swap-chain resizes that change nothing (breaks a per-frame resize loop)
     int   recenterKey = VK_F8;
     int   toggleKey = VK_F9;
     int   hudSnap = 0;              // v228 test: HUD + eye snapshots when a UI element appears in gameplay (HudSnap)
-    int   vehicleViewPrev = 1;      // VehicleViewPrevious (v232 test 15): the seat of the skeleton update being drawn (the one before the latest)
+    int   vehicleViewPrev = 1;      // legacy fixed-offset selection, used when native matching is disabled
+    int   vehicleViewMatchNative = 1; // identify the scene's seat from its unmodified native camera
+    int   autoVehicleTrace = 0;     // one bounded capture per process; diagnostics only
+    int   onFootTrace = 0;          // OnFootTrace: bounded CPU-only movement trace
     float vehicleViewSmooth = 0.2f; // VehicleViewSmoothing (v232): seconds; 0 = view on the Camera bone in vehicles
     int   devKeys = 0;              // DevKeys: 1 = the developer test keys (F2 F3 F5 F6 F7 F10 F11 Pause) - off for release (v225)
 } g_cfg;
@@ -181,6 +189,9 @@ static void LoadConfig() {
     g_cfg.profile = (int)IniF("Profile", 0);
     g_cfg.devKeys = (int)IniF("DevKeys", 0); g_diagLog = IniF("DiagLog", 0) != 0;
     g_cfg.vehicleViewSmooth = IniF("VehicleViewSmoothing", 0.2f); g_cfg.vehicleViewPrev = (int)IniF("VehicleViewPrevious", 1);
+    g_cfg.autoVehicleTrace = (int)IniF("AutoVehicleTrace", 0);
+    g_cfg.onFootTrace = (int)IniF("OnFootTrace", 0);
+    g_cfg.vehicleViewMatchNative = (int)IniF("VehicleViewMatchNative", 1);
     g_cfg.hudSnap = (int)IniF("HudSnap", 0);
     g_cfg.dpiAware = (int)IniF("DpiAware", 1);
     g_cfg.heightAdapt = IniF("HeightAdapt", 15.0f);
@@ -191,6 +202,7 @@ static void LoadConfig() {
     g_cfg.hudDistance = IniF("HudDistance", 3.0f);
     g_cfg.hudFov = IniF("HudFov", 60.0f);
     g_cfg.menuWidth = IniF("MenuWidth", 2.4f);
+    g_cfg.sceneViewMatchNative = (int)IniF("SceneViewMatchNative", 1);
     g_cfg.uiMode = (int)IniF("UiMode", 2);
     g_cfg.uiDepth = IniF("UiDepth", 6.0f);
     g_cfg.uiScale = IniF("UiScale", 0.7f);
@@ -395,6 +407,8 @@ static void PoseCamera(uint8_t* c, V3 pos, V3 dir, V3 up, float tl, float tr, fl
 // ============================================================ head tracking -> game space
 static double g_refYTime = 0;
 static int g_rsDelay = 1; static bool g_rsOn = false;
+static V3 g_rsTraceTaken{}, g_rsTraceApplied{}; // render-thread observations only
+static V3 g_rsApplied{},g_rsPending[4]{};static uint64_t g_rsEpoch=0;static int g_rsPendingCount=0;
 static int g_motionTrace = 0;
 static int g_motionDiag = 0; static int g_camBodyClock = 1; static long g_camBodyUsed = 0;   // v231 CameraOnBodyClock   // v231: frames left to trace camera / bone / player positions (F4)   // v231 room-scale (see arms RoomScaleUpdate)
 struct Recenter { bool valid = false; V3 pos{}; V3 fwdH{ 0, 0, -1 }; V3 rightH{ 1, 0, 0 }; } g_ref;
@@ -408,6 +422,8 @@ static void DoRecenter(const XrPosef& head) {
     g_ref.fwdH = fh;
     g_ref.rightH = { -fh.z, 0, fh.x };
     g_ref.valid = true;
+    g_rsEpoch=arms::ResetRoomScale();g_rsApplied={};
+    for(auto& pending:g_rsPending) pending={};g_rsPendingCount=0;
     xr::InvalidateForRecenter();
     g_refYTime = 0;   // set by caller via NowMs when available
     LOG("recentered (head y=%.3f)", head.position.y);
@@ -447,10 +463,12 @@ static GameBasis BasisFromGameCam(uint8_t* c) {
 // Bypass in vehicles, mounted guns and special controls. Prepare once, then share.
 static inline double NowMs();
 static bool g_riding = false;
-static bool g_vehViewUsed = false;
 static bool g_handSmooth = true;
+static bool g_runtimePalmAnchor=true;
+static fc2vr::controllers::QuestPreset g_handAlignment;
 static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize) {
     static fc2vr::tracking::PoseFrameBuilder builder;
+    static fc2vr::tracking::PoseFrameBuilder gameplayBuilder;
     fc2vr::tracking::SteadyInput input;
     input.nowMs = NowMs();
     float pos[3]{}, heading = 0;
@@ -458,24 +476,22 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
     input.eligible = stabilize && g_cfg.steadyCam && controls::NormalControls() && controls::VehicleMode() == 0
         && !controls::MountedWeapon() && havePlayer;
     input.playerPosition = {pos[0],pos[1],pos[2]};
-    input.turning = fabsf(xr::Hand(1).stick.x) > 0.15f;
-    {   // v232: riding (the intro taxi, a bus, any vehicle the controls don't report): the player moves without the stick.
-        // SteadyCamera would smooth the view while the body and the car interior move with the vehicle - they judder
-        // in the view. Not eligible while riding.
-        static float lp[3]; static double lt = 0, still = 0; static bool riding = false;
-        double tn = input.nowMs; float dt = lt > 0 ? (float)((tn - lt) * 0.001) : 0; lt = tn;
-        float dx = pos[0] - lp[0], dy = pos[1] - lp[1]; lp[0] = pos[0]; lp[1] = pos[1]; lp[2] = pos[2];
-        float spd = dt > 0.0005f && dt < 0.1f ? sqrtf(dx * dx + dy * dy) / dt : 0;
+    static fc2vr::tracking::TurnIntent turnIntent;
+    input.turning = turnIntent.Update(input.nowMs,fabsf(xr::Hand(1).stick.x)>0.15f,input.eligible);
+    const auto body = arms::ReadBodyPoses();
+    {   // The intro uses the default action map. A passive ride is still a ride
+        // while stopped; require an input/posture/owner transition to leave it.
+        static fc2vr::tracking::RideDetector detector;
         const xr::HandState& L = xr::Hand(0); bool stick = fabsf(L.stick.x) > 0.2f || fabsf(L.stick.y) > 0.2f;
-        if (!havePlayer) spd = 0;
-        static double slow = 0;   // a single odd frame (a hitch, a skipped position update) doesn't end a ride
-        if (!stick && spd > 2.5f && spd < 60.0f) { still += dt * 1000.0; slow = 0; }
-        else if (stick) still = slow = 0;
-        else if (spd < 1.0f) { slow += dt * 1000.0; if (slow > 500.0) still = 0; }
-        bool r = still > 400.0;
-        if (r != riding) { riding = r; LOG("steady camera: %s", r ? "riding (off)" : "on foot"); }
-        g_riding = riding;
-        if (riding) input.eligible = false;
+        const bool riding=detector.Update(input.nowMs,input.playerPosition,body.latest.skeleton,body.latest.graphics,
+            havePlayer && body.latest.valid,stick,controls::VehicleMode()!=0,
+            controls::MenuControls() || controls::LoadingControls() || (controls::VehicleMode()==0
+                && (arms::PhysicalLocomotion() || arms::CurrentWeapon()!=nullptr || !controls::NormalControls())),
+            body.latest.camera.z-body.latest.root[14]);
+        if (riding!=g_riding) LOG("steady camera: %s (ride continuity)",riding ? "riding (off)" : "on foot");
+        g_riding=riding;
+        controls::SetPassiveRide(riding && controls::VehicleMode()==0);
+        if (g_riding) input.eligible=false;
     }
     GameBasis gb = BasisFromGameCam(rc);
     {
@@ -485,6 +501,13 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
             gb.F={cosf(corrected),sinf(corrected),0};gb.R={gb.F.y,-gb.F.x,0};
         }
     }
+    const V3 nativeOrigin = gb.P;
+    fc2vr::tracking::BodyPose nativeBody;
+    auto anchor = fc2vr::tracking::AnchorFor(body.latest, false);
+    if (g_cfg.sceneViewMatchNative) {
+        nativeBody=body.MatchCamera(nativeOrigin,input.nowMs);
+        anchor=fc2vr::tracking::SceneAnchor(nativeBody,nativeOrigin,input);
+    }
     {   // v231 camera on the body clock: the game's camera is one game frame behind the player's body (it moves by the
         // body's previous step), so the body, arms and weapon jitter by the frame-to-frame step difference. The body's
         // Camera bone from the latest skeleton update is where the camera will be next frame: use it.
@@ -493,7 +516,7 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
         // v234 CameraOnBodyClock=2: the Camera bone of the skeleton update this frame DRAWS (the one before the latest).
         // With the latest update (1) the view led the drawn body by one game step - while strafing at 5 m/s ~5 cm, so
         // the body, arms, hands and weapon trailed sideways behind the view (the same fix as VehicleViewPrevious).
-        if (g_camBodyClock == 2 && arms::CamBoneRoot(bp, bw, true)) {
+        if (!g_cfg.sceneViewMatchNative && g_camBodyClock == 2 && arms::CamBoneRoot(bp, bw, true)) {
             float dx = bp[0] - gb.P.x, dy = bp[1] - gb.P.y, dz = bp[2] - gb.P.z;
             if (dx * dx + dy * dy + dz * dz < 0.6f * 0.6f) {
                 gb.P = { bp[0], bp[1], bp[2] }; ++g_camBodyUsed;
@@ -517,7 +540,7 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
                     }
                 }
             }
-        } else if (g_camBodyClock == 1 && seq != lastSeq && arms::CamBonePos(bp)) {
+        } else if (!g_cfg.sceneViewMatchNative && g_camBodyClock == 1 && seq != lastSeq && arms::CamBonePos(bp)) {
             float dx = bp[0] - gb.P.x, dy = bp[1] - gb.P.y, dz = bp[2] - gb.P.z;
             if (dx * dx + dy * dy + dz * dz < 0.6f * 0.6f) { gb.P = { bp[0], bp[1], bp[2] }; ++g_camBodyUsed; }
         }
@@ -525,33 +548,59 @@ static PoseFrame PreparePoseFrame(uint32_t sequence, uint8_t* rc, bool stabilize
         // v232 vehicles and rides: the Camera bone moves against the seated body (driver / passenger animation, ~10 mm
         // of jerk per frame), so the view shook against the car. The view rides on the skeleton's world matrix (the
         // seat) plus the Camera bone's offset from it, low-passed in the seat's frame (VehicleViewSmoothing, seconds).
-        g_vehViewUsed = false;
         {   static float ls[3]; static bool have = false; static double lt = 0;
-            float cp[3], Wm[16]; double tn = input.nowMs; float dt = lt > 0 ? (float)((tn - lt) * 0.001) : 1.0f; lt = tn;
+            const auto seat = g_cfg.vehicleViewMatchNative
+                ? body.MatchCamera({nativeOrigin.x,nativeOrigin.y,nativeOrigin.z},input.nowMs)
+                : body.Select(g_cfg.vehicleViewPrev != 0);
+            const float cp[3] = {seat.camera.x,seat.camera.y,seat.camera.z}; const float* Wm = seat.root.data();
+            double tn = input.nowMs; float dt = lt > 0 ? (float)((tn - lt) * 0.001) : 1.0f; lt = tn;
             bool veh = g_cfg.vehicleViewSmooth > 0 && (controls::VehicleMode() != 0 || g_riding);
-            if (veh && arms::CamBoneRoot(cp, Wm, g_cfg.vehicleViewPrev != 0)) {
+            if (veh && g_cfg.vehicleViewMatchNative) {
+                // The CPU worker may be ahead of the queued draw. Latest/previous
+                // is a scheduling accident, not a render-state identity. On a
+                // missing/ambiguous match, preserve the native camera and rebase
+                // hands from that camera instead of guessing a seat transform.
+                gb.P=nativeOrigin;
+                anchor={{nativeOrigin.x,nativeOrigin.y,nativeOrigin.z},0,true,false};
+            }
+            if (veh && seat.valid) {
                 float d[3] = { cp[0] - Wm[12], cp[1] - Wm[13], cp[2] - Wm[14] }, l[3];
                 for (int r = 0; r < 3; ++r) { float n2 = Wm[r * 4] * Wm[r * 4] + Wm[r * 4 + 1] * Wm[r * 4 + 1] + Wm[r * 4 + 2] * Wm[r * 4 + 2]; l[r] = n2 > 1e-8f ? (d[0] * Wm[r * 4] + d[1] * Wm[r * 4 + 1] + d[2] * Wm[r * 4 + 2]) / n2 : 0; }
                 if (!have || dt > 0.25f || l[0] * l[0] + l[1] * l[1] + l[2] * l[2] > 9.0f) { memcpy(ls, l, 12); have = true; }
                 else { float k = 1.0f - expf(-dt / g_cfg.vehicleViewSmooth); for (int r = 0; r < 3; ++r) ls[r] += (l[r] - ls[r]) * k; }
                 float p[3]; for (int c = 0; c < 3; ++c) p[c] = Wm[12 + c] + ls[0] * Wm[c] + ls[1] * Wm[4 + c] + ls[2] * Wm[8 + c];
                 float ex = p[0] - gb.P.x, ey = p[1] - gb.P.y, ez = p[2] - gb.P.z;
-                if (ex * ex + ey * ey + ez * ez < 0.5f * 0.5f) { gb.P = { p[0], p[1], p[2] }; g_vehViewUsed = true; }
+                if (ex * ex + ey * ey + ez * ez < 0.5f * 0.5f) { gb.P = { p[0], p[1], p[2] }; anchor = fc2vr::tracking::AnchorFor(seat,true,true); }
             } else have = false;
+            if (veh && g_cfg.vehicleViewMatchNative) {
+                static unsigned matched=0,missed=0;
+                if (anchor.root) ++matched; else ++missed;
+                if ((matched+missed)%900==0) LOG("vehicle camera match: %u matched, %u native fallbacks",matched,missed);
+            }
         }
     }
-    PoseFrame frame = builder.Build(sequence, gb, TrackingReference(), g_cfg.worldScale, input);
+    const GameBasis beforeComfort=gb;
+    static fc2vr::tracking::ShotViewComfort shotComfort;
+    const auto comfort=shotComfort.Update(gb,nativeBody,input.eligible);
+    PoseFrame frame = builder.Build(sequence, comfort.basis, TrackingReference(), g_cfg.worldScale, input);
+    frame.gameplay=gameplayBuilder.Build(sequence,beforeComfort,TrackingReference(),g_cfg.worldScale,input).game;
+    frame.raw=beforeComfort;frame.comfortActive=comfort.active;
+    frame.bodyAnchor = anchor; frame.nativeOrigin = nativeOrigin;
     {   // v232: when SteadyCamera stops applying (riding, a vehicle), its offset fades out instead of jumping
-        static V3 carry{ 0, 0, 0 }, lastOff{ 0, 0, 0 }; static bool wasSmoothed = false; static double lt = 0; static uint64_t lastSeq = ~0ull;
+        static V3 carry[2]{},lastOff[2]{};static bool wasSmoothed=false;static double lt=0;static uint64_t lastSeq=~0ull;
+        GameBasis* bases[2]={&frame.game,&frame.gameplay};
         if (sequence != lastSeq) {
             lastSeq = sequence; double tn = input.nowMs; float dt = lt > 0 ? (float)((tn - lt) * 0.001) : 1; lt = tn;
-            V3 off = frame.game.P - frame.raw.P;
             bool smoothed = input.eligible;
-            if (wasSmoothed && !smoothed && Dot(lastOff, lastOff) < 0.25f) carry = lastOff;
-            wasSmoothed = smoothed; lastOff = off;
-            if (!smoothed) { carry = carry * (dt < 1 ? expf(-dt / 0.3f) : 0.0f); frame.game.P = frame.raw.P + carry; }
-            else carry = { 0, 0, 0 };
-        } else if (!input.eligible) frame.game.P = frame.raw.P + carry;
+            for(int i=0;i<2;++i) {
+                V3 off=bases[i]->P-frame.raw.P;
+                if(wasSmoothed && !smoothed && Dot(lastOff[i],lastOff[i])<0.25f) carry[i]=lastOff[i];
+                lastOff[i]=off;
+                if(!smoothed) { carry[i]=carry[i]*(dt<1?expf(-dt/0.3f):0.0f);bases[i]->P=frame.raw.P+carry[i]; }
+                else carry[i]={0,0,0};
+            }
+            wasSmoothed=smoothed;
+        } else if(!input.eligible) for(int i=0;i<2;++i) bases[i]->P=frame.raw.P+carry[i];
     }
     if (sequence % 900 == 0) DLOG("pose frame shared-camera-1 seq=%llu steadyEligible=%d rawP=%.3f,%.3f,%.3f effectiveP=%.3f,%.3f,%.3f rawF=%.4f,%.4f effectiveF=%.4f,%.4f",
         (unsigned long long)frame.sequence, input.eligible, frame.raw.P.x, frame.raw.P.y, frame.raw.P.z,
@@ -1326,6 +1375,13 @@ static void Put(char type, const void* a, uint32_t na, const void* b = nullptr, 
     if (out.size() > (64u << 20)) return;
     uint32_t len = na + nb; out.push_back(type); out.append((const char*)&len, 4); out.append((const char*)a, na); if (b && nb) out.append((const char*)b, nb);
 }
+bool CaptureActive() { return state==2; }
+void CaptureRecord(char type,const void* data,uint32_t size) {
+    if (!CaptureActive()) return;
+    EnterCriticalSection(&cs);
+    if (CaptureActive()) Put(type,data,size);
+    LeaveCriticalSection(&cs);
+}
 static bool lite = false;   // Ctrl+Shift+F4 motion capture: per-frame poses + skeleton only (540 frames)
 static bool On() { return state == 2 && !lite; }
 float mx[96]; bool mxValid = false;   // this frame's 'X' record (render thread)
@@ -1503,8 +1559,12 @@ static void __fastcall Hook_TimerUpdate(uint8_t* t, void* edx) {
 }
 static void InstallFramePacing() {
     static const uint8_t pro[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8 };
-    bool ok = PatchJmpN(A(0x1029B290), pro, 6, (void*)&Hook_TimerUpdate, (void**)&o_TimerUpdate);
+    // Both mappings are required: without the singleton the hook would install
+    // successfully but Hook_TimerUpdate would silently leave every step alone.
+    const uintptr_t update = A(0x1029B290), timer = A(0x11606360);
+    bool ok = update && timer && PatchJmpN(update, pro, 6, (void*)&Hook_TimerUpdate, (void**)&o_TimerUpdate);
     LOG("frame pacing hook (game timer update): %s, FramePacing=%d", ok ? "ok" : "FAILED", g_framePacing);
+    LOG("frame pacing mappings (gog-pacing-1): update=%08x timer=%08x", (unsigned)update, (unsigned)timer);
 }
 static void HookStateCounters(void** vt);
 static void InstallInlineDrawHooks() {
@@ -1518,6 +1578,7 @@ static void InstallInlineDrawHooks() {
     if (g_vtDev) cbcap::Install(*(void***)g_vtDev);
     if (g_vtDev && g_cfg.profile) HookStateCounters(*(void***)g_vtDev);
     arms::SetBoneSink(&cbcap::NoteBones);
+    arms::SetDiagnosticSink(&cbcap::CaptureActive,&cbcap::CaptureRecord);
 }
 // DLSS upscaling: the eyes render smaller than shown, so texture detail is picked one or more mip levels too blurry.
 // While an eye renders, every pixel-shader sampler is swapped for a copy with MipLODBias += log2(render / output)
@@ -2638,7 +2699,7 @@ static bool EnsureXr() {
             if (engDev && *(void**)engDev != *(void**)g_dev10) HookDrawTable(*(void***)engDev, "engine");
             InstallInlineDrawHooks();
         }
-        if (g_cfg.profile) { perf::GpuInit(g_dev10); perf::StartSampler(GetCurrentThreadId()); }
+        if (g_cfg.profile) { perf::GpuInit(g_dev10); if (g_cfg.profile==1) perf::StartSampler(GetCurrentThreadId()); }
     }
     static DWORD nextTry = 0;
     if (GetTickCount() < nextTry) return false;
@@ -3279,7 +3340,7 @@ static void DrawClock(int hh, int mm) {
 // matrix read from the game (held map, GPS) is from the newest one - move it with the body from the newest update to the drawn one
 static void DrawnBodyFix(float Mc[16]) {
     float cl[3], Wl[16], cd[3], Wd[16];
-    if (g_camBodyClock != 2 || !arms::CamBoneRoot(cl, Wl, false) || !arms::CamBoneRoot(cd, Wd, true)) return;
+    if (g_cfg.sceneViewMatchNative || g_camBodyClock != 2 || !arms::CamBoneRoot(cl, Wl, false) || !arms::CamBoneRoot(cd, Wd, true)) return;
     auto mul = [](const float* a, const float* b, float* o) { for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c) { float v = 0; for (int k = 0; k < 4; ++k) v += a[r * 4 + k] * b[k * 4 + c]; o[r * 4 + c] = v; } };
     float iW[16] = { Wl[0], Wl[4], Wl[8], 0, Wl[1], Wl[5], Wl[9], 0, Wl[2], Wl[6], Wl[10], 0, 0, 0, 0, 1 };
     float sx = Wl[0] * Wl[0] + Wl[1] * Wl[1] + Wl[2] * Wl[2];
@@ -3497,8 +3558,14 @@ static void EuroUpdate(EuroPose& e, XrPosef& pose, float dt, bool valid) {
     e.q = r;
     pose.position = { e.p.x, e.p.y, e.p.z }; pose.orientation = e.q;
 }
-static xr::HandState SmoothHand(int side, XrTime t) {
+static xr::HandState SmoothHand(int side, XrTime t,bool palmAnchor) {
     static EuroPose eg[2], ea[2]; static XrTime last[2] = { 0, 0 };
+    static uint64_t generation[2]{};
+    const auto current=xr::CurrentInputStamp().generation;
+    if (generation[side]!=current) {
+        // A new controller/reference frame must not interpolate from old hardware.
+        eg[side].have=ea[side].have=false; last[side]=0; generation[side]=current;
+    }
     xr::HandState h = xr::Hand(side);
     float dt = last[side] ? (float)((double)(t - last[side]) * 1e-9) : 0; last[side] = t;
     // the aim pose is rigid with the grip: filter the grip, carry the same correction to the aim
@@ -3513,27 +3580,207 @@ static xr::HandState SmoothHand(int side, XrTime t) {
         V3 p = ToV3(h.grip.position) + QRot(h.grip.orientation, po); h.aim.position = { p.x, p.y, p.z };
         ea[side].have = false;
     } else EuroUpdate(ea[side], h.aim, dt, h.aimValid);
+    // Raw action poses and their authority stay in xr. Apply the runtime's
+    // static calibration to the filtered hand contact point, in metres, before
+    // reference/world scaling. Saved weapon rotations and aim axes are intact.
+    fc2vr::tracking::Vec3 palm{};
+    h.usingRuntimePalm=palmAnchor && h.questTouch && h.palmOffsetValid && h.gripValid
+        && fc2vr::controllers::PalmPosition(h.grip,h.palmOffset,palm);
+    if(h.usingRuntimePalm) h.grip.position={palm.x,palm.y,palm.z};
+    static int lastAnchor[2]={-1,-1};static uint64_t anchorGeneration[2]{};
+    if(h.gripValid && (lastAnchor[side]!=(int)h.usingRuntimePalm || anchorGeneration[side]!=current)) {
+        lastAnchor[side]=(int)h.usingRuntimePalm;anchorGeneration[side]=current;
+        LOG("alignment-16: %s contact anchor=%s requested=%d quest=%d runtimeOffset=%d offset %.1f %.1f %.1f mm",
+            side?"right":"left",h.usingRuntimePalm?"runtime palm":"grip",palmAnchor,h.questTouch,h.palmOffsetValid,
+            h.palmOffset.x*1000,h.palmOffset.y*1000,h.palmOffset.z*1000);
+    }
     return h;
 }
+// Opt-in observation at viewport/eye boundaries. The sample IDs here describe
+// CPU state; the paired short CB capture is needed to identify actual GPU data.
+static double g_armedDiagnosticMs=0;
+static bool g_autoTraceComplete=false;
+// Bounded observation only: no synchronous GPU capture and no physics queries.
+// Starts on movement after half a second of normal gameplay, including empty
+// hands. Retain missing body matches rather than hiding them from the trace.
+static void OnFootTrace(const PoseFrame& frame, const xr::FrameViews& views, bool stereo) {
+    if (!g_cfg.onFootTrace) return;
+    static bool active=false,done=false,haveHead=false,gpuCaptured=false;
+    static bool mapGpuCaptured=false;static unsigned mapStable=0,mapMotion=0;
+    static unsigned physicalFrames=0;static V3 previousForward{};
+    static unsigned stable=0,frames=0;
+    static V3 previousHead{};
+    static std::string rows;
+    const bool playable=stereo && controls::NormalControls() && !controls::MenuControls()
+        && !controls::LoadingControls() && !controls::MountedWeapon() && controls::VehicleMode()==0 && !g_riding;
+    const V3 head=(ToV3(views.views[0].pose.position)+ToV3(views.views[1].pose.position))*.5f;
+    const V3 headStep=head-previousHead;
+    const V3 headForward=QRot(views.views[0].pose.orientation,{0,0,-1});
+    const bool physical=haveHead && (Dot(headStep,headStep)>.000016f || Dot(headForward,previousForward)<.99995f);
+    previousForward=headForward;
+    const auto& left=xr::Hand(0);
+    const bool moving=fabsf(left.stick.x)>.2f || fabsf(left.stick.y)>.2f
+        || (haveHead && Dot(headStep,headStep)>.000004f);
+    previousHead=head;haveHead=true;
+    // The ordinary movement sample can finish before the map is opened. Keep
+    // one additional six-frame sample tied to the actual display mode, even
+    // after the bounded CPU trace ends. It replaces the earlier GPU sample.
+    const bool mapSample=stereo && controls::MapOpen() && controls::MapControls() && !controls::PhoneOut()
+        && !controls::MenuControls() && !controls::LoadingControls() && controls::VehicleMode()==0 && !g_riding;
+    mapStable=mapSample ? mapStable+1 : 0;
+    mapMotion=mapSample && (physical || fabsf(xr::Hand(1).stick.x)>.2f) ? mapMotion+1 : 0;
+    if(!mapGpuCaptured && mapStable>=90 && mapMotion>=8 && cbcap::state==0) {
+        cbcap::Arm(false);mapGpuCaptured=true;gpuCaptured=true;
+        LOG("overlay-18 trace: map-motion GPU sample armed at frame %llu",(unsigned long long)frame.sequence);
+    }
+    if(done) return;
+    if(!active) {
+        stable=playable ? stable+1 : 0;
+        if(stable<45 || !moving) return;
+        rows.reserve(8u<<20);
+        rows="frame,time_ms,anchor_seq,anchor_root,latest_seq,applied_frame,applied_body_seq,applied_anchor_seq,kick_seq,kick_time_ms,kick_component,kick_weapon,kick_sighted,native_x,native_y,native_z,view_x,view_y,view_z,anchor_x,anchor_y,anchor_z,live_x,live_y,live_z,latest_root_x,latest_root_y,latest_root_z,head_x,head_y,head_z,ref_x,ref_y,ref_z,room_taken_x,room_taken_y,room_taken_z,room_applied_x,room_applied_y,room_applied_z,hand_correction_x,hand_correction_y,hand_correction_z,stick_x,stick_y,right_trigger,raw_forward_x,raw_forward_y,view_forward_x,view_forward_y,passive_ride,normal_controls,kick_base_x,kick_base_y,kick_base_z,kick_x,kick_y,kick_z,root_axis_xx,root_axis_xy,root_axis_yx,root_axis_yy,head_forward_x,head_forward_y,head_forward_z,turn_stick,room_total_x,room_total_y,room_total_z,room_ack_x,room_ack_y,room_ack_z,applied_forward_x,applied_forward_y,applied_forward_z,applied_target_x,applied_target_y,applied_target_z,applied_palm_x,applied_palm_y,applied_palm_z,ref_right_x,ref_right_z,ref_forward_x,ref_forward_z,right_grip_x,right_grip_y,right_grip_z,matched_native_valid,matched_shot_seq,matched_shot_time_ms,matched_native_read_ms,matched_pawn_data,desired_stance_raw,effective_stance_raw,desired_look_x,desired_look_y,desired_look_z,desired_aim_x,desired_aim_y,desired_aim_z,effective_look_x,effective_look_y,effective_look_z,effective_aim_x,effective_aim_y,effective_aim_z,comfort_active,matched_weapon,matched_body_ms,gameplay_x,gameplay_y,gameplay_z,gameplay_forward_x,gameplay_forward_y,gameplay_forward_z\n";
+        active=true;LOG("onfoot-15 trace: started at movement, up to 5400 frames; one 6-frame GPU sample on sustained physical motion after 10 s");
+    }
+    const bool sticksQuiet=fabsf(left.stick.x)<.2f && fabsf(left.stick.y)<.2f && fabsf(xr::Hand(1).stick.x)<.2f;
+    physicalFrames=playable && physical && sticksQuiet ? physicalFrames+1 : 0;
+    if(!gpuCaptured && frames>=900 && physicalFrames>=8) {
+        cbcap::Arm(false);gpuCaptured=true;
+        LOG("onfoot-15 trace: physical-motion GPU sample armed at frame %llu",(unsigned long long)frame.sequence);
+    }
+    const bool leaving=!stereo || controls::MenuControls() || controls::LoadingControls() || controls::VehicleMode()!=0;
+    if((leaving && frames>=90) || frames>=5400 || rows.size()>(8u<<20)-4096) {
+        char path[MAX_PATH];snprintf(path,sizeof path,"%sfc2vr_onfoot_trace.csv",g_dir);
+        FILE* fp=fopen(path,"wb");
+        if(fp) { const size_t written=fwrite(rows.data(),1,rows.size(),fp);fclose(fp);LOG("onfoot-15 trace: saved %u frames, %u/%u bytes to %s",frames,(unsigned)written,(unsigned)rows.size(),path); }
+        else LOG("onfoot-15 trace: could not open %s",path);
+        rows.clear();rows.shrink_to_fit();active=false;done=true;arms::SetCameraKickTrace(false);return;
+    }
+    const auto body=arms::ReadBodyPoses();arms::FrameUsage use{};arms::ReadFrameUsage(use);
+    const auto kick=arms::ReadCameraKickTrace();
+    float live[3]={NAN,NAN,NAN},heading=0;arms::PlayerState(live,&heading);
+    const auto native=frame.bodyAnchor.nativeView; // exact prepared scene sample; never re-match during tracing
+    const auto& grip=xr::Hand(1).grip.position;
+    char row[4096];int used=snprintf(row,sizeof row,"%llu,%.3f,%llu,%d,%llu,%llu,%llu,%llu,%llu,%.3f,%08x,%08x,%d",
+        (unsigned long long)frame.sequence,NowMs(),(unsigned long long)frame.bodyAnchor.sequence,frame.bodyAnchor.root,
+        (unsigned long long)body.latest.sequence,(unsigned long long)use.appliedSequence,
+        (unsigned long long)use.appliedBodySequence,(unsigned long long)use.anchorSequence,
+        (unsigned long long)kick.sequence,kick.timeMs,(unsigned)kick.component,(unsigned)kick.weapon,kick.sighted);
+    const float values[]={frame.nativeOrigin.x,frame.nativeOrigin.y,frame.nativeOrigin.z,
+        frame.game.P.x,frame.game.P.y,frame.game.P.z,
+        frame.bodyAnchor.position.x,frame.bodyAnchor.position.y,frame.bodyAnchor.position.z,
+        live[0],live[1],live[2],body.latest.root[12],body.latest.root[13],body.latest.root[14],
+        head.x,head.y,head.z,frame.reference.origin.x,frame.reference.origin.y,frame.reference.origin.z,
+        g_rsTraceTaken.x,g_rsTraceTaken.y,g_rsTraceTaken.z,g_rsTraceApplied.x,g_rsTraceApplied.y,g_rsTraceApplied.z,
+        use.bodyCorrection.x,use.bodyCorrection.y,use.bodyCorrection.z,left.stick.x,left.stick.y,xr::Hand(1).trigger,
+        frame.raw.F.x,frame.raw.F.y,frame.game.F.x,frame.game.F.y,g_riding?1.0f:0.0f,controls::NormalControls()?1.0f:0.0f,
+        kick.base[0],kick.base[1],kick.base[2],kick.kick[0],kick.kick[1],kick.kick[2],
+        frame.bodyAnchor.transform[0],frame.bodyAnchor.transform[1],frame.bodyAnchor.transform[4],frame.bodyAnchor.transform[5],
+        headForward.x,headForward.y,headForward.z,xr::Hand(1).stick.x,
+        use.roomTotal.x,use.roomTotal.y,use.roomTotal.z,g_rsApplied.x,g_rsApplied.y,g_rsApplied.z,
+        use.appliedForward.x,use.appliedForward.y,use.appliedForward.z,
+        use.appliedTarget.x,use.appliedTarget.y,use.appliedTarget.z,use.appliedPalm.x,use.appliedPalm.y,use.appliedPalm.z,
+        frame.reference.right.x,frame.reference.right.z,frame.reference.forward.x,frame.reference.forward.z,
+        grip.x,grip.y,grip.z};
+    for(float v:values) {
+        if(used<0 || used>=(int)sizeof row) return;
+        const int n=snprintf(row+used,sizeof row-used,",%.6f",v);
+        if(n<0 || n>=(int)sizeof row-used) return;
+        used+=n;
+    }
+    if(used<0 || used>=(int)sizeof row) return;
+    const int n=snprintf(row+used,sizeof row-used,",%d,%llu,%.3f,%.3f,%08x,%u,%u",native.valid,
+        (unsigned long long)native.shotSequence,native.shotTimeMs,native.timeMs,(unsigned)native.pawnData,
+        native.desiredStance,native.effectiveStance);
+    if(n<0 || n>=(int)sizeof row-used) return;used+=n;
+    for(float angle:native.angles) {
+        const int count=snprintf(row+used,sizeof row-used,",%.8f",angle);
+        if(count<0 || count>=(int)sizeof row-used) return;used+=count;
+    }
+    const int extra=snprintf(row+used,sizeof row-used,",%d,%08x,%.3f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f",frame.comfortActive,
+        (unsigned)native.weapon,frame.bodyAnchor.timeMs,frame.gameplay.P.x,frame.gameplay.P.y,frame.gameplay.P.z,
+        frame.gameplay.F.x,frame.gameplay.F.y,frame.gameplay.F.z);
+    if(extra<0 || extra>=(int)sizeof row-used) return;used+=extra;
+    if(used+1<(int)sizeof row) { row[used++]='\n';rows.append(row,(size_t)used);++frames; }
+}
+static void VehicleTrace(const PoseFrame& frame, int phase) {
+    if (!g_cfg.autoVehicleTrace) return;
+    static bool active = false, done = false;
+    static unsigned stable = 0, frames = 0;
+    static std::string rows;
+    if (done) return;
+    if (!active) {
+        if (phase != 0) return;
+        const bool ready=g_cfg.autoVehicleTrace>=3
+            ? (g_armedDiagnosticMs>=1500)
+            : (g_riding || controls::VehicleMode()!=0);
+        stable = ready && frame.bodyAnchor.valid && (g_cfg.autoVehicleTrace>=3 || frame.bodyAnchor.sequence) ? stable+1 : 0;
+        if (stable < 45) return;
+        active = true; rows.reserve(1u<<20);
+        rows = "frame,phase,time_ms,anchor_seq,anchor_root,native_x,native_y,native_z,view_x,view_y,view_z,anchor_x,anchor_y,anchor_z,latest_seq,previous_seq,body_time_ms,latest_root_x,latest_root_y,latest_root_z,previous_root_x,previous_root_y,previous_root_z,latest_camera_x,latest_camera_y,latest_camera_z,applied_frame,applied_body_seq,applied_anchor_seq,correction_x,correction_y,correction_z,hand_x,hand_y,hand_z,target_x,target_y,target_z,palm_x,palm_y,palm_z,palm_anchor\n";
+        LOG("panel-trace-7 trace: started, 360 frames; %s",(g_cfg.autoVehicleTrace==1 || g_cfg.autoVehicleTrace==4) ? "short GPU capture at frame 90" : "CPU only, no GPU capture");
+    }
+    if (phase == 0) {
+        if (++frames > 360) {
+            char path[MAX_PATH]; snprintf(path,sizeof path,"%sfc2vr_vehicle_trace.csv",g_dir);
+            FILE* fp = fopen(path,"wb");
+            if (fp) { const size_t wrote = fwrite(rows.data(),1,rows.size(),fp); fclose(fp); LOG("panel-trace-7 trace: saved %u/%u bytes to %s",(unsigned)wrote,(unsigned)rows.size(),path); }
+            else LOG("panel-trace-7 trace: could not open %s",path);
+            rows.clear(); rows.shrink_to_fit(); active=false; done=true; g_autoTraceComplete=true; return;
+        }
+        if (frames == 90 && (g_cfg.autoVehicleTrace==1 || g_cfg.autoVehicleTrace==4)) cbcap::Arm(false);
+    }
+    const auto body = arms::ReadBodyPoses();
+    arms::FrameUsage use{}; arms::ReadFrameUsage(use);
+    char row[1536];
+    const int n = snprintf(row,sizeof row,
+        "%llu,%d,%.3f,%llu,%d,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%llu,%.3f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%llu,%llu,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d\n",
+        (unsigned long long)frame.sequence,phase,NowMs(),(unsigned long long)frame.bodyAnchor.sequence,frame.bodyAnchor.root,
+        frame.nativeOrigin.x,frame.nativeOrigin.y,frame.nativeOrigin.z,frame.game.P.x,frame.game.P.y,frame.game.P.z,
+        frame.bodyAnchor.position.x,frame.bodyAnchor.position.y,frame.bodyAnchor.position.z,
+        (unsigned long long)body.latest.sequence,(unsigned long long)body.previous.sequence,body.latest.timeMs,
+        body.latest.root[12],body.latest.root[13],body.latest.root[14],body.previous.root[12],body.previous.root[13],body.previous.root[14],
+        body.latest.camera.x,body.latest.camera.y,body.latest.camera.z,
+        (unsigned long long)use.appliedSequence,(unsigned long long)use.appliedBodySequence,(unsigned long long)use.anchorSequence,
+        use.bodyCorrection.x,use.bodyCorrection.y,use.bodyCorrection.z,use.appliedHand.x,use.appliedHand.y,use.appliedHand.z,
+        use.appliedTarget.x,use.appliedTarget.y,use.appliedTarget.z,
+        use.appliedPalm.x,use.appliedPalm.y,use.appliedPalm.z,use.palmAnchorUsed);
+    if (n > 0 && n < (int)sizeof row && rows.size()+(size_t)n <= (2u<<20)) rows.append(row,(size_t)n);
+}
+
 static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFrame& frame) {
     const float s = frame.worldScale;
     TurnMenu();
     if (!AlignMenu(fv)) ToastTick(fv);   // v234 test 83: F1 weapon alignment; toasts again (they went with the End menu)
     // v234 test 75: the End-key hand angle menu is gone (fixed hand angles; weapons follow the controller)
     {   // controller pose for the arms/weapon and shots (game thread reads it)
-        arms::Frame af; xr::HandState rh = SmoothHand(1, fv.displayTime);
+        arms::Frame af;
+        const auto equipped=arms::EquippedWeapon();
+        const bool palmEligible=g_runtimePalmAnchor && g_handAlignment.automatic && controls::NormalControls()
+            && controls::VehicleMode()==0 && !controls::MapOpen() && !controls::PhoneOut();
+        xr::HandState rh=SmoothHand(1,fv.displayTime,palmEligible && (equipped.owner?g_handAlignment.weaponPalm:g_handAlignment.freePalm));
         xr::HandState physical[2]; XrPosef inputHead; bool inputHeadValid = false;
         const bool inputCurrent = xr::InputSnapshot(physical,inputHead,inputHeadValid,&af.source);
         af.handAuthority = inputCurrent && physical[1].gripValid && physical[1].aimValid;
         af.leftAuthority = inputCurrent && physical[0].gripValid && physical[0].aimValid;
         af.headAuthority = inputCurrent && inputHeadValid;
-        af.weapon = arms::CurrentWeapon();
+        af.weapon = (void*)equipped.owner;
+        af.machete = equipped.MeleeFor(equipped.owner);
         af.valid = true; af.handValid = rh.aimValid && rh.gripValid;
+        af.questTouch[1] = rh.questTouch;
+        af.runtimePalm[1]=rh.usingRuntimePalm;
         auto put = [](float* d, V3 v) { d[0] = v.x; d[1] = v.y; d[2] = v.z; };
         af.game = frame.game; af.frameSequence = frame.sequence;
-        af.bonePubValid = arms::CamBonePos(af.bonePub);   // v231 body clock
-        if (g_camBodyClock == 2) { float cp[3], Wm[16]; if (arms::CamBoneRoot(cp, Wm, true)) { memcpy(af.bonePub, cp, 12); af.bonePubValid = true; } }   // v234: the view's origin
-        if (g_vehViewUsed) { float cp[3], Wm[16]; if (arms::CamBoneRoot(cp, Wm, g_cfg.vehicleViewPrev != 0)) { af.bonePub[0] = Wm[12]; af.bonePub[1] = Wm[13]; af.bonePub[2] = Wm[14]; af.bonePubRoot = true; af.bonePubValid = true; } }
+        af.gameplay=frame.gameplay;
+        // Carry the camera's actual captured anchor. A second live read here
+        // can advance a skeleton update while keeping the older camera origin.
+        put(af.bonePub, frame.bodyAnchor.position);
+        af.bonePubValid = frame.bodyAnchor.valid; af.bonePubRoot = frame.bodyAnchor.root;
+        af.bonePubSeat = frame.bodyAnchor.followSeat;
+        af.nativeView=frame.bodyAnchor.nativeView;af.comfortActive=frame.comfortActive;
+        af.roomApplied=g_rsApplied;af.roomEpoch=g_rsEpoch;
+        af.bonePubSequence = frame.bodyAnchor.sequence;
+        af.bonePubTransform = frame.bodyAnchor.transform;
+        af.bonePubSkeleton = frame.bodyAnchor.skeleton; af.bonePubGraphics = frame.bodyAnchor.graphics;
         if (g_motionDiag) {   // v231 diagnostic (MotionDiag=1): does the skeleton (as the renderer will read it) still hold the hand the mod wrote?
             static int frames = 0, differ = 0; static float worst = 0; static double lastL = 0;
             float aw[3], lw[3], hd3[3], tg[3], lh[3]; long ds = 0;
@@ -3579,7 +3826,7 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             lastSeq = seq; lastRaw = raw; lastBone = bone; lastPl = pp;
             if (--g_motionTrace == 0) { LOG("motion trace: done"); }
         }
-        xr::HandState lh = SmoothHand(0, fv.displayTime);
+        xr::HandState lh = SmoothHand(0, fv.displayTime, palmEligible && g_handAlignment.freePalm);
         {   // v234 two-handed grip through tracking dropouts. Holding the rifle puts the controllers right next to each
             // other, where the headset's cameras often lose one or both (tracked bit off, the pose only estimated) -
             // most of all while the hands are still. That revoked the hand's authority and the grip let go. While both
@@ -3629,9 +3876,12 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             put(af.aimB, frame.ReferenceDirection(QRot(rh.aim.orientation, { 0, 0, 1 })));
             put(af.gripO, frame.ReferencePosition(ToV3(rh.grip.position)));
         }
+        af.questTouch[0] = lh.questTouch;
+        af.runtimePalm[0]=lh.usingRuntimePalm;
         af.leftValid = lh.aimValid && lh.gripValid;
         af.lSqueeze = (af.leftAuthority || af.leftSynth) ? lh.squeeze : 0; af.rSqueeze = (af.handAuthority || af.handSynth) ? rh.squeeze : 0;
-        af.machete = controls::MacheteSelected(); af.map = controls::MapOpen();
+        af.map = controls::MapOpen();
+        af.phone = controls::PhoneOut() && !af.map && !af.weapon;
         if (af.leftValid) {
             put(af.laimO, frame.ReferencePosition(ToV3(lh.aim.position)));
             put(af.laimR, frame.ReferenceDirection(QRot(lh.aim.orientation, { 1, 0, 0 })));
@@ -3694,9 +3944,9 @@ static void SubmitArmsFrame(const xr::FrameViews& fv, uint8_t* rc, const PoseFra
             if (grabbing && af.handSynth) gripSource.handGeneration[1] = af.source.handGeneration[1];
             const bool rOk = af.handAuthority || af.handSynth, lOk = af.leftAuthority || af.leftSynth;
             if (grabbing && (!rOk || !lOk)) LOG("arms: two-handed grip ended (%s controller not tracked)", !rOk ? "right" : "left");
-            if (!rOk || !lOk) grabbing = false;
+            if (!rOk || !lOk || !af.weapon) grabbing = false;
             float fg[3]; bool oneH = true;
-            if (g && !gripDown && af.handAuthority && af.leftAuthority && arms::Foregrip(fg, oneH)) {
+            if (g && !gripDown && af.weapon && af.handAuthority && af.leftAuthority && arms::Foregrip(fg, oneH)) {
                 V3 d = V3{ af.lgripO[0] - fg[0], af.lgripO[1] - fg[1], af.lgripO[2] - fg[2] };
                 float dist = sqrtf(Dot(d, d));
                 if (dist < g_cfg.grabDistance * s) { grabbing = true; xr::Haptic(0, 0.5f, 0.05f); LOG("arms: two-handed grip (%s, %.2f m, hand span %.2f)", oneH ? "pistol" : "rifle", dist / s, arms::LastHandSpan()); }
@@ -3901,28 +4151,45 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
     }
     const bool renderScope = monoScope || weaponScope;
     const bool renderStereo = poseReady && !g_scopeOn && fv.shouldRender && g_stereoOn && sizeOk;
+    if(g_rsOn && (!poseReady || !renderStereo))
+        arms::SetRoomScaleOffset(nullptr,{},g_rsApplied,g_rsEpoch,false);
     // A native flat fallback still uses its native camera: keep its hands raw too.
+    g_rsTraceTaken={};g_rsTraceApplied={};
     if (g_rsOn && poseReady) {   // v231 room-scale: the body was moved after the head - move the recenter point along
-        static V3 pending[4]; static int pn = 0;
         float mv[3]; V3 m{ 0, 0, 0 };
         if (arms::TakeRoomScaleMoved(mv)) m = { mv[0], mv[1], mv[2] };
         int dl = g_rsDelay < 0 ? 0 : g_rsDelay > 3 ? 3 : g_rsDelay;
-        for (int i = pn; i < dl; ++i) pending[i] = { 0, 0, 0 };
-        pn = dl;
+        for (int i = g_rsPendingCount; i < dl; ++i) g_rsPending[i] = { 0, 0, 0 };
+        g_rsPendingCount = dl;
         V3 apply = m;
-        if (dl > 0) { apply = pending[0]; for (int i = 0; i + 1 < dl; ++i) pending[i] = pending[i + 1]; pending[dl - 1] = m; }
-        if (apply.x != 0 || apply.y != 0) {
-            const GameBasis gb = BasisFromGameCam((uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam);
+        if (dl > 0) { apply = g_rsPending[0]; for (int i = 0; i + 1 < dl; ++i) g_rsPending[i] = g_rsPending[i + 1]; g_rsPending[dl - 1] = m; }
+        g_rsTraceTaken=m;g_rsTraceApplied=apply;
+        g_rsApplied=g_rsApplied+apply;
+        if (apply.x != 0 || apply.z != 0) {
             float ws = g_cfg.worldScale > 0 ? g_cfg.worldScale : 1.0f;
-            float dr = (apply.x * gb.R.x + apply.y * gb.R.y) / ws, df = (apply.x * gb.F.x + apply.y * gb.F.y) / ws;
-            g_ref.pos.x += g_ref.rightH.x * dr + g_ref.fwdH.x * df;
-            g_ref.pos.z += g_ref.rightH.z * dr + g_ref.fwdH.z * df;
+            // The movement was converted with the basis which requested it.
+            // Applying a delayed world delta through today's yaw made turning
+            // change the amount/direction acknowledged in tracking space.
+            g_ref.pos.x += (g_ref.rightH.x*apply.x-g_ref.fwdH.x*apply.z)/ws;
+            g_ref.pos.z += (g_ref.rightH.z*apply.x-g_ref.fwdH.z*apply.z)/ws;
         }
     }
     const PoseFrame frame = poseReady
         ? PreparePoseFrame(g_frame, (uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam, renderScope || renderStereo) : PoseFrame{};
+    {   // Keep the loading-time inventory placeholder out of both diagnostics.
+        static fc2vr::diagnostics::ArmedGate gate;
+        const auto weapon=arms::ReadDiagnosticWeapon(); const double now=NowMs();
+        const bool playable=poseReady && renderStereo && controls::NormalControls() && !controls::MenuControls()
+            && controls::VehicleMode()==0 && !g_riding && !controls::ItemControls()
+            && weapon.timeMs<=now && now-weapon.timeMs<250;
+        g_armedDiagnosticMs=gate.Update(now,playable,weapon.owner,weapon.modelKey);
+    }
     if(!poseReady)grass_facing::Pose(0,0,false);
     if (poseReady) {   // arms/weapon/shots follow the controllers on every frame, scoped or not
+        // Profile after the brief GPU capture has finished, so its synchronous
+        // diagnostic copies do not masquerade as normal rendering cost.
+        if (g_cfg.profile==2 && g_armedDiagnosticMs>=7000 && (g_cfg.autoVehicleTrace!=4 || g_autoTraceComplete))
+            perf::StartSampler(GetCurrentThreadId(),20000);
         float yaw=0,basis=0,transfer=0;uint64_t reference=0;
         const V3 head=QRot(fv.views[0].pose.orientation,{0,0,-1});
         const bool supported=arms::BodyYawBasis(0,false,basis,transfer,reference);
@@ -3931,6 +4198,8 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         grass_facing::Pose(yaw,atan2f(worldHead.y,worldHead.x),facingValid);
         uint8_t* rc0 = (uint8_t*)(uintptr_t)(a4 - 4) + vp::RenderCam;
         SubmitArmsFrame(fv, rc0, frame);
+        OnFootTrace(frame,fv,renderStereo);
+        VehicleTrace(frame,0);
         {   // v232 mocap 'X' record: this frame's poses (eyes are added in the eye loop)
             float* x = cbcap::mx; memset(x, 0, sizeof cbcap::mx);
             double t = NowMs(); memcpy(x, &t, 8); uint32_t sq = (uint32_t)frame.sequence; memcpy(x + 2, &sq, 4); uint32_t fl = (uint32_t)controls::VehicleMode() | (g_riding ? 0x100u : 0u); memcpy(x + 3, &fl, 4);
@@ -3947,9 +4216,9 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         if (g_rsOn) {   // v231: the head's horizontal offset from the body (recenter point), game space
             V3 mid = (ToV3(fv.views[0].pose.position) + ToV3(fv.views[1].pose.position)) * 0.5f;
             fc2vr::tracking::Vec3 t = frame.reference.Position({ mid.x, mid.y, mid.z });
-            fc2vr::tracking::Vec3 g = frame.game.Direction({ t.x, 0, t.z });
+            fc2vr::tracking::Vec3 g = frame.gameplay.Direction({ t.x, 0, t.z });
             float ws = frame.worldScale; float o3[3] = { g.x * ws, g.y * ws, 0 };
-            arms::SetRoomScaleOffset(o3, true);
+            arms::SetRoomScaleOffset(o3,frame.gameplay,g_rsApplied,g_rsEpoch,renderStereo && !g_riding);
         }
         if (controls::FlashlightOn()) {   // v220: the head in game space for the flashlight (placed by the game thread)
             const XrPosef& h0 = fv.views[0].pose;
@@ -3980,7 +4249,8 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         }
         if (renderScope) {
             V3 pos = frame.game.Position({ ro[0], ro[1], ro[2] }), dir = Norm(frame.game.Direction({ rd[0], rd[1], rd[2] }));
-            static V3 sm{ 0, 0, 0 }; static double tPrev = 0;
+            const V3 gameplayPos=frame.gameplay.Position({ro[0],ro[1],ro[2]}),gameplayDir=Norm(frame.gameplay.Direction({rd[0],rd[1],rd[2]}));
+            static V3 sm{ 0, 0, 0 },smGameplay{}; static double tPrev = 0;
             static arms::RayContext previousScope;
             const bool scopeReset = previousScope.weapon != scopeContext.weapon
                 || !fc2vr::authority::SameContext(previousScope.source,scopeContext.source,0)
@@ -3989,6 +4259,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             double tNow = NowMs(); float dt = tPrev > 0 ? (float)((tNow - tPrev) * 0.001) : 1.0f; tPrev = tNow;
             float k = scopeReset || (sm.x == 0 && sm.y == 0 && sm.z == 0) || dt > 0.5f ? 1.0f : 1.0f - expf(-dt / fmaxf(0.001f, g_cfg.scopeSmoothing));
             sm = Norm(sm * (1 - k) + dir * k);
+            smGameplay=Norm(smGameplay*(1-k)+gameplayDir*k);
             // the crossbow's bolt reload zooms the game's camera out and back in (to ~73 deg): the scope keeps its zoom
             static float heldFov = 0; static bool holding = false; static double holdT = 0;
             float sfov = rsave.fov;
@@ -3999,7 +4270,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             float gameW[16]; memcpy(gameW, &F<float>(rc, cam::World), 64);
             PoseCamera(rc, pos, sm, { 0, 0, 1 }, -th, th, -tv, tv, false);
             if (monoRay) arms::SetMonoCams(gameW, &F<float>(rc, cam::World));   // v217: the model is hidden at the eye (the mod draws the ring)
-            { float o3[3] = { pos.x, pos.y, pos.z }, d3[3] = { sm.x, sm.y, sm.z }; arms::SetScopeRay(o3, d3, scopeContext); }
+            { float o3[3] = { gameplayPos.x,gameplayPos.y,gameplayPos.z }, d3[3] = { smGameplay.x,smGameplay.y,smGameplay.z }; arms::SetScopeRay(o3, d3, scopeContext); }
             PoseCamera(cc, pos, sm, { 0, 0, 1 }, -th * 1.2f, th * 1.2f, -tv * 1.2f, tv * 1.2f, false);
             posed = true;
         }
@@ -4124,6 +4395,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         xr::SetCopyBack(afwOn && dlssOn);
         xr::SetPlainSharing((dlssOn && !dlssfc2::GuidesHandover()) || afwOn);   // AFW + DLSS: each eye is rebuilt from its own last DLSS result
         if (dlssOn) dlssfc2::BeginFrame(&jx, &jy);
+        arms::PreparePresentation(!g_scopeFrame && !afwOn);
         for (int e = 0; e < 2; ++e) {
             double tE0 = NowMs();
             const XrView& v = fv.views[e];
@@ -4149,12 +4421,15 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
             static bool s_census = true;
             if (e == 0 && (dlssOn || afw::Wanted()) && s_census) { g_eyeBindsOn = true; }
             g_inEye = true; g_uiEye = e; g_renderEye = e; g_capEye = e; hang::Mark(e ? "eye1 render" : "eye0 render");
+            VehicleTrace(frame,e ? 3 : 1);
             if (g_capState == 2) TraceMark(e ? "eye1 dispatch begin" : "eye0 dispatch begin");
+            arms::BeginPresentationEye();
             if (g_eyeTex) {
                 // Off-screen at headset resolution, exactly like the engine's tiled-screenshot path:
                 // position {0,0}, explicit size, our colour + depth targets.
                 o_RenderViewport(self, edx, a1, a2, a3, (uint32_t)(uintptr_t)g_eyePos, (uint32_t)(uintptr_t)g_eyeSize,
                                  a6, a7, a8, a9, (uint32_t)(uintptr_t)g_eyeRT, (uint32_t)(uintptr_t)g_eyeDepth, a12, a13);
+                arms::EndPresentationEye();
                 g_inEye = false; g_uiEye = -1; g_renderEye = -1;
 #if defined(FC2VR_BODY_YAW_TESTING)
                 if(body_yaw_fixture::current.configured){
@@ -4207,9 +4482,11 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 g_prof.copies += NowMs() - tR;
             } else {
                 o_RenderViewport(self, edx, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13);
+                arms::EndPresentationEye();
                 ID3D10Texture2D* cur = AcquireBackbuffer();
                 if (cur) { xr::CopyEye(e, cur); cur->Release(); }
             }
+            VehicleTrace(frame,e ? 4 : 2);
         }
         for (int e = 0; e < 2; ++e) if (afwSkip[e]) {   // the held eye: rebuilt from its own last image and the fresh eye's
             double tA = NowMs();
@@ -4244,7 +4521,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
         HudTick();
         // aiming dot: only where the game itself would show a reticle (none for the machete, flamethrower...);
         // on the weapon's sight line (CrysisVR: 10 m), or straight ahead for guns not held in the hands (turrets)
-        bool wantDot = g_cfg.reticleDot && controls::Active() && !controls::MacheteSelected() && !controls::MapOpen() && (!g_hudOk || g_gameReticle)
+        bool wantDot = g_cfg.reticleDot && controls::Active() && !controls::MacheteEquipped() && !controls::MapOpen() && (!g_hudOk || g_gameReticle)
                        && arms::CurrentWeapon() != nullptr;   // empty hands (weapon away, climbing): no dot - the game keeps its reticle flag
         if (wantDot) {
             float ro[3], rd[3];
@@ -4338,7 +4615,7 @@ static void __fastcall Hook_RenderViewport(void* self, void* edx, uint32_t a1, u
                 uint8_t* mg = nullptr; float mp[4][3];
                 if (arms::MapClockModel(mg, mp) && mg && !IsBadReadPtr(mg + 0x170, 64)) {
                     float Mc[16]; memcpy(Mc, mg + 0x170, 64); const float* M = Mc;
-                    DrawnBodyFix(Mc);   // test 48: the view follows the drawn body update; the matrix is from the newest one
+                    if (!arms::PresentationMapWorld(mg,Mc)) DrawnBodyFix(Mc);
                     auto loc = [&](const float* m) { V3 w{ m[0] * M[0] + m[1] * M[4] + m[2] * M[8] + M[12], m[0] * M[1] + m[1] * M[5] + m[2] * M[9] + M[13], m[0] * M[2] + m[1] * M[6] + m[2] * M[10] + M[14] };
                         return frame.LocalPosition(frame.game.ReferencePosition(w)); };
                     p0 = loc(mp[0]); xw = loc(mp[3]) - loc(mp[2]); yh = loc(mp[1]) - p0;
@@ -4904,6 +5181,8 @@ static void Install() {
     if (gameaddr::Detect() == gameaddr::GOG) LOG("GOG build: engine addresses translated from the Steam map");
     if (!g_cfg.enable) { LOG("disabled by config"); return; }
     InstallFramePacing();
+    LOG("panel-trace-7: VehicleViewMatchNative=%d AutoVehicleTrace=%d",g_cfg.vehicleViewMatchNative,g_cfg.autoVehicleTrace);
+    LOG("onfoot-14: on-foot yaw transport and single room-scale accounting; SceneViewMatchNative=%d; OnFootTrace=%d",g_cfg.sceneViewMatchNative,g_cfg.onFootTrace);
     g_cfg.gpuHandover = IniF("EndFrameWait", 0) == 0; g_cfg.dxvk = (int)IniF("Dxvk", 0);   // read before the device patches below
     g_dxvkWanted = g_cfg.dxvk != 0;
     if (IniF("FastMapCheck", 1) != 0) PatchMapCheck();
@@ -4928,6 +5207,7 @@ static void Install() {
         ac.headsetBodyYaw=(int)IniF("HeadsetBodyYaw",0);
         ac.weaponInHand = (int)IniF("WeaponInHand", 1); ac.aimFromController = (int)IniF("AimFromController", 1);
         ac.dump = (int)IniF("DumpSkeleton", 0);
+        ac.roomBackLeash = IniF("RoomScaleBackLeash", 0.02f);
         ac.ik = (int)IniF("ArmIK", 1); ac.freeLeftHand = (int)IniF("FreeLeftHand", 1);
         ac.shoulderSide = IniF("ShoulderSide", 0.17f); ac.shoulderDown = IniF("ShoulderDown", 0.22f); ac.shoulderBack = IniF("ShoulderBack", 0.06f);
         ac.twoHandMaxSpan = IniF("TwoHandMaxSpan", 0.65f); ac.noIdleBreak = (int)IniF("NoIdleAnimation", 1);
@@ -4944,21 +5224,42 @@ static void Install() {
         g_cfg.testCheats = (int)IniF("TestCheats", 0); { char ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); arms::SetIniPath(ip); } g_cfg.reticleDot = (int)IniF("ReticleDot", 1); g_cfg.reticleDistance = IniF("ReticleDistance", 10.0f); g_cfg.reticleSize = IniF("ReticleSize", 0.06f);
         g_cfg.ammoPanel = (int)IniF("AmmoPanel", 1); g_cfg.ammoPanelWidth = IniF("AmmoPanelWidth", 0.055f); g_cfg.ammoPanelRight = IniF("AmmoPanelRight", 0.05f); g_cfg.ammoPanelRight2 = IniF("AmmoPanelRightSecondary", 0.06f); g_cfg.ammoPanelUp = IniF("AmmoPanelUp", 0.04f); g_cfg.ammoPanelFwd = IniF("AmmoPanelForward", 0.06f); g_cfg.grenPanel = (int)IniF("GrenadePanel", 1); g_cfg.grenPanelWidth = IniF("GrenadePanelWidth", 0.045f); g_cfg.grenPanelLeft = IniF("GrenadePanelLeft", 0.06f); g_cfg.grenPanelUp = IniF("GrenadePanelUp", 0.02f); g_cfg.grenPanelFwd = IniF("GrenadePanelForward", 0.0f); g_cfg.grenPanelSecs = IniF("GrenadePanelSeconds", 3.0f); g_cfg.grenPanelTilt = IniF("GrenadePanelTilt", 30.0f); g_cfg.mapClock = (int)IniF("MapClock", 1); g_cfg.mapClockWidth = IniF("MapClockWidth", 0.07f); g_cfg.mapClockUp = IniF("MapClockUp", 0.0f); g_cfg.mapClock24 = (int)IniF("MapClock24h", 0); g_cfg.mapHealth = (int)IniF("MapHealth", 1); g_cfg.noDesktopVsync = IniF("DesktopVsync", 0) == 0; g_cfg.mapHealthWidth = IniF("MapHealthWidth", 0.06f); g_cfg.mapPanelGap = IniF("MapPanelGap", 0.004f);
         g_cfg.ammoPanelYaw = IniF("AmmoPanelYaw", 20.0f); g_cfg.ammoPanelTilt = IniF("AmmoPanelTilt", 15.0f);
+        ac.nativePistolSupport = (int)IniF("NativePistolSupport", 1);
         ac.handOfs[0] = IniF("HandOffsetX", 0); ac.handOfs[1] = IniF("HandOffsetY", 0); ac.handOfs[2] = IniF("HandOffsetZ", 0);
         ac.leftHandRoll = IniF("LeftHandRoll", 45.0f); ac.macheteAngle = IniF("MacheteAngle", 60.0f);
         ac.leftHandYaw = IniF("LeftHandYaw", 30.0f); ac.leftForearmTwist = IniF("LeftForearmTwist", 1.0f); ac.armsIndependent = (int)IniF("ArmsIndependent", 1); ac.steadyHands = (int)IniF("SteadyHands", 1); ac.grabBoxShrink = IniF("GrabBoxShrink", 0.25f); ac.upperArmTwist = IniF("UpperArmTwist", 0.5f); ac.macheteYaw = IniF("MacheteYaw", 15.0f); ac.macheteRoll = IniF("MacheteRoll", 0.0f); ac.mapAngle = IniF("MapPitch", 0.0f); ac.mapYaw = IniF("MapYaw", 0.0f); ac.mapRoll = IniF("MapRoll", 0.0f); ac.freePitch = IniF("FreeHandPitch", 0.0f); ac.freeYaw = IniF("FreeHandYaw", 0.0f); ac.freeRoll = IniF("FreeHandRoll", 0.0f); ac.phonePitch = IniF("PhonePitch", ac.freePitch); ac.phoneYaw = IniF("PhoneYaw", ac.freeYaw); ac.phoneRoll = IniF("PhoneRoll", ac.freeRoll); ac.phoneDiag = (int)IniF("PhoneDiag", 0);
-        ac.handGrab = (int)IniF("HandGrab", 1); ac.grabRadius = IniF("GrabRadius", 0.35f); ac.grabReach = IniF("GrabReach", 0.06f); ac.pickupReach = IniF("PickupReach", 0.20f); ac.grabPhysics = (int)IniF("GrabPhysics", 1); ac.grabMaxMass = IniF("GrabMaxMass", 25.0f); ac.grabMaxSize = IniF("GrabMaxSize", 0.8f); ac.throwScale = IniF("ThrowScale", 1.3f); ac.bodyRadius = IniF("BodyRadius", 0.30f); ac.climbing = (int)IniF("Climbing", 0); ac.climbReach = IniF("ClimbReach", 0.10f); ac.climbMode = (int)IniF("ClimbMode", 1); ac.mantleBelowHead = IniF("MantleBelowHead", 0.55f); ac.climbGrace = IniF("ClimbGrace", 1.5f); ac.climbTurnSpeed = IniF("ClimbTurnSpeed", 120.0f); ac.watchStickSign = IniF("WatchStickSign", 1.0f); ac.throwSpeed = IniF("ThrowSpeed", 0.0f); ac.throwRange = IniF("ThrowRange", 1.5f); ac.npcGrab = (int)IniF("NpcGrab", 0); ac.bodyClock = (int)IniF("HandsOnBodyClock", 1); ac.armSmooth = IniF("ArmSmoothing", 0.0f); ac.clavSmooth = IniF("ClavicleSmoothing", 0.5f); g_handSmooth = IniF("HandSmoothing", 1) != 0; g_handCut = IniF("HandSmoothCutoff", 8.0f); g_handBeta = IniF("HandSmoothBeta", 4.0f); g_handRotBeta = IniF("HandSmoothRotBeta", 0.06f); ac.localFrame = (int)IniF("ArmLocalFrame", 1); g_framePacing = (int)IniF("FramePacing", 1); ac.foregripSmooth = IniF("ForegripSmoothing", 0.3f); ac.twistFadeFrom = IniF("UpperArmTwistFadeFrom", -1.0f); ac.twistFadeTo = IniF("UpperArmTwistFadeTo", 0.0f); ac.twistSmooth = IniF("UpperArmTwistSmoothing", 0.0f); ac.softIk = IniF("SoftIkStart", 0.0f); ac.softIkMaxPull = IniF("SoftIkMaxShoulderPull", 0.12f); ac.elbowSmooth = IniF("ElbowSmoothing", 0.0f); g_camBodyClock = (int)IniF("CameraOnBodyClock", 2); g_motionDiag = (int)IniF("MotionDiag", 0); ac.roomScale = (int)IniF("RoomScale", 0); ac.roomLeash = IniF("RoomScaleLeash", 0.10f); ac.roomMaxSpeed = IniF("RoomScaleMaxSpeed", 4.0f); ac.roomRadius = IniF("RoomScaleWallDistance", 0.30f); g_rsDelay = (int)IniF("RoomScaleViewDelay", 1); g_rsOn = ac.roomScale != 0; ac.contactPush = (int)IniF("ContactPush", 1); ac.freezeReload = (int)IniF("FreezeReload", 1); ac.macheteHits = (int)IniF("MacheteHits", 1); ac.macheteSpeed = IniF("MacheteSwingSpeed", 2.5f); ac.macheteCooldown = IniF("MacheteCooldown", 0.5f); ac.macheteSound = (int)IniF("MacheteSwingSound", 1); ac.seatWeapon = (int)IniF("SeatWeapon", 1); ac.macheteSoundSpeed = IniF("MacheteSoundSpeed", 6.0f); ac.flashRange = IniF("FlashlightRange", 30.0f); ac.flashInner = IniF("FlashlightInnerAngle", 18.0f); ac.flashOuter = IniF("FlashlightOuterAngle", 32.0f); ac.flashBright = IniF("FlashlightBrightness", 1.0f); ac.noColorFilter = (int)IniF("NoColorFilter", 0); ac.noRimLight = (int)IniF("NoRimLight", 0); ac.gameAimAssist = (int)IniF("GameAimAssist", 0);
+        ac.headInteraction = (int)IniF("HeadInteraction", 1);
+        ac.worldBodyOcclusion = (int)IniF("WorldBodyOcclusion", 0);
+        ac.legMotionTrace = (int)IniF("LegMotionTrace", 0);
+        ac.cameraKickTrace=g_cfg.onFootTrace;
+        ac.handGrab = (int)IniF("HandGrab", 1); ac.grabRadius = IniF("GrabRadius", 0.35f); ac.grabReach = IniF("GrabReach", 0.06f); ac.pickupReach = IniF("PickupReach", 0.20f); ac.grabPhysics = (int)IniF("GrabPhysics", 1); ac.grabMaxMass = IniF("GrabMaxMass", 25.0f); ac.grabMaxSize = IniF("GrabMaxSize", 0.8f); ac.throwScale = IniF("ThrowScale", 1.3f); ac.bodyRadius = IniF("BodyRadius", 0.30f); ac.climbing = (int)IniF("Climbing", 0); ac.climbReach = IniF("ClimbReach", 0.10f); ac.climbMode = (int)IniF("ClimbMode", 1); ac.mantleBelowHead = IniF("MantleBelowHead", 0.55f); ac.climbGrace = IniF("ClimbGrace", 1.5f); ac.climbTurnSpeed = IniF("ClimbTurnSpeed", 120.0f); ac.watchStickSign = IniF("WatchStickSign", 1.0f); ac.throwSpeed = IniF("ThrowSpeed", 0.0f); ac.throwRange = IniF("ThrowRange", 1.5f); ac.npcGrab = (int)IniF("NpcGrab", 0); ac.bodyClock = (int)IniF("HandsOnBodyClock", 1); ac.armSmooth = IniF("ArmSmoothing", 0.0f); ac.clavSmooth = IniF("ClavicleSmoothing", 0.5f); g_handSmooth = IniF("HandSmoothing", 1) != 0; g_handCut = IniF("HandSmoothCutoff", 8.0f); g_handBeta = IniF("HandSmoothBeta", 4.0f); g_handRotBeta = IniF("HandSmoothRotBeta", 0.06f); ac.localFrame = (int)IniF("ArmLocalFrame", 1); g_framePacing = (int)IniF("FramePacing", 1); ac.foregripSmooth = IniF("ForegripSmoothing", 0.3f); ac.twistFadeFrom = IniF("UpperArmTwistFadeFrom", -1.0f); ac.twistFadeTo = IniF("UpperArmTwistFadeTo", 0.0f); ac.twistSmooth = IniF("UpperArmTwistSmoothing", 0.0f); ac.softIk = IniF("SoftIkStart", 0.0f); ac.softIkMaxPull = IniF("SoftIkMaxShoulderPull", 0.12f); ac.elbowSmooth = IniF("ElbowSmoothing", 0.0f); g_camBodyClock = (int)IniF("CameraOnBodyClock", 2); g_motionDiag = (int)IniF("MotionDiag", 0); ac.roomScale = (int)IniF("RoomScale", 0); ac.roomLeash = IniF("RoomScaleLeash", 0.10f); ac.roomMaxSpeed = IniF("RoomScaleMaxSpeed", 4.0f); ac.roomRadius = IniF("RoomScaleWallDistance", 0.30f); g_rsDelay = (int)IniF("RoomScaleViewDelay", 1); g_rsOn = ac.roomScale != 0; ac.contactPush = (int)IniF("ContactPush", 1); ac.freezeReload = (int)IniF("FreezeReload", 1); ac.macheteHits = (int)IniF("MacheteHits", 1); ac.macheteSpeed = IniF("MacheteSwingSpeed", 2.5f); ac.macheteCooldown = IniF("MacheteCooldown", 0.5f); ac.macheteSound = (int)IniF("MacheteSwingSound", 1); ac.seatWeapon = (int)IniF("SeatWeapon", 1); ac.macheteSoundSpeed = IniF("MacheteSoundSpeed", 6.0f); ac.flashRange = IniF("FlashlightRange", 30.0f); ac.flashInner = IniF("FlashlightInnerAngle", 18.0f); ac.flashOuter = IniF("FlashlightOuterAngle", 32.0f); ac.flashBright = IniF("FlashlightBrightness", 1.0f); ac.noColorFilter = (int)IniF("NoColorFilter", 0); ac.noRimLight = (int)IniF("NoRimLight", 0);
+        ac.gameAimAssist = (int)IniF("GameAimAssist", 0);
         { char b[64], ip[MAX_PATH]; snprintf(ip, MAX_PATH, "%sfc2vr.ini", g_dir); GetPrivateProfileStringA("VR", "MacheteSoundIds", "", b, sizeof b, ip); unsigned a1 = 0, a2 = 0; int n = b[0] ? sscanf(b, "%x,%x", &a1, &a2) : 0;
           if (n >= 1) { ac.macheteSnd[0] = a1; ac.macheteSnd[1] = n >= 2 ? a2 : 0; } } ac.bladeLen = IniF("MacheteBladeLength", 0.55f); ac.pushMinSpeed = IniF("PushMinSpeed", 0.3f); ac.pushRadius = IniF("PushRadius", 0.06f); ac.pushScale = IniF("PushScale", 1.0f); ac.pushMass = IniF("PushMass", 40.0f); ac.pushWeaponLen = IniF("PushWeaponLen", 0.7f); ac.npcReach = IniF("NpcReach", 0.25f); ac.npcGain = IniF("NpcPullGain", 0.6f); ac.npcMaxSpeed = IniF("NpcMaxSpeed", 10.0f); ac.npcRagdollTime = IniF("NpcRagdollTime", 2.5f); ac.npcActive = (int)IniF("NpcActive", 1); ac.npcActiveWeight = IniF("NpcActiveWeight", 1.0f); ac.npcStiffness = IniF("NpcStiffness", 1.0f); ac.npcKnockPull = IniF("NpcKnockPull", 1.12f); ac.npcKnockDown = IniF("NpcKnockDown", 0.35f); ac.npcLeadGain = IniF("NpcLeadGain", 8.0f); ac.npcLeadSpeed = IniF("NpcLeadSpeed", 4.5f); ac.npcKnockSpeed = IniF("NpcKnockSpeed", 2.1f); ac.weaponRollFix = (int)IniF("WeaponRollFix", 0); ac.climbHolster = (int)IniF("ClimbHolster", 1); ac.gripInteract = (int)IniF("GripInteract", 0); ac.throwMaxSpeed = IniF("ThrowMaxSpeed", 25.0f); ac.useReach = IniF("UseReach", 0.9f); ac.mouthReach = IniF("MouthReach", 0.18f); ac.useFromHead = (int)IniF("UseFromHead", 1); ac.useDiag = (int)IniF("UseDiag", 1); ac.useCone = IniF("UseCone", 30.0f); ac.useCenter = IniF("UseCenter", 10.0f);
         ac.backpackFwd = IniF("BackpackZoneFwd", 0.0f); ac.backpackUp = IniF("BackpackZoneUp", -0.25f);
-        // v234 test 75: one fixed setup per situation (no hand angle menu, no ini angles): the map and GPS, the phone,
-        // free hands and the free left hand use these angles; held weapons follow the controller (WeaponFollow=1)
+        ac.vehicleHandsFollowSeat = (int)IniF("VehicleHandsFollowSeat", 1);
+        ac.freeHandPalmAnchor = (int)IniF("FreeHandPalmAnchor", 0);
+        ac.weaponPalmAnchor = (int)IniF("WeaponPalmAnchor", 0);
+        ac.questAlignment.automatic = IniF("QuestControllerAlignment", 1)!=0;
+        ac.questAlignment.freePalm = IniF("QuestFreeHandPalmAnchor", 1)!=0;
+        ac.questAlignment.weaponPalm = IniF("QuestWeaponPalmAnchor", 1)!=0;
+        ac.questAlignment.macheteRollOffset = IniF("QuestMacheteRollOffset", 30);
+        g_handAlignment=ac.questAlignment;g_runtimePalmAnchor=IniF("QuestRuntimePalmAnchor",1)!=0;
+        xr::SetRuntimePalmPose(g_runtimePalmAnchor && g_handAlignment.automatic);
+        ac.walkingLegs = (int)IniF("WalkingLegs", 0);
+        ac.bodyFollowHead = (int)IniF("BodyFollowHead", 0);
+        LOG("panel-trace-7: VehicleHandsFollowSeat=%d FreeHandPalmAnchor=%d BodyFollowHead=%d SceneViewMatchNative=%d RoomScale=%d",ac.vehicleHandsFollowSeat,ac.freeHandPalmAnchor,ac.bodyFollowHead,g_cfg.sceneViewMatchNative,ac.roomScale);
+        // Keep the v234 defaults, but preserve explicit calibration from prior builds.
+        // WeaponFollow supplies its own weapon orientation; legacy angles are used
+        // only when that solve is disabled or unavailable.
         ac.weaponFollow = (int)IniF("WeaponFollow", 1);
-        ac.mapAngle = -30.0f; ac.mapYaw = -20.0f; ac.mapRoll = 15.0f;
-        ac.freePitch = -15.0f; ac.freeYaw = -15.0f; ac.freeRoll = 10.0f;
-        ac.phonePitch = 35.0f; ac.phoneYaw = -90.0f; ac.phoneRoll = 95.0f;
-        ac.leftHandRoll = 45.0f; ac.leftHandYaw = 30.0f;
-        if (ac.weaponFollow) { ac.macheteAngle = 0.0f; ac.macheteYaw = 0.0f; ac.macheteRoll = 0.0f; }
+        ac.mapAngle = IniF("MapPitch", -30.0f); ac.mapYaw = IniF("MapYaw", -20.0f); ac.mapRoll = IniF("MapRoll", 15.0f);
+        ac.freePitch = IniF("FreeHandPitch", -15.0f); ac.freeYaw = IniF("FreeHandYaw", -15.0f); ac.freeRoll = IniF("FreeHandRoll", 10.0f);
+        ac.phonePitch = IniF("PhonePitch", 35.0f); ac.phoneYaw = IniF("PhoneYaw", -90.0f); ac.phoneRoll = IniF("PhoneRoll", 95.0f);
+        // Native body-yaw transfer and visual body follow must not both rotate
+        // the avatar. GOG keeps its accepted visual path; supported Steam can
+        // explicitly choose the upstream native path.
+        if (ac.headsetBodyYaw && gameaddr::Detect()==gameaddr::Steam) ac.bodyFollowHead=0;
         if (cc.enable) { arms::Install(g_base, ac, &PatchJmpN); arms::SetUseCallback(&controls::PulseUse); }
     }
     InstallDevConsole();

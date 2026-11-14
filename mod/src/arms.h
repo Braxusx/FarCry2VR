@@ -5,6 +5,8 @@
 #include <cstddef>
 #include "common/pose_frame.h"
 #include "common/pose_authority.h"
+#include "common/weapon_identity.h"
+#include "common/controller_alignment.h"
 #include "common/headset_body_yaw.h"
 
 namespace arms {
@@ -21,8 +23,18 @@ struct Config {
     float foregripSmooth = 0.3f; // ForegripSmoothing (v232): seconds; the animation's support-hand place on the weapon (0 = off)
     float armSmooth = 0.0f;      // ArmSmoothing (v231): seconds; the animated arm bones the solve starts from are smoothed (0 = off)
     int bodyClock = 1;            // HandsOnBodyClock (v231): hands follow the body's movement since the frame was published
+    int vehicleHandsFollowSeat = 1; // transport visual hand origin and yaw with the seated body
+    int freeHandPalmAnchor = 0;    // base calibration: original wrist placement, unless explicitly overridden
+    int weaponPalmAnchor = 0;     // also anchor equipped weapons at the palm, preserving their saved rotation
+    int nativePistolSupport = 1;  // use verified private iron-sight poses for matching pistol rigs
+    fc2vr::controllers::QuestPreset questAlignment{}; // applied per hand only on a recognized Quest + Touch profile
+    int walkingLegs = 0;          // visual foot planting and leg IK for the static first-person lower body
+    int bodyFollowHead = 0;       // visual torso/legs follow physical yaw on foot
+    int worldBodyOcclusion = 0;   // use the native world pass for player body/weapon (verified GOG build)
+    int legMotionTrace = 0;       // bounded native-pose trace; does not change animation
     int roomScale = 0;            // RoomScale (v231): real steps move the player (the body follows the head)
     float roomLeash = 0.10f;      // RoomScaleLeash: the head may move this far (m) from the body before the body follows (leaning)
+    float roomBackLeash = 0.02f;  // RoomScaleBackLeash: tighter rear allowance to keep eyes out of the torso
     float roomMaxSpeed = 4.0f;    // RoomScaleMaxSpeed: m/s the body may be moved at
     float roomRadius = 0.30f;     // RoomScaleWallDistance: the body stops this far (m) short of a wall
     int weaponInHand = 1;         // WeaponInHand
@@ -44,6 +56,8 @@ struct Config {
     float macheteRoll = 0.0f;     // MacheteRoll: machete hand turned about the controller's pointing axis (deg, + = clockwise seen from behind)
     float macheteYaw = 15.0f;     // MacheteYaw: machete angled inward about the controller's up axis (deg)
     float macheteAngle = 60.0f;   // MacheteAngle: machete (and hand) tilted up from the controller's pointing direction (deg)
+    int headInteraction = 1;      // HeadInteraction: native use targeting follows the HMD (verified GOG build)
+    int cameraKickTrace = 0;      // observation only, follows OnFootTrace
     int handGrab = 1;             // HandGrab: grab pickups / use things with a free hand's grip
     float grabRadius = 0.35f;     // GrabRadius: search radius around the hand (m)
     float grabBoxShrink = 0.25f;  // GrabBoxShrink: the object's bounding box is shrunk by this share before measuring the reach
@@ -122,11 +136,22 @@ struct Frame {
 #endif
     bool valid = false, handValid = false;
     bool handAuthority = false, leftAuthority = false, headAuthority = false;
+    bool questTouch[2]{};     // same input publication as the visual poses; never queried from the animation job
+    bool runtimePalm[2]{};    // gripO/lgripO are calibrated contact points when selected
     fc2vr::authority::Stamp source{};
     void* weapon = nullptr;   // instance identity, not a model/cache generation lease
     fc2vr::tracking::GameBasis game{};
+    fc2vr::tracking::GameBasis gameplay{};
     uint64_t frameSequence = 0;   // diagnostic application-frame stamp, not a freshness lease
-    float bonePub[3] = {}; bool bonePubValid = false; bool bonePubRoot = false;   // v232: bonePub is the seat (skeleton world position) of the drawn update   // v231: the Camera bone when this frame was published (body clock)
+    uint64_t bonePubSequence = 0; // identity of the camera's captured body anchor
+    bool bonePubSeat = false;    // full seat transport only for vehicle anchors
+    fc2vr::tracking::NativeViewSample nativeView{};
+    bool comfortActive=false;
+    fc2vr::tracking::Vec3 roomApplied{}; // body-follow already removed from this reference
+    uint64_t roomEpoch = 0;
+    std::array<float,16> bonePubTransform{};
+    uintptr_t bonePubSkeleton = 0, bonePubGraphics = 0;
+    float bonePub[3] = {}; bool bonePubValid = false; bool bonePubRoot = false;   // matched scene root, or native Camera bone fallback
     float camRows[3][3];          // RAW native camera rows (incl. pitch): bone-axis calibration only
     float aimO[3], aimR[3], aimU[3], aimB[3];   // right controller aim pose (ref)
     float gripO[3];               // right controller grip position (ref)
@@ -135,6 +160,7 @@ struct Frame {
     bool leftSynth = false;       // v234: the left hand's pose is held on the weapon (two-handed grip, left controller untracked)
     float lSqueeze = 0, rSqueeze = 0;
     bool machete = false, map = false;   // machete in hand; map/GPS out
+    bool phone = false;                 // explicit phone mode, stamped with this solve
     float laimO[3], laimR[3], laimU[3], laimB[3], lgripO[3];   // left controller (ref)
     float headO[3], headF[3];     // head position and forward (ref)
     float eyeL[3], eyeR[3];       // v234 test 80: the two eye positions (ref)
@@ -144,13 +170,38 @@ void Install(uintptr_t base, const Config& c, PatchFn patch);
 void SetWeaponKey(uint32_t k);     // current weapon type id (HUD reticle element name), 0 = unknown
 void SetIniPath(const char* p);    // fc2vr.ini: saved weapon holds [Holds]
 void SubmitFrame(const Frame& f);
+// Freeze one tracking input for both eyes; only native presentation providers
+// are corrected during eye drawing. Native poses and physics stay intact.
+void PreparePresentation(bool enabled);
+void BeginPresentationEye();
+void EndPresentationEye();
+// Compositor map HUD uses the same proven attachment correction as the map mesh.
+// Returns false without modifying output if the exact source cannot be matched.
+bool PresentationMapWorld(uint8_t* graphics,float world[16]);
 // Observation only: these stamps do not grant freshness or pose authority.
 struct FrameUsage {
     bool haveApplied = false, haveInteraction = false;
     uint64_t appliedSequence = 0, interactionSequence = 0;
     uint32_t appliedCalls = 0, interactionCalls = 0, appliedThread = 0, interactionThread = 0;
+    uint64_t appliedBodySequence = 0, anchorSequence = 0;
+    fc2vr::tracking::Vec3 bodyCorrection{};
+    fc2vr::tracking::Vec3 roomTotal{},roomApplied{},appliedForward{};
+    uint64_t roomEpoch=0;
+    fc2vr::tracking::Vec3 appliedHand{}, appliedTarget{};
+    fc2vr::tracking::Vec3 appliedPalm{};
+    bool palmAnchorUsed=false;
 };
 bool ReadFrameUsage(FrameUsage& out);
+struct CameraKickTrace {
+    uint64_t sequence=0;
+    double timeMs=0;
+    uintptr_t component=0,weapon=0;
+    float base[3]{},kick[3]{};
+    bool sighted=false;
+};
+CameraKickTrace ReadCameraKickTrace();
+void SetCameraKickTrace(bool enabled);
+fc2vr::tracking::BodyPoses ReadBodyPoses();
 bool CamBonePos(float out[3]);
 bool CamBoneRoot(float cam[3], float W[16], bool previous = false);   // v232: Camera bone and the skeleton's world matrix from the same update
 bool BodyClock(); void SetBodyClock(bool on);
@@ -164,14 +215,19 @@ bool LocalFrameToggle();   // v232 Ctrl+F5 A/B
 bool ClavFix(bool toggle);   // v232 F4 A/B: clavicle + foregrip smoothing on/off
 void DiagApplied(float p[3], float fw[3], uint64_t* seq);   // v232 mocap
 void SetBoneSink(void (*fn)(const float* W, const float* models, int n));   // v232: skeleton as written, each frame (GPU capture)
+void SetDiagnosticSink(bool (*active)(),void (*record)(char,const void*,uint32_t));
+struct DiagnosticWeapon { uintptr_t owner=0; uint32_t modelKey=0; double timeMs=0; };
+DiagnosticWeapon ReadDiagnosticWeapon(); // game-thread observation, no gameplay authority
 int RigidArmTest(); void SetRigidArmTest(int mode);   // v232 F4: 0 off, 1 arm chains held rigid on the hands, 2 whole skeleton (jitter A/B)   // v231 F4 A/B
 bool DiagLiveHand(float out[3]);
 bool DiagHand(float applyW[3], float liveW[3], float hand[3], float target[3], long* seq);   // v231 jitter diagnostic                                  // v231: skeleton updates so far (diagnostic)   // v231 (F4 test toggle)
 void SetMonoCams(const float game[16], const float posed[16]);
 bool MonoTarget();
 void SetHeadWorld(const float pos[3], const float dir[3], const float up[3]);
-void SetRoomScaleOffset(const float off[3], bool valid);   // v231 render thread: the head's horizontal offset from the body, game space
-bool TakeRoomScaleMoved(float out[3]);                    // v231 render thread: how far the body was moved since the last call (game space)   // v220: the head in game world space (flashlight)
+void SetRoomScaleOffset(const float off[3], const fc2vr::tracking::GameBasis& game,
+                        fc2vr::tracking::Vec3 applied, uint64_t epoch, bool valid);
+bool TakeRoomScaleMoved(float out[3]); // reference-space game units, consumed once
+uint64_t ResetRoomScale(); // recenter invalidates old requests and compensation
 bool MonoEquipped();   // v218: the game has the monocular out (in the hand)   // v217: something taggable is in the monocular's ring (the game's binoculars target)
 void MonoRenderFix(const float game[16], const float posed[16]);   // v216: move the drawn monocular with the scope camera (same frame)   // v215: the game's render camera world and the head-aimed scope camera world
 bool PlayerState(float pos[3], float* heading);   // player entity position and the game's heading (radians)
@@ -195,10 +251,15 @@ void SetFreeHands(float angle, float yaw, float roll);
 void GetFreeHands(float& angle, float& yaw, float& roll);
 void SetPhoneHands(float angle, float yaw, float roll);
 void GetPhoneHands(float& angle, float& yaw, float& roll);
+void* CurrentWeapon(); // the player's current weapon object (identity only)
+fc2vr::weapons::Identity EquippedWeapon(); // coherent native identity; no game memory reads on render/input threads
+bool PhysicalLocomotion(); // active climbing, or room-scale body movement enabled: not passive transport
+bool MotionGestureBusy(); // reload/climb activity excludes arm-swing sprint; observation only
+bool IsLocalPawn(const void* pawn); // exact native movement-owner guard
+void* LocalPawnIdentity(); // borrowed identity for a guarded current-vehicle lookup on the input thread
 void SetAlignMode(int mode);   // v234 test 84: the weapon alignment menu - 0 off, 1 the right stick turns the gun, 2 it moves the dot
 int AlignStatus(uint32_t* key, float adj[4]);   // adj: gun right/up, dot right/up (deg);   // 0 no gun, 1 measuring the eye, 2 the right stick turns the gun, 3 a gun held (box unticked)
 int HeldMelee();        // v234 test 70: 1 the held weapon is the machete, 0 another weapon, -1 unknown
-void* CurrentWeapon();   // the player's current weapon object (identity only)                     // called (game thread) when a hand uses the interaction target
 // the weapon's sight line (ref frame: origin, unit direction); false if not updated recently
 bool SightRay(float o[3], float d[3], RayContext* context = nullptr);
 bool SightFrame(float o[3], float d[3], float u[3]);

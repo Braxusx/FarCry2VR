@@ -1,6 +1,7 @@
 // controls.h - motion controllers mapped onto the game's gamepad input (see controls.cpp).
 #pragma once
 #include <windows.h>
+#include <cstdint>
 
 namespace controls {
 void CancelPendingInput();   // game thread: cancel pending edges/pulses without synthesizing release actions
@@ -37,6 +38,7 @@ float LastMoveStick();           // v231: magnitude of the last on-foot left sti
 void SetLeftGripClaimed(bool c);
 void PulseUse();
 bool SightsUp();
+bool MacheteEquipped();
 bool MacheteSelected();
 bool SecondarySelected();   // v234: the secondary (hip) slot is out (the mod's guess from your selections)
 float RightTriggerValue();
@@ -64,7 +66,12 @@ bool ItemControls();              // the game's own item / menu / cut-scene cont
 bool LoadingControls();           // no action map / the loading-screen map (405707ae)
 bool MapControls();               // the game's map / GPS action map is up (also while answering the phone)
 bool NormalControls();            // the game's normal on-foot action map is active (not phone, watch, map, menus)
+bool InteractionControls();       // native on-foot use is permitted, including mission briefings
+bool LocomotionControls();        // native on-foot movement is permitted, including briefings and the carried map
+uint32_t ActionMapId();            // diagnostic context, not a synthesized gameplay state
 int VehicleMode();
+void SetPassiveRide(bool riding); // visual ride inference; does not change native driving/seat controls
+bool PassiveRide();
 int ThrowAimHand();              // -1 none, 0 left, 1 right: that hand is aiming a throw (grip + trigger held)
 int TakeThrowRelease();          // the aiming hand let go since the last call (1) - the arc decides whether to throw
 void FireThrow();                // press the game's throw button

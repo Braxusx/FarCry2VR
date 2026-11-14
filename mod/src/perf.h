@@ -11,7 +11,7 @@ enum Phase { P_NONE = 0, P_SIM, P_RFPRE, P_WAIT, P_EYE0, P_EYE1, P_HOOKMISC, P_R
 void GpuInit(ID3D10Device* dev);
 void GpuMark(GpuPoint p);        // G_FRAME closes the previous frame and opens a new one
 void SetPhase(Phase p);
-void StartSampler(DWORD mainTid);
+void StartSampler(DWORD mainTid,DWORD durationMs=0); // nonzero: one bounded 250 Hz sample window
 void Report();                   // call about once per second from the render thread
 
 } // namespace perf

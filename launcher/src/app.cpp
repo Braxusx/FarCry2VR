@@ -110,6 +110,7 @@ static const Setting kSettings[] = {
     { 1, "Weapons", L"FreezeReload", "Still weapon while reloading", "The gun stays where you hold it during reload animations.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
     { 1, "Weapons", L"NoIdleAnimation", "No weapon-inspect animation", nullptr, SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
     { 1, "Hands", L"ThrowArc", "Throwing arc", "Grip + trigger shows where a grenade or molotov will land.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
+    { 1, "Hands", L"QuestControllerAlignment", "Automatic Quest hand alignment", "Aligns hands and weapons for recognized Quest headsets with Touch controllers. Off keeps the base calibration; other controllers keep their existing alignment.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
     { 1, "Hands", L"ThrowArcRight", "Right hand can throw too", "While the right grip is held with an empty hand, the trigger aims a throw.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
     { 1, "Hands", L"MacheteHits", "Machete swings hit", "Swinging the machete into an enemy lands a hit.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
     { 1, "Hands", L"ContactPush", "Hands push things", "Your hands and weapon shove loose objects and bodies they hit.", SCheck, 0, 0, nullptr, 0, nullptr, 0, "1" },
@@ -118,7 +119,7 @@ static const Setting kSettings[] = {
     { 1, "Hands", L"ControllerRumble", "Controller rumble", nullptr, SSlider, 0.0f, 1.0f, "%.0f%%", 100, nullptr, 0, "1.0" },
 };
 static const int kNumSettings = (int)(sizeof kSettings / sizeof kSettings[0]);
-struct SettingsDraft { std::wstring saved[64], draft[64]; bool loaded = false; int tab = 0; };
+struct SettingsDraft { std::wstring saved[kNumSettings], draft[kNumSettings]; bool loaded = false; int tab = 0; };
 static SettingsDraft g_set;
 static void LoadSettings() {
     for (int i = 0; i < kNumSettings; ++i) { std::wstring v = IniGet(g_app_game_for_settings(), kSettings[i].key, Widen(kSettings[i].def).c_str()); g_set.saved[i] = g_set.draft[i] = v; }
